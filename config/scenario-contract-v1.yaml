@@ -1,0 +1,22 @@
+contract_version: 1
+format: metadrive-scenario-description
+serialization:
+  format: pickle
+  protocol: 5
+required_scenario_keys:
+  - id
+  - version
+  - length
+  - metadata
+  - tracks
+  - dynamic_map_states
+  - map_features
+dataset_files:
+  scenario: scenario.pkl
+  summary: dataset_summary.pkl
+  mapping: dataset_mapping.pkl
+constraints:
+  project_defined_pickled_classes: false
+  coordinate_system: local-east-north-metres
+  background_actor_tracks: false
+

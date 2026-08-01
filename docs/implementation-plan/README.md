@@ -28,17 +28,17 @@ The output contains the static road layout and traffic-light locations. It conta
 
 ## Stage 0: Project Foundation
 
-- [ ] Create one locked Python 3.10 `uv` environment for the complete standalone converter.
-- [ ] Install only this project's direct runtime dependencies, including OSMnx, GeoPandas, Shapely, pyproj, Lanelet2, NumPy, YAML/configuration, and CLI libraries.
-- [ ] Add typed configuration models, structured logging, deterministic IDs, CLI error handling, pytest, Ruff, and fixture directories.
-- [ ] Add a locally owned, versioned scenario compatibility contract; do not import, install, clone, or path-reference MetaDrive, ScenarioNet, or `wingfin-metadrive`.
-- [ ] Start the required timestamped AI action log when code implementation begins and update it throughout implementation.
+- [x] Create one locked Python 3.10 `uv` environment for the complete standalone converter.
+- [x] Install only this project's direct runtime dependencies, including OSMnx, GeoPandas, Shapely, pyproj, Lanelet2, NumPy, YAML/configuration, and CLI libraries.
+- [x] Add typed configuration models, structured logging, deterministic IDs, CLI error handling, pytest, Ruff, and fixture directories.
+- [x] Add a locally owned, versioned scenario compatibility contract; do not import, install, clone, or path-reference MetaDrive, ScenarioNet, or `wingfin-metadrive`.
+- [x] Start the required timestamped AI action log when code implementation begins and update it throughout implementation.
 
 ### Completion gate
 
-- [ ] The standalone environment installs from its lock file on a clean checkout.
-- [ ] Every CLI command exposes `--help` and exits with a useful error when required input is missing.
-- [ ] Dependency inspection confirms that no MetaDrive, ScenarioNet, or sibling-project package is installed transitively.
+- [x] The standalone environment installs from its lock file on a clean checkout.
+- [x] Every CLI command exposes `--help` and exits with a useful error when required input is missing.
+- [x] Dependency inspection confirms that no MetaDrive, ScenarioNet, or sibling-project package is installed transitively.
 
 ### Manual verification
 
