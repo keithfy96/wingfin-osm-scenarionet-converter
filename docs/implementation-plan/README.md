@@ -54,7 +54,7 @@ The output contains the static road layout and traffic-light locations. It conta
    `metadrive`, `scenarionet`, and sibling paths. Confirm that none is a runtime,
    development, editable, Git, or path dependency.
 
-## Stage 1: Acquire and Normalize OSM
+## Stage 1A: Acquire and Preserve the OSM Network
 
 - [ ] For place or bounding-box input, retrieve an unsimplified driving graph with OSMnx.
 - [ ] Preserve lane, direction, turn, width, speed, junction, access, crossing, and signal tags.
@@ -62,6 +62,110 @@ The output contains the static road layout and traffic-light locations. It conta
 - [ ] Save the unsimplified graph, GeoPackage or GeoParquet feature layers, raw `.osm`, and a source manifest.
 - [ ] Record checksums, query bounds, acquisition time, OpenStreetMap attribution, and tool versions in the manifest.
 - [ ] Resolve driving side from country metadata when possible. Require `--driving-side left|right` when a local file is ambiguous.
+
+Stage 1A does not generate Lanelet2 geometry. It creates a durable,
+inspectable source network that later stages can reload without downloading or
+reinterpreting the original input.
+
+### Outputs
+
+```text
+<workspace>/source/map.osm                       Preserved local source
+<workspace>/source/manifest.json                 Generated provenance
+<workspace>/normalized/road-network.graphml      Reloadable OSMnx graph
+<workspace>/normalized/road-network.gpkg         Inspectable nodes and edges
+```
+
+For an online source, acquired raw OSM XML is stored under `source/`. A local
+file already inside that directory is used in place and must not be renamed,
+replaced, or modified.
+
+### Completion gate
+
+- [ ] A local source has the same SHA-256 checksum before and after Stage 1A.
+- [ ] GraphML reloads through OSMnx with at least one node and one directed edge.
+- [ ] GeoPackage node and edge layers reload through GeoPandas and are nonempty.
+- [ ] The manifest is valid JSON and identifies the source, source type, driving side, checksums, bounds, tool versions, and generated artifact paths.
+- [ ] Required OSM evidence remains on graph features or in the unchanged raw OSM, including relation data that OSMnx does not place on graph edges.
+- [ ] All Stage 1A artifacts can be read again with network access disabled.
+
+### Automated verification
+
+Add focused `pytest` coverage using a small checked-in `.osm` fixture. The test
+suite must:
+
+1. Calculate the fixture checksum, run Stage 1A, and confirm the source checksum
+   is unchanged.
+2. Assert that `road-network.graphml`, `road-network.gpkg`, and `manifest.json`
+   exist at the documented paths.
+3. Reload GraphML with OSMnx and assert nonzero node and directed-edge counts.
+4. Reload the `nodes` and `edges` GeoPackage layers with GeoPandas and assert
+   that both are nonempty and have a declared CRS.
+5. Validate the manifest schema, recompute every recorded checksum, and confirm
+   every recorded relative path resolves inside the workspace.
+6. Use fixture roads containing representative lane, direction, turn, width,
+   speed, junction, access, crossing, signal, and relation evidence; assert
+   that Stage 1A has not silently discarded that evidence.
+7. Disable or mock network clients during read-back and fail if Nominatim,
+   Overpass, or another HTTP endpoint is contacted.
+
+### Manual verification
+
+These planned commands become runnable after Stage 1A is implemented. The
+current `fetch` command still returns a Stage 1 placeholder.
+
+1. Record the checksum, run Stage 1A, then calculate the checksum again:
+
+   ```bash
+   sha256sum workspaces/mosque/source/map.osm
+   uv run osm-scenario fetch \
+     --osm-file workspaces/mosque/source/map.osm \
+     --workspace workspaces/mosque \
+     --driving-side left
+   sha256sum workspaces/mosque/source/map.osm
+   ```
+
+   The two checksum values must match exactly.
+
+2. Confirm that each generated artifact exists:
+
+   ```bash
+   test -f workspaces/mosque/normalized/road-network.graphml
+   test -f workspaces/mosque/normalized/road-network.gpkg
+   test -f workspaces/mosque/source/manifest.json
+   ```
+
+3. Reload the graph and inspect its size:
+
+   ```bash
+   uv run python -c 'import osmnx as ox; g = ox.load_graphml("workspaces/mosque/normalized/road-network.graphml"); print({"nodes": len(g.nodes), "edges": len(g.edges)})'
+   ```
+
+   Both numbers must be greater than zero.
+
+4. Reload the inspectable feature layers:
+
+   ```bash
+   uv run python -c 'import geopandas as gpd; p = "workspaces/mosque/normalized/road-network.gpkg"; print({"nodes": len(gpd.read_file(p, layer="nodes")), "edges": len(gpd.read_file(p, layer="edges"))})'
+   ```
+
+   Both numbers must be greater than zero.
+
+5. Pretty-print and inspect the generated manifest:
+
+   ```bash
+   uv run python -m json.tool workspaces/mosque/source/manifest.json
+   ```
+
+   Confirm that it describes the source, explicit driving side, generated
+   files, checksums, bounds, and tool versions. The operator does not create
+   this manifest manually.
+
+6. Disable network access and repeat steps 3 through 5. Reading saved Stage 1A
+   output must not require Nominatim, Overpass, or another service.
+
+## Stage 1B: Project and Preflight the OSM Network
+
 - [ ] Use `pyproj` to define a local azimuthal-equidistant East-North frame centered on the map centroid or an explicit origin.
 - [ ] Record the full CRS definition and forward/inverse transforms so every downstream coordinate can be traced back to WGS84.
 - [ ] Run preflight checks for empty networks, invalid geometries, disconnected components, conflicting direction tags, and missing lane-count data.
@@ -74,18 +178,16 @@ The output contains the static road layout and traffic-light locations. It conta
 
 ### Manual verification
 
-1. Run `osm-scenario fetch` with exactly one small local `.osm` fixture and
-   inspect `workspaces/<map-id>/source/`. Confirm that `raw.osm` and the source
-   manifest exist and that the manifest identifies the local file and checksum.
-2. Disconnect from the network or enable the documented offline mode, then
-   rerun the normalization step against that workspace. Confirm that it succeeds
-   without contacting Overpass or a geocoder.
-3. Open the acquisition Markdown summary and its JSON counterpart. Confirm that
+1. Run Stage 1B against the saved Stage 1A workspace. Confirm that it reads the
+   saved graph and raw OSM rather than downloading the network again.
+2. Open the acquisition Markdown summary and its JSON counterpart. Confirm that
    the origin, CRS, bounds, feature counts, inferred tags, discarded features,
    and round-trip projection error agree, and that the error is within the
    configured tolerance.
-4. Repeat the source-selection check with `--place` and `--bbox`. Confirm that
-   supplying two source options together is rejected before any download starts.
+3. Inspect several projected node coordinates. Confirm that they are local
+   metre values with East as `x` and North as `y`, not longitude and latitude.
+4. Review every preflight warning and discarded-feature entry. Confirm that it
+   includes the affected OSM identifier and an explicit reason.
 
 ## Stage 2: Generate Preliminary Lanelet2
 
