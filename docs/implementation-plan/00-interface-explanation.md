@@ -15,7 +15,6 @@ osm-scenario inspect
 osm-scenario validate-lanelet2
 osm-scenario convert
 osm-scenario validate-scenario
-osm-scenario play
 ```
 
 Each command represents a pipeline checkpoint:
@@ -30,15 +29,21 @@ Each command represents a pipeline checkpoint:
 - `validate-lanelet2` runs structural and geometric Lanelet2 checks, such as
   missing boundaries, incorrect orientation, overlaps, disconnected lanes, and
   invalid references.
-- `convert` translates the approved Lanelet2 map into ScenarioNet's
-  `ScenarioDescription` representation.
-- `validate-scenario` runs ScenarioNet schema checks and project-specific checks
-  for road geometry, traffic lights, route validity, and coordinate consistency.
-- `play` loads the resulting scenario in MetaDrive for a visual smoke test.
+- `convert` translates the approved Lanelet2 map into this project's locally
+  defined, MetaDrive-compatible ScenarioDescription dataset contract.
+- `validate-scenario` reads the generated files back and runs locally owned
+  structural and semantic checks for road geometry, traffic lights, route
+  validity, coordinate consistency, summaries, and mappings.
 
 The commands operate on the same map workspace. This keeps every intermediate
 artifact inspectable instead of hiding the complete process behind one opaque
 conversion command.
+
+V1 does not provide an interactive `play` command and does not import or run
+MetaDrive, ScenarioNet, or `wingfin-metadrive`. A future integration phase may
+add an owned consumer container and interactive playback. Until then, an
+operator can run an explicit opt-in compatibility check against an external
+consumer after the standalone dataset has passed local validation.
 
 ## 2. Exactly One OSM Source
 
@@ -85,8 +90,11 @@ workspaces/queenstown/
 |   |-- geometry.md
 |   |-- lanelet2-validation.json
 |   `-- lanelet2-validation.md
-`-- scenarionet/
+`-- scenario-dataset/
     |-- scenario.pkl
+    |-- dataset_summary.pkl
+    |-- dataset_mapping.pkl
+    |-- handoff-manifest.json
     |-- conversion.json
     `-- conversion.md
 ```
@@ -98,8 +106,10 @@ The workspace follows these rules:
 - Human corrections are stored in `edited.osm`.
 - Conversion uses `edited.osm` when present. Using the preliminary map requires
   explicit operator approval.
-- Reports and final ScenarioNet output remain tied to the exact input and
+- Reports and final scenario-dataset output remain tied to the exact input and
   configuration used to produce them.
+- The handoff manifest records the local contract version and checksums for all
+  consumer-facing artifacts.
 
 ## 4. Versioned YAML Configuration
 
@@ -137,10 +147,10 @@ The fields control:
 - `lane_defaults` supplies lane widths only when OSM has no usable width
   information.
 - `tag_inference` defines permitted fallback behavior for incomplete OSM tags.
-- `scenario_route` selects the synthetic ego route required to load and
-  navigate the static layout in ScenarioNet and MetaDrive.
-- `output.duration_seconds` sets the ScenarioNet timeline length even though the
-  map itself is static.
+- `scenario_route` selects the synthetic ego route expected by the target
+  scenario-dataset contract.
+- `output.duration_seconds` sets the dataset timeline length even though the map
+  itself is static.
 
 The `schema_version` field allows future configuration changes to be detected
 and migrated instead of silently interpreting an older configuration
@@ -162,10 +172,28 @@ The report categories are:
 - `validation`: Lanelet2 parser and validator results, unresolved references,
   warnings, and blocking errors.
 - `conversion`: Counts of roads, lanelets, signals, stop lines, skipped
-  elements, ScenarioNet identifiers, and source-to-output traceability.
+  elements, scenario identifiers, contract version, artifact checksums, and
+  source-to-output traceability.
 
 The Markdown summaries stay concise. Detailed coordinates, feature identifiers,
 and diagnostic data remain in the corresponding JSON reports.
+
+## 6. Standalone Dependency Boundary
+
+This project owns the complete conversion and serialization path. Its package
+configuration must not import, install, clone, or path-reference MetaDrive,
+ScenarioNet, or `wingfin-metadrive`.
+
+The generated dataset contains native dictionaries, supported scalar and
+container values, and NumPy arrays. It does not pickle project-defined class
+instances. The locally owned compatibility model defines the required fields,
+array shapes, timeline rules, feature values, traffic-light representation,
+summary format, mapping format, and artifact filenames.
+
+An optional external-consumer check is a handoff test, not a dependency. It is
+run only when the operator explicitly supplies a consumer command, image, or
+path. Its result is recorded separately as `not_run`, `passed`, or `failed` and
+does not alter the locally validated dataset.
 
 ## Relationship to the Implementation Plan
 
@@ -179,4 +207,5 @@ These interface requirements establish:
 
 The stages in the main implementation plan break down the engineering work
 needed to deliver these behaviors, from project setup and OSM acquisition
-through Lanelet2 editing, ScenarioNet conversion, and MetaDrive verification.
+through Lanelet2 editing, standalone dataset conversion, local validation, and
+optional external-consumer verification.

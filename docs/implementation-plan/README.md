@@ -1,4 +1,4 @@
-# OSM to ScenarioNet Implementation Plan
+# OSM to MetaDrive-Compatible Scenario Dataset Implementation Plan
 
 ## Summary
 
@@ -11,43 +11,48 @@ OSM file/place/bbox
     -> preliminary Lanelet2
     -> JOSM correction
     -> Lanelet2 validation
-    -> ScenarioNet dataset
-    -> MetaDrive smoke test
+    -> standalone ScenarioDescription-compatible dataset
+    -> optional external MetaDrive consumer check
 ```
 
-The output contains the static road layout and traffic-light locations. It contains no background traffic. A clearly marked synthetic ego route is added only because ScenarioNet and `ScenarioEnv` require an SDC track for loading and navigation.
+The output contains the static road layout and traffic-light locations. It contains no background traffic. A clearly marked synthetic ego route is added only because MetaDrive's scenario environment requires an SDC track for loading and navigation. This repository produces the complete dataset without importing, installing, cloning, or path-referencing MetaDrive, ScenarioNet, or `wingfin-metadrive`.
 
 ## Interfaces and Artifacts
 
-- Provide a top-level `osm-scenario` CLI with `fetch`, `generate-lanelet2`, `inspect`, `validate-lanelet2`, `convert`, `validate-scenario`, and `play` commands.
+- Provide a top-level `osm-scenario` CLI with `fetch`, `generate-lanelet2`, `inspect`, `validate-lanelet2`, `convert`, and `validate-scenario` commands.
 - Accept exactly one OSM source per run: local `.osm`, place query, or bounding box.
-- Store each map in an isolated workspace containing raw input, source manifest, preliminary and edited Lanelet2 maps, validation reports, and ScenarioNet output.
+- Store each map in an isolated workspace containing raw input, source manifest, preliminary and edited Lanelet2 maps, validation reports, and the final standalone scenario dataset.
 - Use versioned YAML configuration for driving side, coordinate origin, lane-width defaults, tag inference, scenario route, and output duration.
 - Emit machine-readable JSON reports plus concise Markdown summaries for inference, geometry, validation, and conversion results.
+- Reserve interactive `play` and an owned MetaDrive integration container for a future phase. V1 produces a consumer handoff manifest and supports only an opt-in external compatibility check.
 
 ## Stage 0: Project Foundation
 
-- [ ] Create separate locked `uv` environments for map generation and ScenarioNet conversion. This isolates the local ScenarioNet checkout's `geopandas<1.0` constraint from the current OSMnx geospatial stack.
-- [ ] Use Python 3.10 for the ScenarioNet adapter and a supported Python 3.10 or 3.11 environment for OSMnx and Lanelet2.
+- [ ] Create one locked Python 3.10 `uv` environment for the complete standalone converter.
+- [ ] Install only this project's direct runtime dependencies, including OSMnx, GeoPandas, Shapely, pyproj, Lanelet2, NumPy, YAML/configuration, and CLI libraries.
 - [ ] Add typed configuration models, structured logging, deterministic IDs, CLI error handling, pytest, Ruff, and fixture directories.
-- [ ] Connect the adapter to the sibling MetaDrive and ScenarioNet checkouts without modifying either repository.
+- [ ] Add a locally owned, versioned scenario compatibility contract; do not import, install, clone, or path-reference MetaDrive, ScenarioNet, or `wingfin-metadrive`.
 - [ ] Start the required timestamped AI action log when code implementation begins and update it throughout implementation.
 
 ### Completion gate
 
-- [ ] Both environments install from lock files on a clean checkout.
+- [ ] The standalone environment installs from its lock file on a clean checkout.
 - [ ] Every CLI command exposes `--help` and exits with a useful error when required input is missing.
+- [ ] Dependency inspection confirms that no MetaDrive, ScenarioNet, or sibling-project package is installed transitively.
 
 ### Manual verification
 
-1. From a clean checkout, run the documented `uv sync --locked` command for
-   both environments. Confirm that neither command changes its lock file.
+1. From a clean checkout, run the documented `uv sync --locked` command.
+   Confirm that it does not change the lock file.
 2. Run `osm-scenario --help`, followed by `<command> --help` for every command
    listed under **Interfaces and Artifacts**. Confirm that each command explains
    its required arguments and exits with status `0`.
 3. Run each command once without its required source or workspace argument.
    Confirm that it exits nonzero, names the missing argument, and does not emit
    a Python traceback.
+4. Inspect the resolved dependency tree and search the project configuration for
+   `metadrive`, `scenarionet`, and sibling paths. Confirm that none is a runtime,
+   development, editable, Git, or path dependency.
 
 ## Stage 1: Acquire and Normalize OSM
 
@@ -126,7 +131,7 @@ The output contains the static road layout and traffic-light locations. It conta
 - [ ] Keep `preliminary.osm` immutable and save manual work as `edited.osm`.
 - [ ] Review lane direction, lane count, shared boundaries, connector turns, roundabouts, stop lines, signal associations, overlaps, and disconnected roads.
 - [ ] Record resolved correction-queue items and any intentional deviations in a review checklist.
-- [ ] Block ScenarioNet conversion until `edited.osm` exists or the operator explicitly approves the preliminary map.
+- [ ] Block final dataset conversion until `edited.osm` exists or the operator explicitly approves the preliminary map.
 
 ### Completion gate
 
@@ -177,7 +182,7 @@ The output contains the static road layout and traffic-light locations. It conta
 5. Calculate the validated map's checksum using the documented checksum command
    and confirm that it matches the checksum embedded in the validation report.
 
-## Stage 5: Convert Lanelet2 to ScenarioNet
+## Stage 5: Convert Lanelet2 to a Standalone Scenario Dataset
 
 - [ ] Convert lane centerlines, boundaries, crossings, speed limits, entry/exit links, and left/right neighbors into MetaDrive `map_features`.
 - [ ] Preserve traffic-light stop positions and controlled-lane IDs in `dynamic_map_states`.
@@ -185,16 +190,20 @@ The output contains the static road layout and traffic-light locations. It conta
 - [ ] Add one synthetic SDC navigation track sampled along a valid route.
 - [ ] Allow explicit start and goal lanelets; otherwise select a deterministic long route in the largest drivable component.
 - [ ] Mark the track as synthetic layout scaffolding in metadata and emit no other tracks.
-- [ ] Populate the seven required `ScenarioDescription` sections: `id`, `version`, `length`, `metadata`, `tracks`, `dynamic_map_states`, and `map_features`.
+- [ ] Define a locally owned, typed compatibility model for the seven required sections: `id`, `version`, `length`, `metadata`, `tracks`, `dynamic_map_states`, and `map_features`.
+- [ ] Define local constants for supported map-feature, road-line, track, and traffic-light values instead of importing consumer constants.
 - [ ] Record the local-metric coordinate convention, source checksums, Lanelet2 IDs, origin, CRS, inference counts, and converter version.
-- [ ] Run `ScenarioDescription.sanity_check()`.
-- [ ] Use ScenarioNet's dataset-writing utilities to create the scenario pickle, `dataset_summary.pkl`, and `dataset_mapping.pkl`.
+- [ ] Implement local structural and semantic validation for required keys, allowed value types, array shapes, timeline lengths, finite coordinates, map geometry, route continuity, and traffic-light associations.
+- [ ] Generate object and number summaries locally from the final validated scenario rather than copying upstream implementation code.
+- [ ] Serialize native dictionaries and NumPy arrays into the scenario pickle, `dataset_summary.pkl`, and `dataset_mapping.pkl` using a documented pickle protocol.
+- [ ] Write a handoff manifest containing the local contract version, artifact checksums, Python and NumPy versions, coordinate convention, and consumer compatibility status.
 
 ### Completion gate
 
-- [ ] ScenarioNet reads the dataset and its summary/mapping files back successfully.
+- [ ] The standalone reader loads the scenario and summary/mapping files back successfully and the local validator accepts them.
 - [ ] The dataset contains one synthetic SDC track, no background actors, and the expected number of traffic-light positions.
 - [ ] All scenario coordinates are finite, local metric coordinates.
+- [ ] The output contains no pickled project-defined class instances; only native supported values and NumPy arrays are serialized.
 
 ### Manual verification
 
@@ -203,8 +212,8 @@ The output contains the static road layout and traffic-light locations. It conta
    records counts for lanelets, map features, stop lines, traffic lights, skipped
    elements, and conversion warnings.
 2. Run `osm-scenario validate-scenario --workspace workspaces/<map-id>` and
-   confirm that ScenarioNet's schema check succeeds after reading the serialized
-   dataset back from disk.
+   confirm that the local compatibility checks succeed after reading all three
+   serialized dataset files back from disk.
 3. Inspect the scenario summary and confirm that it contains exactly one track,
    that the track is marked as the synthetic SDC, and that no background vehicle,
    pedestrian, or cyclist tracks exist.
@@ -212,49 +221,53 @@ The output contains the static road layout and traffic-light locations. It conta
    against the conversion mapping report. Confirm that coordinates are finite,
    measured in metres, and located near the local origin rather than expressed
    as longitude and latitude.
+5. Inspect the handoff manifest and confirm that its checksums match the three
+   dataset files and that the compatibility status is `locally_validated` unless
+   an optional external consumer check has also passed.
 
-## Stage 6: MetaDrive Verification
+## Stage 6: Optional External Consumer Verification
 
-- [ ] Reload the generated dataset through ScenarioNet and MetaDrive APIs.
-- [ ] Verify IDs, summary entries, coordinate ranges, feature counts, topology, and traffic-light associations.
-- [ ] Run a headless `ScenarioEnv` smoke test with background traffic disabled, traffic lights enabled, and a controllable ego agent.
-- [ ] Reset successfully, follow the generated navigation route, and step for a fixed horizon.
-- [ ] Fail on missing roads, invalid navigation, NaNs, immediate off-road termination, or loader exceptions.
-- [ ] Provide `osm-scenario play` for interactive visual inspection before the map is accepted.
-- [ ] Record screenshots and a validation summary containing lanelet, intersection, signal, route, and runtime totals.
+- [ ] Keep ordinary builds, tests, conversion, and acceptance independent of any external MetaDrive or ScenarioNet installation.
+- [ ] Provide an opt-in compatibility procedure that accepts an operator-supplied external consumer command, image, or project path without downloading or modifying it.
+- [ ] Mount or copy only the completed dataset into the external consumer; do not expose converter source or use sibling source as a package dependency.
+- [ ] Verify external read-back, IDs, summary entries, coordinate ranges, feature counts, topology, traffic-light associations, and route availability.
+- [ ] When an external MetaDrive runner is supplied, run a headless scenario smoke test with background traffic disabled and traffic lights enabled.
+- [ ] Record the external consumer identity, version or image digest, command, result, and dataset checksums in a separate compatibility report.
+- [ ] Defer an owned integration container, interactive `play` command, screenshots, and mandatory MetaDrive execution to a future phase.
 
 ### Completion gate
 
-- [ ] The headless smoke test completes its configured horizon.
-- [ ] The interactive view shows the corrected road layout and traffic-light positions in their expected locations.
+- [ ] V1 acceptance does not require an external consumer to be installed.
+- [ ] When the optional check is run, it operates only on the completed dataset and records a reproducible pass or failure without changing the dataset.
 
 ### Manual verification
 
-1. Run the documented headless `osm-scenario play` command and confirm that it
-   exits successfully only after the configured scenario duration has elapsed.
-2. Run `osm-scenario play --interactive --workspace workspaces/<map-id>` and
-   compare the rendered map with the approved JOSM map.
-3. Drive or advance the synthetic ego route through representative straight
-   roads, curves, and intersections. Confirm that the route remains on connected
-   lanes and uses the expected driving side.
-4. Inspect every signalized intersection. Confirm that traffic lights and stop
-   points appear at their expected approaches and that their state is reported
-   as unknown rather than showing invented signal timing.
+1. Complete Stage 5 with no MetaDrive, ScenarioNet, or `wingfin-metadrive`
+   checkout available and confirm that conversion and local validation pass.
+2. If an external consumer is available, invoke the documented opt-in check with
+   its explicit command, image, or path and the completed workspace.
+3. Confirm that the external process receives only the dataset directory, that
+   it does not modify any dataset artifact, and that its reported checksums match
+   the handoff manifest.
+4. Inspect the compatibility report. Confirm that it identifies the external
+   consumer precisely and distinguishes `not_run`, `passed`, and `failed` from
+   the independent local validation result.
 
 ## Stage 7: Tests, Documentation, and Acceptance
 
 - [ ] Add unit fixtures for tag parsing, left/right-hand traffic, projection round trips, deterministic IDs, lane offsets, and signal association.
 - [ ] Add geometry fixtures for straight roads, curves, divided roads, merges, T-junctions, four-way junctions, roundabouts, crossings, and incomplete OSM tags.
 - [ ] Add cached integration fixtures for local-file and place/bbox acquisition so ordinary tests do not depend on Overpass availability.
-- [ ] Add golden Lanelet2 and ScenarioNet fixtures, native validator tests, schema checks, and a headless MetaDrive end-to-end test.
+- [ ] Add golden Lanelet2 and standalone scenario-dataset fixtures, native validator tests, local compatibility-contract checks, and pickle round-trip tests.
+- [ ] Add an opt-in external-consumer test that is skipped when no explicit consumer command, image, or path is supplied.
 - [ ] Document exact commands for every stage, JOSM correction steps, artifact meanings, retry behavior, and known OSM inference limitations.
 - [ ] Finalize the AI action log with generated-code details and validation results.
 
 ### V1 acceptance criteria
 
 - [ ] One local-file map and one downloaded map pass all blocking checks.
-- [ ] Both maps survive a Lanelet2 and ScenarioNet round trip.
-- [ ] Both load as controllable layouts in MetaDrive.
+- [ ] Both maps survive a Lanelet2 and standalone scenario-dataset round trip.
+- [ ] Both produce complete handoff manifests and pass every local compatibility check without external project dependencies.
 - [ ] Traffic-light positions and lane associations are preserved, with their state explicitly marked unknown.
 - [ ] Re-running the pipeline with the same source and configuration produces stable IDs and equivalent outputs.
 
@@ -263,14 +276,14 @@ The output contains the static road layout and traffic-light locations. It conta
 1. Choose one checked-in local `.osm` fixture and one small place or bounding-box
    download. Create a new, empty workspace for each source.
 2. Run every CLI stage in order: `fetch`, `generate-lanelet2`, `inspect`,
-   `validate-lanelet2`, `convert`, `validate-scenario`, and `play`. Retain the
+   `validate-lanelet2`, `convert`, and `validate-scenario`. Retain the
    signed inspection checklist and all JSON and Markdown reports.
 3. For both maps, confirm that the final Lanelet2 file reopens in JOSM, the
-   ScenarioNet dataset passes read-back validation, and MetaDrive completes both
-   the headless and interactive checks.
+   standalone dataset passes local read-back validation, and its handoff manifest
+   covers all generated dataset artifacts.
 4. Compare the traffic-light count, positions, stop points, and controlled-lane
-   associations across OSM, Lanelet2, the conversion mapping report, and the
-   MetaDrive view. Confirm that state remains explicitly unknown.
+   associations across OSM, Lanelet2, the final dataset, and the conversion
+   mapping report. Confirm that state remains explicitly unknown.
 5. Delete only the generated output workspace, recreate it from the same raw
    source and versioned configuration, and rerun the pipeline. Confirm that IDs,
    feature counts, checksums for deterministic artifacts, and normalized JSON
@@ -279,10 +292,13 @@ The output contains the static road layout and traffic-light locations. It conta
 ## Assumptions and Defaults
 
 - V1 supports bounded 2D road maps; elevation defaults to zero unless usable elevation data is present.
-- OSM is the provenance source, Lanelet2 is the editable map contract, and ScenarioNet is the serialized dataset contract.
+- OSM is the provenance source, Lanelet2 is the editable map contract, and this project's versioned compatibility model owns the serialized dataset contract.
 - Traffic-light geometry and lane association are preserved, but signal timing remains unknown.
 - Driving side is inferred when possible and otherwise must be supplied explicitly.
 - CommonRoad is not a runtime dependency; the direct OSMnx, GeoPandas, Shapely, and Lanelet2 pipeline matches the intended workflow.
+- MetaDrive, ScenarioNet, and `wingfin-metadrive` are not runtime, build, development, Git, editable, or path dependencies.
+- External consumer verification is optional in V1 and never changes whether local validation passed.
+- An owned MetaDrive integration container and interactive playback are deferred to a future phase.
 - Manual JOSM review is a required quality gate because ordinary OSM does not consistently contain lane-level geometry.
 - Background vehicles, pedestrians, cyclists, and realistic traffic-light phase generation are outside V1 scope.
 
@@ -292,5 +308,5 @@ The output contains the static road layout and traffic-light locations. It conta
 - [Lanelet2 repository and architecture](https://github.com/fzi-forschungszentrum-informatik/lanelet2)
 - [Lanelet2 JOSM map-editing guide](https://docs.ros.org/en/humble/p/lanelet2_maps/__README.html#editing-lanelet2-maps)
 - [Lanelet2 validation](https://docs.ros.org/en/ros2_packages/rolling/api/lanelet2_validation/)
-- Local ScenarioNet checkout: `/home/keith/Desktop/work/wingfin/scenarionet`
-- Local MetaDrive checkout: `/home/keith/Desktop/work/wingfin/metadrive`
+- [Python pickle protocol](https://docs.python.org/3/library/pickle.html)
+- [NumPy array serialization compatibility](https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html)
