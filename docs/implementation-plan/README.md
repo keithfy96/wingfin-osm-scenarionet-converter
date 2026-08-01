@@ -56,12 +56,12 @@ The output contains the static road layout and traffic-light locations. It conta
 
 ## Stage 1A: Acquire and Preserve the OSM Network
 
-- [ ] For place or bounding-box input, retrieve an unsimplified driving graph with OSMnx.
-- [ ] Preserve lane, direction, turn, width, speed, junction, access, crossing, and signal tags.
-- [ ] For local input, load the `.osm` XML through OSMnx's supported XML path and retain the original file unchanged.
-- [ ] Save the unsimplified graph, GeoPackage or GeoParquet feature layers, raw `.osm`, and a source manifest.
-- [ ] Record checksums, query bounds, acquisition time, OpenStreetMap attribution, and tool versions in the manifest.
-- [ ] Resolve driving side from country metadata when possible. Require `--driving-side left|right` when a local file is ambiguous.
+- [x] For place or bounding-box input, retrieve an unsimplified driving graph with OSMnx.
+- [x] Preserve lane, direction, turn, width, speed, junction, access, crossing, and signal tags.
+- [x] For local input, load the `.osm` XML through OSMnx's supported XML path and retain the original file unchanged.
+- [x] Save the unsimplified graph, GeoPackage feature layers, `.osm`, and a source manifest.
+- [x] Record checksums, query or graph bounds, acquisition time, OpenStreetMap attribution, and tool versions in the manifest.
+- [x] Require explicit `--driving-side left|right` input and record its provenance.
 
 Stage 1A does not generate Lanelet2 geometry. It creates a durable,
 inspectable source network that later stages can reload without downloading or
@@ -76,9 +76,10 @@ reinterpreting the original input.
 <workspace>/normalized/road-network.gpkg         Inspectable nodes and edges
 ```
 
-For an online source, acquired raw OSM XML is stored under `source/`. A local
-file already inside that directory is used in place and must not be renamed,
-replaced, or modified.
+For an online source, `source/map.osm` is an OSMnx export of the acquired graph,
+not the original Overpass payload. The manifest labels this
+`osmnx_graph_export`. A local file already inside `source/` is authoritative,
+used in place, and not renamed, replaced, or modified.
 
 ### Completion gate
 
@@ -111,8 +112,7 @@ suite must:
 
 ### Manual verification
 
-These planned commands become runnable after Stage 1A is implemented. The
-current `fetch` command still returns a Stage 1 placeholder.
+These commands are runnable against the Stage 1A implementation.
 
 1. Record the checksum, run Stage 1A, then calculate the checksum again:
 

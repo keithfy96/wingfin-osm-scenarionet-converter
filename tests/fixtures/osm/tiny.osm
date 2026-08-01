@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="osm-scenario-test">
+  <node id="1" lat="3.1500" lon="101.7000" />
+  <node id="2" lat="3.1501" lon="101.7001">
+    <tag k="highway" v="traffic_signals" />
+  </node>
+  <node id="3" lat="3.1502" lon="101.7002" />
+  <node id="4" lat="3.1503" lon="101.7003">
+    <tag k="highway" v="crossing" />
+    <tag k="crossing" v="marked" />
+  </node>
+  <way id="10">
+    <nd ref="1" />
+    <nd ref="2" />
+    <nd ref="3" />
+    <nd ref="4" />
+    <tag k="highway" v="residential" />
+    <tag k="lanes" v="2" />
+    <tag k="turn:lanes" v="through|right" />
+    <tag k="maxspeed" v="50" />
+    <tag k="width" v="7" />
+    <tag k="access" v="yes" />
+    <tag k="junction" v="intersection" />
+  </way>
+  <relation id="20">
+    <member type="way" ref="10" role="from" />
+    <member type="node" ref="2" role="via" />
+    <member type="way" ref="10" role="to" />
+    <tag k="type" v="restriction" />
+    <tag k="restriction" v="no_u_turn" />
+  </relation>
+</osm>

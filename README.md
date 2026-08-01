@@ -14,9 +14,9 @@ uv run pytest
 uv run ruff check .
 ```
 
-The CLI currently exposes the complete planned interface. Individual conversion
-commands are implemented in their corresponding stages; until then, they return
-a concise nonzero "reserved for Stage N" result after validating their inputs.
+The CLI exposes the complete planned interface. `fetch` implements Stage 1A;
+later conversion commands return a concise nonzero "reserved for Stage N"
+result after validating their inputs.
 
 ## OSM input usage
 
@@ -32,9 +32,8 @@ uv run osm-scenario fetch \
   --driving-side left
 ```
 
-Local-file processing does not require a geocoder or Overpass download. An
-explicit driving side is required when the preserved source does not contain
-reliable country metadata.
+Local-file processing does not require a geocoder or Overpass download. Stage
+1A requires an explicit driving side for every source type.
 
 The current file has already been placed inside its workspace. Stage 1 must
 handle this pre-staged form without overwriting or copying the file onto itself.
@@ -44,12 +43,13 @@ handle this pre-staged form without overwriting or copying the file onto itself.
 ```bash
 uv run osm-scenario fetch \
   --place "Kuala Lumpur, Malaysia" \
-  --workspace workspaces/kuala-lumpur
+  --workspace workspaces/kuala-lumpur \
+  --driving-side left
 ```
 
 OSMnx resolves the place with Nominatim and downloads the unsimplified drivable
-network for the selected place boundary. The exact query, selected OSM object,
-returned bounds, and country code are recorded in the source manifest.
+network for the selected place boundary. The exact query and graph bounds are
+recorded in the source manifest.
 
 Place names can be ambiguous. Stage 1 must show which Nominatim result was
 selected rather than relying on the name alone.
@@ -75,9 +75,8 @@ A bounding box is unambiguous geographically but does not itself identify a
 country. Supplying `--driving-side` is the deterministic option, especially for
 boxes near national borders.
 
-These commands currently validate their arguments and return the Stage 1
-placeholder message. Network acquisition and normalization are implemented in
-Stage 1.
+`fetch` now performs Stage 1A acquisition. Projection and preflight remain in
+Stage 1B.
 
 ## Stage 1A: Acquire and Preserve the OSM Network
 
@@ -143,10 +142,9 @@ lanelet2/preliminary.osm
 Stage 1A is therefore an acquisition and preparation checkpoint. The first
 Lanelet2 map is generated in Stage 2, not Stage 1A.
 
-### Planned Stage 1A verification
+### Stage 1A verification
 
-The following checks become runnable after Stage 1A is implemented. At present,
-`fetch` intentionally returns the Stage 1 placeholder message.
+The following checks are runnable against the current implementation.
 
 1. Record the checksum of the pre-staged source:
 
@@ -211,46 +209,23 @@ The following checks become runnable after Stage 1A is implemented. At present,
 8. Temporarily disconnect from the network and repeat the GraphML, GeoPackage,
    and manifest read-back checks. They must work without Nominatim or Overpass.
 
-## Procedural driving-side resolution
+## Explicit driving-side input
 
-Driving side must never be guessed by an AI model or inferred from road shape,
-street names, imagery, or general knowledge. Stage 1 uses the following fixed
-precedence:
-
-1. An explicit `--driving-side left|right` value always wins.
-2. An explicit `driving_side` value in the versioned workspace configuration is
-   used when the CLI option is absent.
-3. For an online place lookup, Nominatim address details provide an ISO 3166-1
-   alpha-2 `country_code`.
-4. For an online bounding-box lookup, the country code is accepted only when
-   deterministic reverse lookups for the box sample points agree. A box that
-   crosses a border or produces incomplete results requires an explicit value.
-5. The country code is resolved through a checked-in, versioned
-   country-to-driving-side table. Each table revision records its source and
-   review date.
-6. An explicit OSM `driving_side=left|right` tag on a road is preserved as a
-   road-level exception to the country default.
-7. If none of these rules produces one unambiguous value, `fetch` stops with an
-   error and requests `--driving-side`.
+Driving side is never guessed from road shape, street names, imagery, a place
+name, or general knowledge. The current Stage 1A implementation requires
+`--driving-side left|right` for local, place, and bounding-box sources. An OSM
+`driving_side=left|right` road tag is preserved as road-level evidence, but it
+does not select the workspace-wide value.
 
 The source manifest records the result and evidence, for example:
 
 ```yaml
 driving_side: left
 driving_side_source: explicit_cli
-country_code: MY
 ```
 
-For a place-derived result, it also records the Nominatim result identifier and
-the version of the country lookup table. This makes the decision reproducible
-and reviewable without consulting an AI system.
-
-Nominatim provides country codes when address details are requested; it does
-not define which side a country drives on. That second step comes from the
-versioned lookup table or an explicit OSM `driving_side` tag. See the
-[Nominatim search response documentation](https://nominatim.org/release-docs/latest/api/Search/)
-and the
-[OpenStreetMap `driving_side` documentation](https://wiki.openstreetmap.org/wiki/Key%3Adriving_side).
+There is currently no country lookup table and no automatic country-based
+driving-side inference. Adding either would be a separate reviewed change.
 
 See [the implementation plan](docs/implementation-plan/README.md) and
 [interface explanation](docs/implementation-plan/00-interface-explanation.md).

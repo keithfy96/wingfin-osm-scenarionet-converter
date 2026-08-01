@@ -6,6 +6,7 @@ from typing import Annotated
 
 import typer
 
+from osm_scenario.acquisition import AcquisitionError, acquire_osm
 from osm_scenario.logging import configure_logging
 
 app = typer.Typer(
@@ -51,14 +52,29 @@ def fetch(
     driving_side: Annotated[DrivingSide | None, typer.Option("--driving-side")] = None,
 ) -> None:
     """Acquire exactly one local file, place query, or bounding box source."""
-    del workspace, driving_side
     selected = sum(value is not None for value in (osm_file, place, bbox))
     if selected != 1:
         raise typer.BadParameter(
             "provide exactly one of --osm-file, --place, or --bbox",
             param_hint="OSM source",
         )
-    _stage_pending(1)
+    if driving_side is None:
+        raise typer.BadParameter(
+            "provide --driving-side left or --driving-side right",
+            param_hint="--driving-side",
+        )
+    try:
+        manifest_path = acquire_osm(
+            workspace=workspace,
+            driving_side=driving_side.value,
+            osm_file=osm_file,
+            place=place,
+            bbox=bbox,
+        )
+    except AcquisitionError as error:
+        typer.echo(f"Stage 1A failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(f"Stage 1A complete: {manifest_path}")
 
 
 @app.command("generate-lanelet2")

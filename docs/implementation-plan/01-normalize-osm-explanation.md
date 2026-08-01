@@ -23,8 +23,8 @@ the workspace, the implementation must avoid copying the file onto itself or
 silently replacing it. The final Stage 1 interface for pre-staged files should
 be confirmed before implementation.
 
-The map covers a location in Malaysia, so the initial run should use left-hand
-driving unless reliable country metadata is recorded during normalization.
+For this map, the operator supplies `--driving-side left`. Stage 1A does not
+infer a workspace-wide driving side from country metadata.
 
 ## Stage 1A: Acquire and Preserve the OSM Network
 
@@ -164,22 +164,16 @@ bounds. This makes later differences caused by changing online OSM data visible.
 
 ### Task 6: Resolve the Driving Side
 
-> Resolve driving side from country metadata when possible. Require
-> `--driving-side left|right` when a local file is ambiguous.
+> Require explicit `--driving-side left|right` input and record its provenance.
 
 Driving side is needed later to order lanes and interpret directional road
 information.
 
-The resolution order is:
-
-1. Use the explicit `--driving-side` value when supplied.
-2. Otherwise, use reliable country metadata associated with a place or
-   bounding-box query.
-3. If a local file has no reliable country evidence, stop and request
-   `--driving-side left` or `--driving-side right`.
-
-The converter records both the resolved value and its source, such as
-`explicit_cli` or `country_metadata`. It must not silently select a default.
+The operator must provide `--driving-side left` or `--driving-side right` for
+every source type. The converter records the value with
+`driving_side_source: explicit_cli` and does not silently select a default.
+Road-level OSM `driving_side` tags are retained as evidence but do not choose
+the workspace-wide value.
 
 For the current Malaysia map, the expected value is `left`.
 
