@@ -14,9 +14,9 @@ uv run pytest
 uv run ruff check .
 ```
 
-The CLI exposes the complete planned interface. `fetch` implements Stage 1A;
-later conversion commands return a concise nonzero "reserved for Stage N"
-result after validating their inputs.
+The CLI exposes the complete planned interface. `fetch` implements Stages 1A
+and 1B; later conversion commands return a concise nonzero "reserved for Stage
+N" result after validating their inputs.
 
 ## OSM input usage
 
@@ -32,8 +32,8 @@ uv run osm-scenario fetch \
   --driving-side left
 ```
 
-Local-file processing does not require a geocoder or Overpass download. Stage
-1A requires an explicit driving side for every source type.
+Local-file processing does not require a geocoder or Overpass download. Stage 1
+requires an explicit driving side for every source type.
 
 The current file has already been placed inside its workspace. Stage 1 must
 handle this pre-staged form without overwriting or copying the file onto itself.
@@ -75,8 +75,9 @@ A bounding box is unambiguous geographically but does not itself identify a
 country. Supplying `--driving-side` is the deterministic option, especially for
 boxes near national borders.
 
-`fetch` now performs Stage 1A acquisition. Projection and preflight remain in
-Stage 1B.
+`fetch` performs Stage 1A acquisition followed by Stage 1B projection and
+preflight. Both stages are safe to rerun for a source already stored in its
+workspace.
 
 ## Stage 1A: Acquire and Preserve the OSM Network
 
@@ -208,6 +209,92 @@ The following checks are runnable against the current implementation.
 
 8. Temporarily disconnect from the network and repeat the GraphML, GeoPackage,
    and manifest read-back checks. They must work without Nominatim or Overpass.
+
+## Stage 1B: Project and Preflight the OSM Network
+
+After preserving the WGS84 source network, `fetch` creates a separate local
+East-North representation measured in metres:
+
+```text
+normalized/road-network-local.graphml   Reloadable projected graph
+normalized/road-network-local.gpkg      Projected GIS node and edge layers
+reports/acquisition.json                Complete machine-readable results
+reports/acquisition.md                  Concise operator summary
+```
+
+The original `road-network.graphml` and `road-network.gpkg` remain in WGS84.
+Stage 2 will use the `-local` graph for metre-based lane widths and offsets.
+
+By default, the local azimuthal-equidistant projection is centered on the
+retained road geometry. To select a reproducible explicit origin or change the
+round-trip tolerance, edit a versioned YAML configuration and pass it to
+`fetch`:
+
+```bash
+uv run osm-scenario fetch \
+  --osm-file workspaces/mosque/source/map.osm \
+  --workspace workspaces/mosque \
+  --driving-side left \
+  --config config/default.yaml
+```
+
+Stage 1B blocks empty networks, invalid geometry, non-finite coordinates, and a
+coordinate round-trip outside the configured tolerance. Missing lane counts,
+direction conflicts, and disconnected components are warnings recorded for
+Stage 2 and manual review.
+
+## Inspect Stage 1 visually
+
+Stage 1 uses the checked-in `public-driving-v1` policy. It includes public
+motorways, trunk, primary, secondary, tertiary, residential, living-street,
+unclassified, and link roads. Toll roads remain included. Service roads,
+private or prohibited roads, pedestrian ways, paths, tracks, construction, and
+area features are excluded. The source audit checks selected way IDs, tags,
+node coordinates, adjacency, and travel direction before Stage 1 passes.
+
+See the [policy index](docs/policies/README.md) and the complete
+[`public-driving-v1` description](docs/policies/public-driving-v1.md) for the
+executable source locations, exact rules, audit behavior, and known boundaries.
+
+Generate browser views after `fetch`:
+
+```bash
+uv run osm-scenario inspect \
+  --workspace workspaces/mosque \
+  --view source
+
+uv run osm-scenario inspect \
+  --workspace workspaces/mosque \
+  --view normalized
+
+uv run osm-scenario inspect \
+  --workspace workspaces/mosque \
+  --view stage-1
+```
+
+The commands write HTML under `workspaces/mosque/inspection/` and matching JSON
+and Markdown summaries under `workspaces/mosque/reports/`. Open the HTML files
+directly in a browser. Internet access is needed only for the OpenStreetMap
+background tiles and Leaflet assets; the converter embeds the inspected feature
+geometry and tags in the page.
+
+The source view shows selected roads in green, excluded source highways in grey,
+preflight warnings in red, traffic signals, and an optional directed-edge layer.
+The normalized view overlays Stage 1B geometry, transformed back to WGS84 for a
+direct comparison with Stage 1A. Click a feature to see its OSM ID and tags.
+
+Use the first view where a defect appears to locate its origin:
+
+| First incorrect view | Likely origin |
+| --- | --- |
+| Stage 1 source | OSM selection, source parsing, or direction handling |
+| Stage 1 normalized | Coordinate origin or projection |
+| Preliminary Lanelet2 | Lane inference, boundaries, connectors, or signals |
+| Scenario output | Lanelet2-to-scenario conversion |
+| MetaDrive only | Consumer loading or rendering |
+
+`--view lanelet2` intentionally reports that Stage 2 output is unavailable until
+`lanelet2/preliminary.osm` exists and the Stage 2 inspector is implemented.
 
 ## Explicit driving-side input
 

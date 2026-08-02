@@ -62,6 +62,8 @@ The output contains the static road layout and traffic-light locations. It conta
 - [x] Save the unsimplified graph, GeoPackage feature layers, `.osm`, and a source manifest.
 - [x] Record checksums, query or graph bounds, acquisition time, OpenStreetMap attribution, and tool versions in the manifest.
 - [x] Require explicit `--driving-side left|right` input and record its provenance.
+- [x] Apply the versioned `public-driving-v1` selection policy equally to local and online graph artifacts, retaining toll roads and excluding service, private, pedestrian, construction, and area ways.
+- [x] Preserve every selected way's exact source tags and audit selected IDs, coordinates, adjacency, and travel direction against the source XML.
 
 Stage 1A does not generate Lanelet2 geometry. It creates a durable,
 inspectable source network that later stages can reload without downloading or
@@ -83,12 +85,12 @@ used in place, and not renamed, replaced, or modified.
 
 ### Completion gate
 
-- [ ] A local source has the same SHA-256 checksum before and after Stage 1A.
-- [ ] GraphML reloads through OSMnx with at least one node and one directed edge.
-- [ ] GeoPackage node and edge layers reload through GeoPandas and are nonempty.
-- [ ] The manifest is valid JSON and identifies the source, source type, driving side, checksums, bounds, tool versions, and generated artifact paths.
-- [ ] Required OSM evidence remains on graph features or in the unchanged raw OSM, including relation data that OSMnx does not place on graph edges.
-- [ ] All Stage 1A artifacts can be read again with network access disabled.
+- [x] A local source has the same SHA-256 checksum before and after Stage 1A.
+- [x] GraphML reloads through OSMnx with at least one node and one directed edge.
+- [x] GeoPackage node and edge layers reload through GeoPandas and are nonempty.
+- [x] The manifest is valid JSON and identifies the source, source type, driving side, checksums, bounds, tool versions, generated artifact paths, and source audit.
+- [x] Required OSM evidence remains on graph features or in the unchanged raw OSM, including relation data that OSMnx does not place on graph edges.
+- [x] All Stage 1A artifacts can be read again with network access disabled.
 
 ### Automated verification
 
@@ -166,15 +168,20 @@ These commands are runnable against the Stage 1A implementation.
 
 ## Stage 1B: Project and Preflight the OSM Network
 
-- [ ] Use `pyproj` to define a local azimuthal-equidistant East-North frame centered on the map centroid or an explicit origin.
-- [ ] Record the full CRS definition and forward/inverse transforms so every downstream coordinate can be traced back to WGS84.
-- [ ] Run preflight checks for empty networks, invalid geometries, disconnected components, conflicting direction tags, and missing lane-count data.
+- [x] Use `pyproj` to define a local azimuthal-equidistant East-North frame centered on the map centroid or an explicit origin.
+- [x] Record the full CRS definition and forward/inverse transforms so every downstream coordinate can be traced back to WGS84.
+- [x] Run preflight checks for empty networks, invalid geometries, disconnected components, conflicting direction tags, and missing lane-count data.
+
+Stage 1B runs as the second half of `fetch` and writes
+`normalized/road-network-local.graphml`,
+`normalized/road-network-local.gpkg`, `reports/acquisition.json`, and
+`reports/acquisition.md`. The Stage 1A WGS84 artifacts remain unchanged.
 
 ### Completion gate
 
-- [ ] The source can be loaded again without network access.
-- [ ] WGS84-to-local-to-WGS84 round trips remain within the configured tolerance.
-- [ ] Every discarded or inferred OSM feature is listed in the acquisition report.
+- [x] The source can be loaded again without network access.
+- [x] WGS84-to-local-to-WGS84 round trips remain within the configured tolerance.
+- [x] Every discarded or inferred OSM feature is listed in the acquisition report.
 
 ### Manual verification
 
@@ -188,6 +195,34 @@ These commands are runnable against the Stage 1A implementation.
    metre values with East as `x` and North as `y`, not longitude and latitude.
 4. Review every preflight warning and discarded-feature entry. Confirm that it
    includes the affected OSM identifier and an explicit reason.
+
+## Stage 1C: Visual Source and Projection Review
+
+- [x] Implement `osm-scenario inspect --view source|normalized|stage-1` without requiring Stage 2.
+- [x] Display selected public roads, excluded source highways and reasons, traffic signals, directed graph edges, and preflight warnings as independent layers.
+- [x] Overlay Stage 1B geometry after transforming it back to WGS84 so projection drift is visible against Stage 1A.
+- [x] Make features clickable with their source OSM IDs and exact tags.
+- [x] Emit standalone HTML plus machine-readable JSON and Markdown inspection summaries.
+- [x] Reject `--view lanelet2` clearly until Stage 2 has generated its visual-review inputs.
+
+### Completion gate
+
+- [x] Source, normalized, and combined Stage 1 pages generate from a completed workspace.
+- [x] The source audit and Stage 1A-to-1B topology/tag parity checks pass before the map advances to Stage 2.
+- [x] Inspection generation works from saved workspace artifacts without another OSM download.
+
+### Manual verification
+
+1. Run all three Stage 1 inspection views and open their HTML files from the
+   workspace `inspection/` directory.
+2. In the source view, toggle selected, excluded, warning, direction, and signal
+   layers. Click representative motorways, toll roads, residential roads, and
+   excluded features; confirm their IDs, tags, and exclusion reasons.
+3. In the normalized view, toggle the projected overlay repeatedly. Confirm it
+   lies on the Stage 1A source roads without visible displacement or distortion.
+4. Treat a source-view defect as Stage 1A, a projected-overlay-only defect as
+   Stage 1B, and a later lane-boundary defect as Stage 2. Do not advance until
+   the earliest incorrect representation is understood.
 
 ## Stage 2: Generate Preliminary Lanelet2
 
@@ -406,6 +441,8 @@ These commands are runnable against the Stage 1A implementation.
 
 ## Reference Documentation
 
+- [Stage 1 steps and artifacts: what they do and why](001-stage-1-steps-and-artifacts.md)
+- [Stages 1A and 1B normalization explanation](01-normalize-osm-explanation.md)
 - [OSMnx documentation](https://osmnx.readthedocs.io/en/stable/)
 - [Lanelet2 repository and architecture](https://github.com/fzi-forschungszentrum-informatik/lanelet2)
 - [Lanelet2 JOSM map-editing guide](https://docs.ros.org/en/humble/p/lanelet2_maps/__README.html#editing-lanelet2-maps)

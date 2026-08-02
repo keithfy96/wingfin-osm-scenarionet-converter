@@ -14,6 +14,8 @@ from typing import Any, Literal
 import geopandas as gpd
 import osmnx as ox
 
+from osm_scenario.osm_source import read_osm_snapshot, select_public_driving_graph
+
 SourceType = Literal["local_file", "place", "bounding_box"]
 
 PRESERVED_WAY_TAGS = {
@@ -169,8 +171,10 @@ def acquire_osm(
     else:
         raise AcquisitionError("exactly one OSM source is required")
 
+    snapshot = read_osm_snapshot(source_path)
+    graph, source_audit = select_public_driving_graph(graph, snapshot)
     if len(graph.nodes) == 0 or len(graph.edges) == 0:
-        raise AcquisitionError("OSM source produced an empty driving graph")
+        raise AcquisitionError("OSM source produced no roads under public-driving-v1")
 
     graphml_path = normalized_dir / "road-network.graphml"
     gpkg_path = normalized_dir / "road-network.gpkg"
@@ -217,6 +221,7 @@ def acquire_osm(
                 "north": max(ys),
             },
         },
+        "road_selection": source_audit,
         "artifacts": artifacts,
         "tool_versions": {
             "converter": _package_version("wingfin-osm-scenarionet-converter"),
@@ -234,4 +239,9 @@ def acquire_osm(
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    if source_audit["errors"]:
+        raise AcquisitionError(
+            f"source parity audit failed with {len(source_audit['errors'])} error group(s); "
+            f"see {manifest_path}"
+        )
     return manifest_path

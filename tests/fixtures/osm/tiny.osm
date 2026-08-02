@@ -9,6 +9,10 @@
     <tag k="highway" v="crossing" />
     <tag k="crossing" v="marked" />
   </node>
+  <node id="5" lat="3.1504" lon="101.7004" />
+  <node id="6" lat="3.1502" lon="101.7004" />
+  <node id="7" lat="3.1503" lon="101.7005" />
+  <node id="8" lat="3.1504" lon="101.7006" />
   <way id="10">
     <nd ref="1" />
     <nd ref="2" />
@@ -21,6 +25,30 @@
     <tag k="width" v="7" />
     <tag k="access" v="yes" />
     <tag k="junction" v="intersection" />
+  </way>
+  <way id="11">
+    <nd ref="4" />
+    <nd ref="5" />
+    <tag k="highway" v="motorway" />
+    <tag k="oneway" v="yes" />
+    <tag k="toll" v="yes" />
+    <tag k="operator:test" v="retained exactly" />
+  </way>
+  <way id="12">
+    <nd ref="6" />
+    <nd ref="7" />
+    <tag k="highway" v="service" />
+  </way>
+  <way id="13">
+    <nd ref="7" />
+    <nd ref="8" />
+    <tag k="highway" v="residential" />
+    <tag k="access" v="private" />
+  </way>
+  <way id="14">
+    <nd ref="5" />
+    <nd ref="8" />
+    <tag k="highway" v="footway" />
   </way>
   <relation id="20">
     <member type="way" ref="10" role="from" />

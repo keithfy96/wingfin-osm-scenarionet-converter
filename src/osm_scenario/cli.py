@@ -7,7 +7,10 @@ from typing import Annotated
 import typer
 
 from osm_scenario.acquisition import AcquisitionError, acquire_osm
+from osm_scenario.config import ConverterConfig, load_config
+from osm_scenario.inspection import InspectionError, generate_inspection
 from osm_scenario.logging import configure_logging
+from osm_scenario.normalization import NormalizationError, normalize_workspace
 
 app = typer.Typer(
     name="osm-scenario",
@@ -19,6 +22,13 @@ app = typer.Typer(
 class DrivingSide(str, Enum):
     left = "left"
     right = "right"
+
+
+class InspectView(str, Enum):
+    source = "source"
+    normalized = "normalized"
+    stage_1 = "stage-1"
+    lanelet2 = "lanelet2"
 
 
 Workspace = Annotated[
@@ -50,8 +60,12 @@ def fetch(
     ] = None,
     workspace: Workspace = Path("workspaces"),
     driving_side: Annotated[DrivingSide | None, typer.Option("--driving-side")] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", exists=True, dir_okay=False, help="Versioned YAML config."),
+    ] = None,
 ) -> None:
-    """Acquire exactly one local file, place query, or bounding box source."""
+    """Acquire, project, and preflight exactly one OSM source."""
     selected = sum(value is not None for value in (osm_file, place, bbox))
     if selected != 1:
         raise typer.BadParameter(
@@ -64,17 +78,26 @@ def fetch(
             param_hint="--driving-side",
         )
     try:
-        manifest_path = acquire_osm(
+        acquire_osm(
             workspace=workspace,
             driving_side=driving_side.value,
             osm_file=osm_file,
             place=place,
             bbox=bbox,
         )
+        config = (
+            load_config(config_path)
+            if config_path is not None
+            else ConverterConfig(config_version=1)
+        )
+        report_path = normalize_workspace(workspace=workspace, config=config)
     except AcquisitionError as error:
         typer.echo(f"Stage 1A failed: {error}", err=True)
         raise typer.Exit(code=1) from error
-    typer.echo(f"Stage 1A complete: {manifest_path}")
+    except (NormalizationError, ValueError) as error:
+        typer.echo(f"Stage 1B failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(f"Stage 1 complete: {report_path}")
 
 
 @app.command("generate-lanelet2")
@@ -85,10 +108,23 @@ def generate_lanelet2(workspace: Workspace) -> None:
 
 
 @app.command()
-def inspect(workspace: Workspace) -> None:
-    """Generate visual-review artifacts for WORKSPACE."""
-    del workspace
-    _stage_pending(3)
+def inspect(
+    workspace: Workspace,
+    view: Annotated[
+        InspectView,
+        typer.Option(
+            "--view",
+            help="Checkpoint to render: source, normalized, stage-1, or lanelet2.",
+        ),
+    ] = InspectView.stage_1,
+) -> None:
+    """Generate a browser-based visual checkpoint for WORKSPACE."""
+    try:
+        output_path = generate_inspection(workspace=workspace, view=view.value)
+    except (InspectionError, ValueError, KeyError) as error:
+        typer.echo(f"Inspection failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(f"Inspection created: {output_path}")
 
 
 @app.command("validate-lanelet2")

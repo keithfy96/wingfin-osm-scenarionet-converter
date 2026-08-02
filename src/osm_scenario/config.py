@@ -39,6 +39,7 @@ class ConverterConfig(BaseModel):
     config_version: Literal[1]
     driving_side: Literal["left", "right"] | None = None
     coordinate_origin: CoordinateOrigin | None = None
+    coordinate_round_trip_tolerance_degrees: float = Field(default=1e-9, gt=0)
     lane_width_defaults: LaneWidthDefaults = Field(default_factory=LaneWidthDefaults)
     tag_inference: TagInferenceConfig = Field(default_factory=TagInferenceConfig)
     scenario_route: ScenarioRouteConfig = Field(default_factory=ScenarioRouteConfig)

@@ -68,6 +68,9 @@ def test_fetch_local_file_generates_reloadable_stage_1a_workspace(tmp_path: Path
 
     graph_path = workspace / "normalized" / "road-network.graphml"
     gpkg_path = workspace / "normalized" / "road-network.gpkg"
+    projected_graph_path = workspace / "normalized" / "road-network-local.graphml"
+    projected_gpkg_path = workspace / "normalized" / "road-network-local.gpkg"
+    report_path = workspace / "reports" / "acquisition.json"
     manifest_path = source_dir / "manifest.json"
     graph = ox.load_graphml(graph_path)
     assert len(graph.nodes) > 0
@@ -80,6 +83,9 @@ def test_fetch_local_file_generates_reloadable_stage_1a_workspace(tmp_path: Path
     assert len(edges) > 0
     assert nodes.crs is not None
     assert edges.crs is not None
+    assert projected_graph_path.is_file()
+    assert projected_gpkg_path.is_file()
+    assert json.loads(report_path.read_text(encoding="utf-8"))["status"] == "passed"
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["source"]["type"] == "local_file"
@@ -88,6 +94,7 @@ def test_fetch_local_file_generates_reloadable_stage_1a_workspace(tmp_path: Path
     assert manifest["driving_side_source"] == "explicit_cli"
     assert manifest["graph"]["simplified"] is False
     assert manifest["artifacts"]["graphml"]["path"] == "normalized/road-network.graphml"
+    assert manifest["stage_1b"]["status"] == "passed"
     for artifact in manifest["artifacts"].values():
         artifact_path = (workspace / artifact["path"]).resolve()
         assert artifact_path.is_relative_to(workspace.resolve())
