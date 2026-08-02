@@ -220,21 +220,21 @@ normalized/road-network-local.graphml   Reloadable projected graph
 normalized/road-network-local.gpkg      Projected GIS node and edge layers
 reports/acquisition.json                Complete machine-readable results
 reports/acquisition.md                  Concise operator summary
-reports/stage-2-input-audit.json        Detailed source-data readiness evidence
-reports/stage-2-input-audit.md          Concise Stage 2 readiness summary
+reports/stage-1b-data-audit.json        Detailed normalized-data evidence
+reports/stage-1b-data-audit.md          Concise Stage 1B data-quality summary
 ```
 
-The Stage 2 input audit is generated automatically with Stage 1B. It accounts
+The Stage 1B data audit is generated automatically with Stage 1B. It accounts
 for missing lane and width tags, connected components, traffic-signal nodes,
 turn-restriction relations, and stop-line candidates before any Lanelet2
 geometry is created. The JSON retains the affected OSM identifiers and relation
 members behind every aggregate; the Markdown report provides the headline
-counts and their Stage 2 implications.
+counts and their downstream conversion risks.
 
 Inspect the concise report directly:
 
 ```bash
-cat workspaces/mosque/reports/stage-2-input-audit.md
+cat workspaces/mosque/reports/stage-1b-data-audit.md
 ```
 
 The original `road-network.graphml` and `road-network.gpkg` remain in WGS84.

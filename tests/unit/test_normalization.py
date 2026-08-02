@@ -51,9 +51,10 @@ def test_normalize_workspace_projects_and_reports_from_saved_graph(tmp_path: Pat
     assert report["stage_1a_to_1b_parity"]["status"] == "passed"
 
     audit = json.loads(
-        (workspace / "reports" / "stage-2-input-audit.json").read_text(encoding="utf-8")
+        (workspace / "reports" / "stage-1b-data-audit.json").read_text(encoding="utf-8")
     )
-    assert audit["status"] == "review_required"
+    assert audit["stage_1b_status"] == "passed"
+    assert audit["downstream_readiness"] == "review_required"
     assert audit["selected_network"] == {
         "unique_osm_way_count": 2,
         "node_count": 5,
@@ -69,7 +70,7 @@ def test_normalize_workspace_projects_and_reports_from_saved_graph(tmp_path: Pat
     assert audit["turn_restrictions"]["source_count"] == 1
     assert audit["turn_restrictions"]["fully_retained_way_member_count"] == 1
     assert audit["stop_line_geometry"]["candidate_way_count"] == 0
-    assert (workspace / "reports" / "stage-2-input-audit.md").is_file()
+    assert (workspace / "reports" / "stage-1b-data-audit.md").is_file()
 
     graph_path = workspace / "normalized" / "road-network-local.graphml"
     gpkg_path = workspace / "normalized" / "road-network-local.gpkg"
@@ -107,7 +108,7 @@ def test_normalize_workspace_uses_explicit_origin(tmp_path: Path) -> None:
     }
 
 
-def test_stage_2_input_audit_blocks_disabled_lane_count_inference(tmp_path: Path) -> None:
+def test_stage_1b_data_audit_blocks_disabled_lane_count_inference(tmp_path: Path) -> None:
     workspace, _ = _stage_1a_workspace(tmp_path)
     normalize_workspace(
         workspace=workspace,
@@ -118,9 +119,10 @@ def test_stage_2_input_audit_blocks_disabled_lane_count_inference(tmp_path: Path
     )
 
     audit = json.loads(
-        (workspace / "reports" / "stage-2-input-audit.json").read_text(encoding="utf-8")
+        (workspace / "reports" / "stage-1b-data-audit.json").read_text(encoding="utf-8")
     )
-    assert audit["status"] == "blocked"
+    assert audit["stage_1b_status"] == "passed"
+    assert audit["downstream_readiness"] == "blocked"
     assert audit["lane_count_coverage"]["inference_enabled"] is False
 
 

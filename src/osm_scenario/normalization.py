@@ -19,7 +19,7 @@ from shapely.geometry import LineString
 from shapely.ops import transform as transform_geometry
 
 from osm_scenario.config import ConverterConfig
-from osm_scenario.stage2_input_audit import generate_stage2_input_audit
+from osm_scenario.stage1b_data_audit import generate_stage1b_data_audit
 
 
 class NormalizationError(RuntimeError):
@@ -415,7 +415,7 @@ def normalize_workspace(*, workspace: Path, config: ConverterConfig) -> Path:
     )
     report_markdown_path.write_text(_markdown_report(report), encoding="utf-8")
 
-    audit_json_path, audit_markdown_path = generate_stage2_input_audit(
+    audit_json_path, audit_markdown_path = generate_stage1b_data_audit(
         workspace=workspace,
         graph=reloaded_projected,
         acquisition_report=report,
@@ -428,8 +428,8 @@ def normalize_workspace(*, workspace: Path, config: ConverterConfig) -> Path:
         ("projected_geopackage", projected_gpkg_path),
         ("acquisition_json", report_json_path),
         ("acquisition_markdown", report_markdown_path),
-        ("stage_2_input_audit_json", audit_json_path),
-        ("stage_2_input_audit_markdown", audit_markdown_path),
+        ("stage_1b_data_audit_json", audit_json_path),
+        ("stage_1b_data_audit_markdown", audit_markdown_path),
     ):
         stage_1b_artifacts[name] = {
             "path": _workspace_path(path, workspace),

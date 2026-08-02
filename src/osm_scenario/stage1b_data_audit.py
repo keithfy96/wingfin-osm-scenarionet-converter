@@ -1,4 +1,4 @@
-"""Programmatic source-data audit for preliminary Lanelet2 generation."""
+"""Programmatic Stage 1B audit of normalized OSM source data."""
 
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ from osm_scenario.config import ConverterConfig
 from osm_scenario.osm_source import OsmSnapshot, read_osm_snapshot
 
 
-class Stage2InputAuditError(RuntimeError):
-    """Raised when the Stage 2 input audit cannot be generated."""
+class Stage1BDataAuditError(RuntimeError):
+    """Raised when the Stage 1B data audit cannot be generated."""
 
 
 def _graph_osm_ids(value: Any) -> set[str]:
@@ -178,7 +178,7 @@ def _restriction_report(snapshot: OsmSnapshot, selected_way_ids: set[str]) -> di
         "fully_retained_way_member_count": retained_count,
         "partially_or_not_retained_count": len(details) - retained_count,
         "details": details,
-        "note": "Retained way members do not replace Stage 2 from/via/to validation.",
+        "note": "Retained way members do not replace downstream from/via/to validation.",
     }
 
 
@@ -198,9 +198,10 @@ def _markdown_report(report: dict[str, Any]) -> str:
     restrictions = report["turn_restrictions"]
     stop_lines = report["stop_line_geometry"]
     lines = [
-        "# Stage 2 Input Audit",
+        "# Stage 1B Data Audit",
         "",
-        f"- Status: **{report['status']}**",
+        f"- Stage 1B status: **{report['stage_1b_status']}**",
+        f"- Downstream readiness: **{report['downstream_readiness']}**",
         f"- Selected OSM ways: {report['selected_network']['unique_osm_way_count']}",
         f"- Graph nodes: {report['selected_network']['node_count']}",
         f"- Directed graph edges: {report['selected_network']['directed_edge_count']}",
@@ -210,7 +211,7 @@ def _markdown_report(report: dict[str, Any]) -> str:
         f"- Ways missing lane counts: {lanes['missing_way_count']}",
         f"- Missing counts by highway: `{json.dumps(lanes['missing_by_highway'], sort_keys=True)}`",
         f"- Missing-count inference enabled: {str(lanes['inference_enabled']).lower()}",
-        "- See `stage-2-input-audit.json` for every affected OSM way ID.",
+        "- See `stage-1b-data-audit.json` for every affected OSM way ID.",
         "",
         "## Connectivity",
         "",
@@ -239,7 +240,7 @@ def _markdown_report(report: dict[str, Any]) -> str:
         f"{restrictions['fully_retained_way_member_count']}",
         "- Partially or non-retained relations: "
         f"{restrictions['partially_or_not_retained_count']}",
-        "- Stage 2 must still validate `from`, `via`, and `to` roles.",
+        "- A later conversion stage must still validate `from`, `via`, and `to` roles.",
         "",
         "## Stop-Line Geometry",
         "",
@@ -247,7 +248,7 @@ def _markdown_report(report: dict[str, Any]) -> str:
         "- Detection matches normalized tag keys or values exactly equal to `stop_line`; "
         "bus stops and transit relation roles are excluded.",
         "",
-        "## Stage 2 Implications",
+        "## Downstream Conversion Risks",
         "",
         "- Missing lane counts require an explicit inference or source correction "
         "before lanes are generated.",
@@ -271,7 +272,7 @@ def _write_text_atomic(path: Path, content: str) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def generate_stage2_input_audit(
+def generate_stage1b_data_audit(
     *,
     workspace: Path,
     graph: nx.MultiDiGraph,
@@ -282,7 +283,7 @@ def generate_stage2_input_audit(
     workspace = workspace.resolve()
     source_path = workspace / "source" / "map.osm"
     if not source_path.is_file():
-        raise Stage2InputAuditError(f"preserved OSM source not found: {source_path}")
+        raise Stage1BDataAuditError(f"preserved OSM source not found: {source_path}")
 
     snapshot = read_osm_snapshot(source_path)
     selected_way_ids = _selected_way_ids(graph)
@@ -331,16 +332,18 @@ def generate_stage2_input_audit(
             len(components) > 1,
         )
     )
+    downstream_readiness = (
+        "blocked"
+        if blocking_errors or inference_blocked
+        else "review_required"
+        if review_required
+        else "ready"
+    )
     report = {
         "report_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "status": (
-            "blocked"
-            if blocking_errors or inference_blocked
-            else "review_required"
-            if review_required
-            else "ready"
-        ),
+        "stage_1b_status": acquisition_report["status"],
+        "downstream_readiness": downstream_readiness,
         "inputs": {
             "source_osm": "source/map.osm",
             "normalized_graph": "normalized/road-network-local.graphml",
@@ -391,8 +394,8 @@ def generate_stage2_input_audit(
     }
 
     reports_dir = workspace / "reports"
-    json_path = reports_dir / "stage-2-input-audit.json"
-    markdown_path = reports_dir / "stage-2-input-audit.md"
+    json_path = reports_dir / "stage-1b-data-audit.json"
+    markdown_path = reports_dir / "stage-1b-data-audit.md"
     _write_text_atomic(json_path, json.dumps(report, indent=2, sort_keys=True) + "\n")
     _write_text_atomic(markdown_path, _markdown_report(report))
     return json_path, markdown_path

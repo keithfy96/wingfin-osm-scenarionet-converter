@@ -171,13 +171,13 @@ These commands are runnable against the Stage 1A implementation.
 - [x] Use `pyproj` to define a local azimuthal-equidistant East-North frame centered on the map centroid or an explicit origin.
 - [x] Record the full CRS definition and forward/inverse transforms so every downstream coordinate can be traced back to WGS84.
 - [x] Run preflight checks for empty networks, invalid geometries, disconnected components, conflicting direction tags, and missing lane-count data.
-- [x] Generate machine-readable and Markdown Stage 2 input audits covering lane and width tags, connectivity, traffic signals, turn restrictions, and stop-line candidates.
+- [x] Generate machine-readable and Markdown Stage 1B data audits covering lane and width tags, connectivity, traffic signals, turn restrictions, and stop-line candidates.
 
 Stage 1B runs as the second half of `fetch` and writes
 `normalized/road-network-local.graphml`,
 `normalized/road-network-local.gpkg`, `reports/acquisition.json`, and
-`reports/acquisition.md`. It also writes `reports/stage-2-input-audit.json`
-with exact source identifiers and a concise `reports/stage-2-input-audit.md`
+`reports/acquisition.md`. It also writes `reports/stage-1b-data-audit.json`
+with exact source identifiers and a concise `reports/stage-1b-data-audit.md`
 summary. The Stage 1A WGS84 artifacts remain unchanged.
 
 ### Completion gate
@@ -185,7 +185,7 @@ summary. The Stage 1A WGS84 artifacts remain unchanged.
 - [x] The source can be loaded again without network access.
 - [x] WGS84-to-local-to-WGS84 round trips remain within the configured tolerance.
 - [x] Every discarded or inferred OSM feature is listed in the acquisition report.
-- [x] Stage 2 input aggregates can be traced to the underlying OSM way, node, and relation IDs.
+- [x] Stage 1B data aggregates can be traced to the underlying OSM way, node, and relation IDs.
 
 ### Manual verification
 
