@@ -220,6 +220,25 @@ def _audit_map_data(source_path: Path, audit: dict[str, Any], report: dict[str, 
         if warning["code"] == "conflicting_direction_tags" and warning.get("osm_id")
         for part in str(warning["osm_id"]).split(",")
     }
+    searchable_way_features = []
+    for way_id, way in snapshot.ways.items():
+        feature = _way_feature(
+            snapshot,
+            way_id,
+            {
+                "audit_issue": "way_search",
+                "selected_for_driving": way_id in selected_ids,
+                "selection_reason": (
+                    "selected"
+                    if way_id in selected_ids
+                    else road_exclusion_reason(way.tags)
+                    if "highway" in way.tags
+                    else "not_a_highway_way"
+                ),
+            },
+        )
+        if feature is not None:
+            searchable_way_features.append(feature)
     return {
         "selected": ways(selected_ids, audit_issue="selected_road"),
         "missing_lanes": ways(
@@ -237,6 +256,7 @@ def _audit_map_data(source_path: Path, audit: dict[str, Any], report: dict[str, 
             audit["stop_line_geometry"]["candidate_way_ids"], audit_issue="stop_line_candidate"
         ),
         "direction_conflicts": ways(conflict_ids, audit_issue="conflicting_direction_tags"),
+        "searchable_ways": _feature_collection(searchable_way_features),
     }
 
 
@@ -247,13 +267,14 @@ def _render_audit_html(*, data: dict[str, Any], audit: dict[str, Any]) -> str:
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Stage 1B Data Audit</title><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
-html,body,#map{{height:100%;margin:0}} body{{font-family:system-ui,sans-serif;color:#17212b}} #panel{{position:absolute;z-index:1000;top:12px;left:54px;width:min(440px,calc(100vw - 118px));max-height:calc(100vh - 48px);overflow:auto;background:#fff;border:1px solid #9aa7b2;border-radius:6px;padding:14px;box-shadow:0 3px 14px #0003}} h1{{font-size:17px;margin:0 0 8px}} h2{{font-size:14px;margin:14px 0 6px}} p,td,th{{font-size:12px;line-height:1.35}} table{{border-collapse:collapse;width:100%}} td,th{{text-align:left;border-bottom:1px solid #d6dde3;padding:5px 4px;vertical-align:top}} .review{{color:#9a5700;font-weight:700}} .mapped{{color:#176b3a}} .manual{{color:#855900}} .leaflet-popup-content{{max-height:320px;overflow:auto}} .tag-table{{font-size:12px}} @media(max-width:700px){{#panel{{left:10px;top:54px;width:calc(100vw - 48px);max-height:44vh}}}}
-</style></head><body><aside id="panel"><h1>Stage 1B Data Audit</h1><div id="summary"></div><h2>Source correction coverage</h2><table><thead><tr><th>Case</th><th>Coverage</th></tr></thead><tbody id="coverage"></tbody></table><p>Toggle layers at top right and click geometry for OSM IDs and source tags.</p></aside><div id="map"></div>
+html,body,#map{{height:100%;margin:0}} body{{font-family:system-ui,sans-serif;color:#17212b}} #panel{{position:absolute;z-index:1000;top:12px;left:54px;width:min(440px,calc(100vw - 118px));max-height:calc(100vh - 48px);overflow:auto;background:#fff;border:1px solid #9aa7b2;border-radius:6px;padding:14px;box-shadow:0 3px 14px #0003}} h1{{font-size:17px;margin:0 0 8px}} h2{{font-size:14px;margin:14px 0 6px}} p,td,th{{font-size:12px;line-height:1.35}} table{{border-collapse:collapse;width:100%}} td,th{{text-align:left;border-bottom:1px solid #d6dde3;padding:5px 4px;vertical-align:top}} .review{{color:#9a5700;font-weight:700}} .mapped{{color:#176b3a}} .manual{{color:#855900}} .way-search{{display:grid;grid-template-columns:1fr auto;gap:6px;margin:10px 0 2px}} .way-search label{{grid-column:1/-1;font-size:12px;font-weight:700}} .way-search input{{min-width:0;border:1px solid #8795a1;border-radius:4px;padding:7px 8px;font:inherit}} .way-search button{{border:1px solid #285c79;border-radius:4px;background:#285c79;color:#fff;padding:7px 12px;font-weight:700;cursor:pointer}} .way-search button:hover{{background:#17445f}} #way-search-result{{min-height:17px;margin:4px 0 10px}} .leaflet-popup-content{{max-height:320px;overflow:auto}} .tag-table{{font-size:12px}} @media(max-width:700px){{#panel{{left:10px;top:54px;width:calc(100vw - 48px);max-height:44vh}}}}
+</style></head><body><aside id="panel"><h1>Stage 1B Data Audit</h1><form id="way-search" class="way-search"><label for="way-id">Search by OSM Way ID</label><input id="way-id" name="way-id" inputmode="numeric" autocomplete="off" placeholder="e.g. 1250683198"><button type="submit">Search</button></form><p id="way-search-result" role="status" aria-live="polite"></p><div id="summary"></div><h2>Source correction coverage</h2><table><thead><tr><th>Case</th><th>Coverage</th></tr></thead><tbody id="coverage"></tbody></table><p>Toggle layers at top right and click geometry for OSM IDs and source tags.</p></aside><div id="map"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
 const data={payload}; const audit={summary_json}; const map=L.map('map',{{preferCanvas:true}}); L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{maxZoom:20,attribution:'&copy; OpenStreetMap contributors'}}).addTo(map);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
 function popup(f){{const p=f.properties||{{}},tags=p.tags||{{}};const facts=Object.entries(p).filter(([k])=>!['tags'].includes(k)).map(([k,v])=>`<tr><td>${{esc(k)}}</td><td>${{esc(v)}}</td></tr>`).join('');const tagRows=Object.keys(tags).sort().map(k=>`<tr><td>${{esc(k)}}</td><td>${{esc(tags[k])}}</td></tr>`).join('');return `<strong>OSM ${{esc(p.feature_type)}} ${{esc(p.osm_id)}}</strong><table class="tag-table">${{facts}}${{tagRows}}</table>`}}
 const line=(geo,style)=>L.geoJSON(geo,{{style,onEachFeature:(f,l)=>l.bindPopup(popup(f))}}); const selected=line(data.selected,{{color:'#6b747c',weight:3,opacity:.38}}); const missingLanes=line(data.missing_lanes,{{color:'#d73027',weight:6,opacity:.9}}); const missingWidths=line(data.missing_widths,{{color:'#f08c00',weight:4,opacity:.85,dashArray:'7 5'}}); const palette=['#0077b6','#6a4c93','#2a9d8f','#bc6c25','#c2185b','#5f6f00','#8c564b','#17a2b8']; const components=L.geoJSON(data.components,{{style:f=>{{const n=Math.max(0,Number((f.properties.component_id||'1').split('-')[1])-1);return{{color:palette[n%palette.length],weight:5,opacity:.8}}}},onEachFeature:(f,l)=>l.bindPopup(popup(f))}}); const retainedSignals=L.geoJSON(data.signals,{{filter:f=>f.properties.retained_in_driving_graph,pointToLayer:(f,ll)=>L.circleMarker(ll,{{radius:7,color:'#176b3a',weight:3,fillColor:'#fff',fillOpacity:1}}),onEachFeature:(f,l)=>l.bindPopup(popup(f))}}); const excludedSignals=L.geoJSON(data.signals,{{filter:f=>!f.properties.retained_in_driving_graph,pointToLayer:(f,ll)=>L.circleMarker(ll,{{radius:7,color:'#a51d2d',weight:3,fillColor:'#fff',fillOpacity:1}}),onEachFeature:(f,l)=>l.bindPopup(popup(f))}}); const retainedRestrictions=line(data.retained_restrictions,{{color:'#6a1b9a',weight:6,opacity:.9}}); const partialRestrictions=line(data.partial_restrictions,{{color:'#00a6a6',weight:9,opacity:1,dashArray:'10 7'}}); const stopLines=line(data.stop_lines,{{color:'#111',weight:8,opacity:.95}}); const directionConflicts=line(data.direction_conflicts,{{color:'#e6007e',weight:8,opacity:.9}}); const overlays={{'Fully retained restrictions (purple, solid)':retainedRestrictions,'Partial restrictions (cyan, dashed)':partialRestrictions,'Selected roads':selected,'Missing lane counts':missingLanes,'Missing widths':missingWidths,'Connected components':components,'Retained traffic signals':retainedSignals,'Excluded traffic signals':excludedSignals,'Stop-line candidates':stopLines,'Direction tag conflicts':directionConflicts}}; selected.addTo(map); missingLanes.addTo(map); retainedSignals.addTo(map); excludedSignals.addTo(map); partialRestrictions.addTo(map); L.control.layers(null,overlays,{{collapsed:innerWidth<800}}).addTo(map); const bounds=selected.getBounds(); if(bounds.isValid())map.fitBounds(bounds.pad(.05));else map.setView([0,0],2);
+const searchableWays=new Map(data.searchable_ways.features.map(feature=>[String(feature.properties.osm_id),feature])); const missingRestrictionWays=new Set(audit.turn_restrictions.details.flatMap(relation=>relation.missing_way_member_ids)); let searchHighlight=null; const searchResult=document.getElementById('way-search-result'); document.getElementById('way-search').addEventListener('submit',event=>{{event.preventDefault();const wayId=document.getElementById('way-id').value.trim();if(searchHighlight){{map.removeLayer(searchHighlight);searchHighlight=null}}if(!/^\\d+$/.test(wayId)){{searchResult.textContent='Enter a numeric OSM Way ID.';return}}const feature=searchableWays.get(wayId);if(!feature){{searchResult.textContent=missingRestrictionWays.has(wayId)?`Way ${{wayId}} is referenced by a restriction but is missing from source/map.osm.`:`Way ${{wayId}} is not present with drawable geometry in source/map.osm.`;return}}const outline=L.geoJSON(feature,{{style:{{color:'#111',weight:12,opacity:1}}}});const focus=L.geoJSON(feature,{{style:{{color:'#ffe600',weight:7,opacity:1}},onEachFeature:(f,l)=>l.bindPopup(popup(f))}});searchHighlight=L.layerGroup([outline,focus]).addTo(map);const focusBounds=focus.getBounds();if(focusBounds.isValid())map.fitBounds(focusBounds.pad(.35),{{maxZoom:18}});focus.eachLayer(layer=>layer.openPopup());const p=feature.properties,tags=p.tags||{{}};searchResult.textContent=`Found Way ${{wayId}}: ${{tags.name||tags.highway||'unnamed way'}} (${{p.selection_reason}}). Highlighted yellow.`}});
 const lanes=audit.lane_count_coverage,widths=audit.width_coverage,signals=audit.traffic_signals,restrictions=audit.turn_restrictions,stops=audit.stop_line_geometry,connectivity=audit.connectivity; document.getElementById('summary').innerHTML=`<table><tr><th>Stage 1B</th><td>${{esc(audit.stage_1b_status)}}</td></tr><tr><th>Downstream readiness</th><td class="review">${{esc(audit.downstream_readiness)}}</td></tr><tr><th>Selected ways / edges</th><td>${{audit.selected_network.unique_osm_way_count}} / ${{audit.selected_network.directed_edge_count}}</td></tr><tr><th>Missing lanes by class</th><td>${{esc(JSON.stringify(lanes.missing_by_highway))}}</td></tr><tr><th>Components</th><td>${{connectivity.component_count}}</td></tr><tr><th>Missing widths / default</th><td>${{widths.missing_way_count}} / ${{widths.configured_default_lane_width_metres}} m</td></tr><tr><th>Signals retained / excluded</th><td>${{signals.retained_count}} / ${{signals.excluded_count}}</td></tr><tr><th>Restrictions full / partial</th><td>${{restrictions.fully_retained_way_member_count}} / ${{restrictions.partially_or_not_retained_count}}</td></tr><tr><th>Stop-line candidates</th><td>${{stops.candidate_way_count}}</td></tr><tr><th>Lane inference enabled</th><td>${{lanes.inference_enabled}}</td></tr></table>`;
 const rows=[['Known lane count','mapped',`${{lanes.missing_way_count}} missing; red layer`],['Incorrect oneway','mapped','conflicting directional tags mapped; correctness still needs manual review'],['Roads connected at grade','manual','components are colored; missing joins require source review'],['Roads crossing visually','manual','verify bridge, tunnel, and layer tags before joining'],['Turn restrictions','mapped',`${{restrictions.source_count}} relations; solid full, dashed partial`],['Signal location','mapped','retained green; excluded red; placement correctness is manual'],['Known physical width','mapped',`${{widths.missing_way_count}} missing; orange dashed layer`],['Known mapped stop line','mapped',`${{stops.candidate_way_count}} candidates; black layer`]]; document.getElementById('coverage').innerHTML=rows.map(([name,state,text])=>`<tr><td>${{esc(name)}}</td><td class="${{state}}">${{esc(text)}}</td></tr>`).join('');
 </script></body></html>"""
@@ -409,7 +430,14 @@ def generate_inspection(*, workspace: Path, view: InspectionView) -> Path:
                 "downstream_readiness": audit["downstream_readiness"],
                 "inference_enabled": audit["lane_count_coverage"]["inference_enabled"],
             },
-            "layers": {name: len(collection["features"]) for name, collection in data.items()},
+            "layers": {
+                name: len(collection["features"])
+                for name, collection in data.items()
+                if name != "searchable_ways"
+            },
+            "search": {
+                "indexed_source_way_count": len(data["searchable_ways"]["features"]),
+            },
             "coverage": {
                 "source_review": [
                     "lane_count",

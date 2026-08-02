@@ -243,6 +243,63 @@ shows only work that can be evaluated against the source OSM data.
 - **How validated:** Focused tests passed 8 cases; the full suite passed 22 tests;
   Ruff and `git diff --check` passed; the real mosque audit was regenerated.
 
+## Follow-up: 2026-08-03 03:36:34 +08
+
+### User Goal
+
+Add Way ID search to the audit map so reported OSM ways can be located without
+manually scanning overlapping layers.
+
+### Actions Taken
+
+- Indexed every source OSM way with drawable geometry, including selected and
+  excluded ways.
+- Added a numeric Way ID search form to the Stage 1B audit panel.
+- Added automatic zoom, a high-contrast black/yellow highlight, an opened source
+  popup, and a concise selection-status result.
+- Added distinct messages for unknown ways and restriction members referenced
+  by relations but missing from `source/map.osm`.
+- Kept the search index out of the visible layer counts and reported its size as
+  separate machine-readable metadata.
+- Added regression coverage and regenerated the mosque audit map.
+
+### Files Modified
+
+- `src/osm_scenario/inspection.py`
+- `tests/unit/test_inspection.py`
+- `docs/ai-action-logs/2026-08-02-10:02:53-stage-inspection-workflow.md`
+
+### What Worked
+
+- The mosque map indexes 1,412 source ways and can distinguish an available way
+  such as `1250683198` from a missing restriction member such as `776369866`.
+- Search highlights remain independent of layer visibility.
+
+### What Went Wrong
+
+- The first focused test exposed a Python invalid-escape warning from the
+  embedded JavaScript numeric regex; escaping was corrected and tests rerun.
+- The sandbox uv cache was read-only during combined validation; the approved
+  `uv run` escalation completed successfully.
+
+### Current State And Recommended Next Step
+
+- Use the search box in `stage-1-audit.html` with any OSM Way ID referenced in
+  the audit reports.
+
+### Generated Code Details
+
+- **What changed:** Source-way search index, accessible search UI, lookup and
+  missing-member behavior, highlight rendering, report metadata, and tests.
+- **Why:** Aggregate findings and overlapping audit layers did not provide a
+  practical way to locate a known OSM way.
+- **How it works:** Source ways are embedded as an unrendered GeoJSON lookup map;
+  submission finds the exact ID, creates a temporary highlight layer, fits the
+  viewport, and opens the existing evidence popup.
+- **How validated:** Focused tests passed 8 cases; the full suite passed 22 tests;
+  Ruff and `git diff --check` passed; the mosque artifact was regenerated with
+  1,412 indexed source ways.
+
 ## Follow-up: 2026-08-03 02:50:13 +08
 
 ### User Goal
