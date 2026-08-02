@@ -91,6 +91,11 @@ def test_audit_view_maps_stage_1b_findings_and_discloses_later_checks(
     assert "Missing lane counts" in html
     assert "Missing widths" in html
     assert "Connected components" in html
+    assert "Connectivity and crossing legend" in html
+    assert "Connected components (different colors)" in html
+    assert "Tagged grade-separated crossings (blue markers)" in html
+    assert "Ambiguous visual crossings (red markers)" in html
+    assert "Different component colors show disconnected graph groups" in html
     assert "Retained traffic signals" in html
     assert "Excluded traffic signals" in html
     assert "Fully retained restrictions (purple, solid)" in html
@@ -121,6 +126,8 @@ def test_audit_view_maps_stage_1b_findings_and_discloses_later_checks(
     assert report["layers"]["missing_widths"] == 1
     assert report["layers"]["retained_restrictions"] == 2
     assert report["layers"]["restriction_via_points"] == 1
+    assert report["layers"]["grade_separated_crossings"] == 0
+    assert report["layers"]["ambiguous_crossings"] == 0
     assert "grade_separation" in report["coverage"]["source_review"]
     assert "post_stage_2" not in report["coverage"]
 

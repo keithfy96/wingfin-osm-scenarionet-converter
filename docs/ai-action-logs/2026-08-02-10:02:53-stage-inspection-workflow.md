@@ -355,6 +355,67 @@ refer, instead of displaying all restrictions across the audit map.
   passed 8 cases; the full suite passed 22 tests; Ruff and `git diff --check`
   passed; the mosque audit artifact was regenerated.
 
+## Follow-up: 2026-08-03 04:51:38 +08
+
+### User Goal
+
+Clearly distinguish disconnected road components from roads that cross
+visually, and provide map legends and locations for reviewing both cases.
+
+### Actions Taken
+
+- Added procedural detection of selected source-way geometry intersections that
+  do not share an OSM node.
+- Classified crossings as tag-supported grade-separated or ambiguous using
+  `layer`, `bridge`, and `tunnel` source evidence.
+- Added blue and red crossing-marker layers with evidence popups.
+- Added a panel legend listing each graph component color and node count plus
+  crossing classifications and counts.
+- Clarified that component separation does not prove a missing source join.
+- Regenerated and visually checked the mosque audit map.
+
+### Files Modified
+
+- `src/osm_scenario/inspection.py`
+- `tests/unit/test_inspection.py`
+- `docs/ai-action-logs/2026-08-02-10:02:53-stage-inspection-workflow.md`
+- `workspaces/mosque/inspection/stage-1-audit.html`
+- `workspaces/mosque/reports/inspection-audit.json`
+- `workspaces/mosque/reports/inspection-audit.md`
+
+### What Worked
+
+- The mosque workspace contains six crossings without shared source nodes; all
+  six have bridge or layer evidence and are shown in blue.
+- No ambiguous crossings were found, so the red review count is zero.
+- The six disconnected components are listed with distinct colors and sizes.
+
+### What Went Wrong
+
+- No implementation errors occurred. The active shell continued to report its
+  unrelated ScenarioNet virtual environment; uv correctly selected this
+  project's environment.
+
+### Current State And Recommended Next Step
+
+- Use the component layer to inspect disconnected network groups and the
+  crossing layers to inspect exact geometry intersections. Only red crossings
+  should be treated as unresolved grade-separation reviews.
+
+### Generated Code Details
+
+- **What changed:** Spatial crossing analysis, evidence classification, GeoJSON
+  layers, map markers, dynamic legend content, report layer counts, and tests.
+- **Why:** Component connectivity and visual crossing checks are different, but
+  the map previously visualized only components and could not locate crossings.
+- **How it works:** An STRtree finds intersecting selected ways; pairs sharing a
+  source node are excluded, and remaining intersections are classified from
+  source separation tags without modifying OSM data.
+- **How validated:** The real workspace produced six grade-separated and zero
+  ambiguous crossings; a 1440x1000 headless Chrome screenshot confirmed the
+  legend and controls render cleanly; focused and full tests passed 8 and 22
+  cases; Ruff, embedded JavaScript parsing, and `git diff --check` passed.
+
 ## Follow-up: 2026-08-03 04:39:12 +08
 
 ### User Clarification And Revert
