@@ -243,6 +243,55 @@ shows only work that can be evaluated against the source OSM data.
 - **How validated:** Focused tests passed 8 cases; the full suite passed 22 tests;
   Ruff and `git diff --check` passed; the real mosque audit was regenerated.
 
+## Follow-up: 2026-08-03 04:58:36 +08
+
+### User Goal
+
+Add source OSM node-ID search to the Stage 1B audit map without changing the
+existing way, restriction, or audit-layer behavior.
+
+### Actions Taken
+
+- Added every node from the preserved `source/map.osm` snapshot to a dedicated
+  search-only GeoJSON index.
+- Changed the audit search form to select either Way or Node before entering an
+  OSM ID.
+- Added node-specific yellow point highlighting, zoom, popup, source-tag
+  display, not-found feedback, report counts, and regression coverage.
+
+### Files Modified
+
+- `src/osm_scenario/inspection.py`
+- `tests/unit/test_inspection.py`
+- `docs/ai-action-logs/2026-08-02-10:02:53-stage-inspection-workflow.md`
+
+### What Worked
+
+- The mosque audit indexes 6,029 source nodes and 1,412 drawable source ways.
+- Search indexes remain excluded from visible audit-layer counts.
+
+### What Went Wrong
+
+- The first test expected six fixture nodes, while the fixture contains eight;
+  the expectation was corrected to match the complete source snapshot.
+
+### Current State And Recommended Next Step
+
+- The regenerated mosque audit supports explicit Way and Node searches from a
+  single form. Review representative tagged and untagged nodes in the browser.
+
+### Generated Code Details
+
+- **What changed:** Source-node indexing, element-type selection, point search
+  rendering, report metadata, and focused tests.
+- **Why:** Operators need to locate exact OSM nodes referenced by restriction
+  and topology evidence on the audit map.
+- **How it works:** Python serializes all source nodes as search-only point
+  features; browser-side maps select the requested element type and render an
+  isolated temporary highlight with the standard source-evidence popup.
+- **How validated:** The full suite passed 22 tests, Ruff and `git diff --check`
+  passed, the mosque audit regenerated, and its embedded JavaScript parsed.
+
 ## Follow-up: 2026-08-03 04:24:56 +08
 
 ### User Goal

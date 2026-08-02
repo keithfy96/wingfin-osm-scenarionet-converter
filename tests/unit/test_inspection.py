@@ -115,12 +115,18 @@ def test_audit_view_maps_stage_1b_findings_and_discloses_later_checks(
     assert "Inferred stop-line placement" not in html
     assert "Stage 2 Lanelet2 geometry does not exist yet" not in html
     assert "Lane inference enabled" in html
-    assert "Search by OSM Way ID" in html
+    assert "Search by OSM Way or Node ID" in html
+    assert '<option value="node">Node</option>' in html
+    assert "const searchableNodes=new Map" in html
+    assert "Found Node" in html
+    assert "radius:10,color:'#111',weight:3,fillColor:'#ffe600',fillOpacity:1" in html
     assert "Highlighted yellow" in html
     assert "is referenced by a restriction but is missing from source/map.osm" in html
     assert report["status"] == "review_required"
     assert report["search"]["indexed_source_way_count"] == 5
+    assert report["search"]["indexed_source_node_count"] == 8
     assert "searchable_ways" not in report["layers"]
+    assert "searchable_nodes" not in report["layers"]
     assert report["layers"]["selected"] == 2
     assert report["layers"]["missing_lanes"] == 1
     assert report["layers"]["missing_widths"] == 1
