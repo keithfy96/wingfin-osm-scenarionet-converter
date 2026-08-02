@@ -95,11 +95,13 @@ def test_audit_view_maps_stage_1b_findings_and_discloses_later_checks(
     assert "Excluded traffic signals" in html
     assert "Fully retained restrictions (purple, solid)" in html
     assert "Partial restrictions (cyan, dashed)" in html
-    assert "Restriction via points (yellow markers)" in html
+    assert "Restriction via points (yellow markers)" not in html
     assert "color:'#6a1b9a',weight:6,opacity:.9" in html
     assert "color:'#00a6a6',weight:9,opacity:1,dashArray:'10 7'" in html
     assert "radius:9,color:'#111',weight:3,fillColor:'#ffe600',fillOpacity:1" in html
     assert "exact OSM via node" in html
+    assert "showRestrictionVia(f.properties.relation_id)" in html
+    assert "restrictionViaSelection.clearLayers()" in html
     assert "Stop-line candidates" in html
     assert "Direction tag conflicts" in html
     assert "Lanelet boundary shape" not in html

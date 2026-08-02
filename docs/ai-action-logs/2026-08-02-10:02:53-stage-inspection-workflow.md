@@ -297,6 +297,144 @@ specific source location where each restriction is applied.
   Ruff and `git diff --check` passed; the mosque artifact was regenerated with
   46 visible restriction via markers.
 
+## Follow-up: 2026-08-03 04:36:46 +08
+
+### User Goal
+
+Show turn restrictions only after selecting the specific OSM way to which they
+refer, instead of displaying all restrictions across the audit map.
+
+### Actions Taken
+
+- Removed global restriction lines and via markers from the layer selector and
+  initial map state.
+- Added client-side filtering that finds restriction relations referencing the
+  searched Way ID.
+- Rendered only those relations' complete member ways and via markers in a
+  temporary selection layer.
+- Cleared the previous restriction selection before every search.
+- Updated the search result with the number of referencing restrictions shown.
+- Regenerated the mosque audit artifact.
+
+### Files Modified
+
+- `src/osm_scenario/inspection.py`
+- `tests/unit/test_inspection.py`
+- `docs/ai-action-logs/2026-08-02-10:02:53-stage-inspection-workflow.md`
+- `workspaces/mosque/inspection/stage-1-audit.html`
+- `workspaces/mosque/reports/inspection-audit.json`
+- `workspaces/mosque/reports/inspection-audit.md`
+
+### What Worked
+
+- Restrictions are absent on initial load and appear only when the searched way
+  is a member of one or more restriction relations.
+- Existing full/partial line styles and via-point marker styling are preserved
+  for the filtered relations.
+
+### What Went Wrong
+
+- The first patch context did not exactly match the compact embedded JavaScript;
+  it made no changes and was reapplied against the exact source lines.
+
+### Current State And Recommended Next Step
+
+- Search for Way `756118317` in the regenerated mosque audit to see only the
+  restrictions referencing that way; search another way to replace them.
+
+### Generated Code Details
+
+- **What changed:** Search-driven relation filtering, temporary restriction
+  rendering, automatic cleanup, result messaging, and regression assertions.
+- **Why:** A global restriction overlay obscured the relationship between one
+  selected road and its applicable restriction relations.
+- **How it works:** The browser derives matching relation IDs from restriction
+  features whose member Way ID equals the search value, then filters all member
+  and via features by those relation IDs before rendering.
+- **How validated:** Embedded JavaScript parsed successfully; focused tests
+  passed 8 cases; the full suite passed 22 tests; Ruff and `git diff --check`
+  passed; the mosque audit artifact was regenerated.
+
+## Follow-up: 2026-08-03 04:39:12 +08
+
+### User Clarification And Revert
+
+- The search-driven restriction filtering from the preceding follow-up
+  misunderstood the request and was reverted.
+- Way ID search is again independent of restriction visibility.
+- Global fully retained, partial, and restriction via-point layers were
+  restored to their prior behavior.
+- The mosque audit artifact was regenerated.
+
+### Current State
+
+- Restriction member ways retain their global toggleable overlays.
+- Restriction via nodes retain their yellow marker overlay.
+- The next requested change concerns node highlighting when selecting a
+  restriction, not selecting or searching a road way.
+
+### Validation
+
+- Focused inspection tests passed 8 cases.
+- Ruff and `git diff --check` passed.
+- Embedded JavaScript parsed successfully.
+
+## Follow-up: 2026-08-03 04:41:24 +08
+
+### User Goal
+
+Keep restriction-way visualization unchanged, but show a restriction's via-node
+highlight only after that specific restriction is selected.
+
+### Actions Taken
+
+- Kept the fully retained and partial restriction overlays and their existing
+  styles unchanged.
+- Removed the global restriction via-point toggle and initial marker display.
+- Added a click handler to every restriction member-way feature.
+- Added a temporary via-marker layer that is cleared and repopulated for the
+  selected relation.
+- Regenerated the mosque audit artifact.
+
+### Files Modified
+
+- `src/osm_scenario/inspection.py`
+- `tests/unit/test_inspection.py`
+- `docs/ai-action-logs/2026-08-02-10:02:53-stage-inspection-workflow.md`
+- `workspaces/mosque/inspection/stage-1-audit.html`
+- `workspaces/mosque/reports/inspection-audit.json`
+- `workspaces/mosque/reports/inspection-audit.md`
+
+### What Worked
+
+- No via markers are drawn on initial load.
+- Clicking any member way in a displayed restriction selects its relation and
+  draws only the corresponding exact-node or representative via-way marker.
+- Selecting another restriction replaces the previous marker.
+
+### What Went Wrong
+
+- No implementation errors occurred. The active shell still reported its
+  unrelated ScenarioNet virtual environment; uv correctly used this project's
+  environment.
+
+### Current State And Recommended Next Step
+
+- Open the regenerated audit, enable or use a visible restriction layer, and
+  click a colored restriction way to reveal its yellow via marker.
+
+### Generated Code Details
+
+- **What changed:** Relation-select click handling, temporary via-marker
+  rendering, layer-control behavior, and regression assertions.
+- **Why:** Showing all via markers at once obscured which application point
+  belonged to the restriction being inspected.
+- **How it works:** A restriction feature's relation ID filters the embedded via
+  GeoJSON; the selection layer is cleared before the matching marker is drawn.
+- **How validated:** Embedded JavaScript parsed successfully; focused tests
+  passed 8 cases; the full suite passed 22 tests; Ruff and `git diff --check`
+  passed; the mosque audit artifact was regenerated.
+
 ## Follow-up: 2026-08-03 03:36:34 +08
 
 ### User Goal
