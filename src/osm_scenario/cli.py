@@ -27,6 +27,7 @@ class DrivingSide(str, Enum):
 class InspectView(str, Enum):
     source = "source"
     normalized = "normalized"
+    audit = "audit"
     stage_1 = "stage-1"
     lanelet2 = "lanelet2"
 
@@ -114,7 +115,7 @@ def inspect(
         InspectView,
         typer.Option(
             "--view",
-            help="Checkpoint to render: source, normalized, stage-1, or lanelet2.",
+            help="Checkpoint to render: source, normalized, audit, stage-1, or lanelet2.",
         ),
     ] = InspectView.stage_1,
 ) -> None:

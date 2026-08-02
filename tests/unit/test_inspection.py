@@ -78,6 +78,46 @@ def test_normalized_view_contains_only_projected_layer(tmp_path: Path) -> None:
     assert "Preflight warning" not in html
 
 
+def test_audit_view_maps_stage_1b_findings_and_discloses_later_checks(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+
+    output = generate_inspection(workspace=workspace, view="audit")
+
+    assert output == workspace / "inspection" / "stage-1-audit.html"
+    html = output.read_text(encoding="utf-8")
+    report = json.loads((workspace / "reports" / "inspection-audit.json").read_text())
+    assert "Missing lane counts" in html
+    assert "Missing widths" in html
+    assert "Connected components" in html
+    assert "Retained traffic signals" in html
+    assert "Excluded traffic signals" in html
+    assert "Fully retained restrictions" in html
+    assert "Partial restrictions" in html
+    assert "Stop-line candidates" in html
+    assert "Direction tag conflicts" in html
+    assert "Lanelet boundary shape" in html
+    assert "Stage 2 Lanelet2 geometry does not exist yet" in html
+    assert "Lane inference enabled" in html
+    assert report["status"] == "review_required"
+    assert report["layers"]["selected"] == 2
+    assert report["layers"]["missing_lanes"] == 1
+    assert report["layers"]["missing_widths"] == 1
+    assert report["layers"]["retained_restrictions"] == 2
+    assert "grade_separation" in report["coverage"]["source_review"]
+    assert "lanelet_boundary_shape" in report["coverage"]["post_stage_2"]
+
+
+def test_inspect_cli_accepts_audit_view(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    result = runner.invoke(app, ["inspect", "--workspace", str(workspace), "--view", "audit"])
+
+    assert result.exit_code == 0
+    assert "stage-1-audit.html" in result.output
+
+
 def test_inspect_cli_reports_output_and_missing_lanelet2(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
 

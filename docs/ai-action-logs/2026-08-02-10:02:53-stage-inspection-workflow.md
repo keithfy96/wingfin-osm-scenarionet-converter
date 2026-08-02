@@ -126,3 +126,70 @@ leave the combined inspection unchanged.
   payload is reduced to projected geometry only.
 - **Validation:** `uv run pytest -q` passed 20 tests; focused inspection tests passed
   6 tests; Ruff and `git diff --check` passed; all mosque inspection views regenerated.
+
+## Follow-up: 2026-08-02 21:24:23 +08
+
+### User Goal
+
+Add a programmatically generated map that makes Stage 1B audit findings
+locatable and covers both source-correction cases and checks that cannot exist
+until Lanelet2 geometry is generated.
+
+### Actions Taken
+
+- Added the `inspect --view audit` checkpoint.
+- Joined audit findings back to preserved OSM way, node, and relation geometry.
+- Added separate layers for lane counts, widths, components, signal retention,
+  restriction retention, stop-line candidates, and direction-tag conflicts.
+- Added a visible readiness summary, inference state, highway-class counts, and
+  a complete correction-coverage table.
+- Marked semantic/manual checks and post-Stage-2 checks explicitly instead of
+  representing them as automatically validated.
+- Added JSON and Markdown inspection reports and focused regression tests.
+
+### Files Modified
+
+- `src/osm_scenario/inspection.py`
+- `src/osm_scenario/cli.py`
+- `tests/unit/test_inspection.py`
+- `docs/ai-action-logs/2026-08-02-10:02:53-stage-inspection-workflow.md`
+
+### Commands That Materially Affected The Outcome
+
+- `uv run osm-scenario inspect --workspace workspaces/mosque --view audit`
+- `uv run ruff check src/osm_scenario/inspection.py src/osm_scenario/cli.py tests/unit/test_inspection.py`
+- `uv run pytest -q`
+- `git diff --check`
+
+### What Worked
+
+- The mosque audit HTML and its machine-readable reports were generated.
+- All requested source evidence has a dedicated layer when source geometry exists.
+- Every Lanelet-only case is visible in the coverage table as a later-stage check.
+
+### What Went Wrong
+
+- The combined validation command initially could not write a temporary uv cache
+  lock because that cache was read-only in the sandbox. It succeeded after being
+  rerun with the already-approved `uv run` escalation.
+
+### Current State
+
+- `workspaces/mosque/inspection/stage-1-audit.html` is ready for manual review.
+- Stage 2 remains unimplemented; the audit does not claim to validate Lanelet2.
+
+### Recommended Next Step
+
+- Review the audit layers and source-correction table before approving Stage 2.
+
+### Generated Code Details
+
+- **What changed:** A dedicated Stage 1B audit renderer, source-to-audit geometry
+  joins, CLI view, reports, and regression coverage.
+- **Why:** Aggregate report counts were difficult to trace back to map locations,
+  while several requested checks cannot truthfully be performed before Stage 2.
+- **How it works:** The renderer reads `stage-1b-data-audit.json`, joins recorded
+  OSM IDs to `source/map.osm`, builds issue-specific GeoJSON layers, and embeds
+  those layers and audit metadata in a standalone Leaflet page.
+- **How validated:** The focused inspection suite passed 8 tests; the full suite
+  passed 22 tests; Ruff and `git diff --check` passed; the real mosque map was regenerated.

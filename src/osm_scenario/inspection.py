@@ -14,7 +14,7 @@ from shapely.geometry import LineString, mapping
 
 from osm_scenario.osm_source import read_osm_snapshot, road_exclusion_reason
 
-InspectionView = Literal["source", "normalized", "stage-1", "lanelet2"]
+InspectionView = Literal["source", "normalized", "audit", "stage-1", "lanelet2"]
 
 
 class InspectionError(RuntimeError):
@@ -119,6 +119,144 @@ def _graph_edge_layers(
 
 def _json_for_script(value: Any) -> str:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=True).replace("<", "\\u003c")
+
+
+def _way_feature(snapshot: Any, way_id: str, properties: dict[str, Any]) -> dict[str, Any] | None:
+    way = snapshot.ways.get(str(way_id))
+    if way is None:
+        return None
+    coordinates = [
+        (snapshot.nodes[node_id].longitude, snapshot.nodes[node_id].latitude)
+        for node_id in way.node_ids
+        if node_id in snapshot.nodes
+    ]
+    if len(coordinates) < 2:
+        return None
+    return _feature(
+        LineString(coordinates),
+        {"osm_id": way.identifier, "feature_type": "way", "tags": way.tags, **properties},
+    )
+
+
+def _audit_map_data(source_path: Path, audit: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
+    snapshot = read_osm_snapshot(source_path)
+    selected_ids = {
+        str(way_id)
+        for component in audit["connectivity"]["components"]
+        for way_id in component["osm_way_ids"]
+    }
+
+    def ways(ids: Any, **properties: Any) -> dict[str, Any]:
+        features = [
+            feature
+            for way_id in ids
+            if (feature := _way_feature(snapshot, str(way_id), properties)) is not None
+        ]
+        return _feature_collection(features)
+
+    component_features = []
+    for component in audit["connectivity"]["components"]:
+        for way_id in component["osm_way_ids"]:
+            feature = _way_feature(
+                snapshot,
+                way_id,
+                {
+                    "audit_issue": "connectivity_component",
+                    "component_id": component["component_id"],
+                    "component_nodes": component["node_count"],
+                    "is_primary_component": component["is_primary"],
+                },
+            )
+            if feature is not None:
+                component_features.append(feature)
+
+    signal_features = []
+    for signal in audit["traffic_signals"]["details"]:
+        node = snapshot.nodes.get(signal["osm_node_id"])
+        if node is None:
+            continue
+        signal_features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [node.longitude, node.latitude]},
+                "properties": {
+                    "osm_id": node.identifier,
+                    "feature_type": "node",
+                    "audit_issue": "traffic_signal",
+                    "retained_in_driving_graph": signal["retained_in_driving_graph"],
+                    "component_id": signal["component_id"],
+                    "tags": node.tags,
+                },
+            }
+        )
+
+    restriction_layers = {"retained_restrictions": [], "partial_restrictions": []}
+    for restriction in audit["turn_restrictions"]["details"]:
+        layer = (
+            "retained_restrictions"
+            if restriction["fully_retained_way_members"]
+            else "partial_restrictions"
+        )
+        for member in restriction["members"]:
+            if member["type"] != "way":
+                continue
+            feature = _way_feature(
+                snapshot,
+                member["ref"],
+                {
+                    "audit_issue": "turn_restriction",
+                    "relation_id": restriction["osm_relation_id"],
+                    "restriction": restriction["restriction"],
+                    "member_role": member["role"],
+                    "fully_retained_way_members": restriction["fully_retained_way_members"],
+                },
+            )
+            if feature is not None:
+                restriction_layers[layer].append(feature)
+
+    conflict_ids = {
+        part.strip()
+        for warning in report["preflight"]["warnings"]
+        if warning["code"] == "conflicting_direction_tags" and warning.get("osm_id")
+        for part in str(warning["osm_id"]).split(",")
+    }
+    return {
+        "selected": ways(selected_ids, audit_issue="selected_road"),
+        "missing_lanes": ways(
+            (item["osm_way_id"] for item in audit["lane_count_coverage"]["details"]),
+            audit_issue="missing_lane_count",
+        ),
+        "missing_widths": ways(
+            audit["width_coverage"]["missing_way_ids"], audit_issue="missing_width"
+        ),
+        "components": _feature_collection(component_features),
+        "signals": _feature_collection(signal_features),
+        "retained_restrictions": _feature_collection(restriction_layers["retained_restrictions"]),
+        "partial_restrictions": _feature_collection(restriction_layers["partial_restrictions"]),
+        "stop_lines": ways(
+            audit["stop_line_geometry"]["candidate_way_ids"], audit_issue="stop_line_candidate"
+        ),
+        "direction_conflicts": ways(conflict_ids, audit_issue="conflicting_direction_tags"),
+    }
+
+
+def _render_audit_html(*, data: dict[str, Any], audit: dict[str, Any]) -> str:
+    payload = _json_for_script(data)
+    summary_json = _json_for_script(audit)
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stage 1B Data Audit</title><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+html,body,#map{{height:100%;margin:0}} body{{font-family:system-ui,sans-serif;color:#17212b}} #panel{{position:absolute;z-index:1000;top:12px;left:54px;width:min(440px,calc(100vw - 118px));max-height:calc(100vh - 48px);overflow:auto;background:#fff;border:1px solid #9aa7b2;border-radius:6px;padding:14px;box-shadow:0 3px 14px #0003}} h1{{font-size:17px;margin:0 0 8px}} h2{{font-size:14px;margin:14px 0 6px}} p,td,th{{font-size:12px;line-height:1.35}} table{{border-collapse:collapse;width:100%}} td,th{{text-align:left;border-bottom:1px solid #d6dde3;padding:5px 4px;vertical-align:top}} .review{{color:#9a5700;font-weight:700}} .mapped{{color:#176b3a}} .manual{{color:#855900}} .later{{color:#58636d}} .leaflet-popup-content{{max-height:320px;overflow:auto}} .tag-table{{font-size:12px}} @media(max-width:700px){{#panel{{left:10px;top:54px;width:calc(100vw - 48px);max-height:44vh}}}}
+</style></head><body><aside id="panel"><h1>Stage 1B Data Audit</h1><div id="summary"></div><h2>Source correction coverage</h2><table><thead><tr><th>Case</th><th>Coverage</th></tr></thead><tbody id="coverage"></tbody></table><p>Toggle layers at top right and click geometry for OSM IDs and source tags.</p></aside><div id="map"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
+const data={payload}; const audit={summary_json}; const map=L.map('map',{{preferCanvas:true}}); L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{maxZoom:20,attribution:'&copy; OpenStreetMap contributors'}}).addTo(map);
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
+function popup(f){{const p=f.properties||{{}},tags=p.tags||{{}};const facts=Object.entries(p).filter(([k])=>!['tags'].includes(k)).map(([k,v])=>`<tr><td>${{esc(k)}}</td><td>${{esc(v)}}</td></tr>`).join('');const tagRows=Object.keys(tags).sort().map(k=>`<tr><td>${{esc(k)}}</td><td>${{esc(tags[k])}}</td></tr>`).join('');return `<strong>OSM ${{esc(p.feature_type)}} ${{esc(p.osm_id)}}</strong><table class="tag-table">${{facts}}${{tagRows}}</table>`}}
+const line=(geo,style)=>L.geoJSON(geo,{{style,onEachFeature:(f,l)=>l.bindPopup(popup(f))}}); const selected=line(data.selected,{{color:'#6b747c',weight:3,opacity:.38}}); const missingLanes=line(data.missing_lanes,{{color:'#d73027',weight:6,opacity:.9}}); const missingWidths=line(data.missing_widths,{{color:'#f08c00',weight:4,opacity:.85,dashArray:'7 5'}}); const palette=['#0077b6','#6a4c93','#2a9d8f','#bc6c25','#c2185b','#5f6f00','#8c564b','#17a2b8']; const components=L.geoJSON(data.components,{{style:f=>{{const n=Math.max(0,Number((f.properties.component_id||'1').split('-')[1])-1);return{{color:palette[n%palette.length],weight:5,opacity:.8}}}},onEachFeature:(f,l)=>l.bindPopup(popup(f))}}); const retainedSignals=L.geoJSON(data.signals,{{filter:f=>f.properties.retained_in_driving_graph,pointToLayer:(f,ll)=>L.circleMarker(ll,{{radius:7,color:'#176b3a',weight:3,fillColor:'#fff',fillOpacity:1}}),onEachFeature:(f,l)=>l.bindPopup(popup(f))}}); const excludedSignals=L.geoJSON(data.signals,{{filter:f=>!f.properties.retained_in_driving_graph,pointToLayer:(f,ll)=>L.circleMarker(ll,{{radius:7,color:'#a51d2d',weight:3,fillColor:'#fff',fillOpacity:1}}),onEachFeature:(f,l)=>l.bindPopup(popup(f))}}); const retainedRestrictions=line(data.retained_restrictions,{{color:'#7b2cbf',weight:6,opacity:.75}}); const partialRestrictions=line(data.partial_restrictions,{{color:'#7b2cbf',weight:6,opacity:.75,dashArray:'4 5'}}); const stopLines=line(data.stop_lines,{{color:'#111',weight:8,opacity:.95}}); const directionConflicts=line(data.direction_conflicts,{{color:'#e6007e',weight:8,opacity:.9}}); const overlays={{'Selected roads':selected,'Missing lane counts':missingLanes,'Missing widths':missingWidths,'Connected components':components,'Retained traffic signals':retainedSignals,'Excluded traffic signals':excludedSignals,'Fully retained restrictions':retainedRestrictions,'Partial restrictions':partialRestrictions,'Stop-line candidates':stopLines,'Direction tag conflicts':directionConflicts}}; selected.addTo(map); missingLanes.addTo(map); retainedSignals.addTo(map); excludedSignals.addTo(map); partialRestrictions.addTo(map); L.control.layers(null,overlays,{{collapsed:innerWidth<800}}).addTo(map); const bounds=selected.getBounds(); if(bounds.isValid())map.fitBounds(bounds.pad(.05));else map.setView([0,0],2);
+const lanes=audit.lane_count_coverage,widths=audit.width_coverage,signals=audit.traffic_signals,restrictions=audit.turn_restrictions,stops=audit.stop_line_geometry,connectivity=audit.connectivity; document.getElementById('summary').innerHTML=`<table><tr><th>Stage 1B</th><td>${{esc(audit.stage_1b_status)}}</td></tr><tr><th>Downstream readiness</th><td class="review">${{esc(audit.downstream_readiness)}}</td></tr><tr><th>Selected ways / edges</th><td>${{audit.selected_network.unique_osm_way_count}} / ${{audit.selected_network.directed_edge_count}}</td></tr><tr><th>Missing lanes by class</th><td>${{esc(JSON.stringify(lanes.missing_by_highway))}}</td></tr><tr><th>Components</th><td>${{connectivity.component_count}}</td></tr><tr><th>Missing widths / default</th><td>${{widths.missing_way_count}} / ${{widths.configured_default_lane_width_metres}} m</td></tr><tr><th>Signals retained / excluded</th><td>${{signals.retained_count}} / ${{signals.excluded_count}}</td></tr><tr><th>Restrictions full / partial</th><td>${{restrictions.fully_retained_way_member_count}} / ${{restrictions.partially_or_not_retained_count}}</td></tr><tr><th>Stop-line candidates</th><td>${{stops.candidate_way_count}}</td></tr><tr><th>Lane inference enabled</th><td>${{lanes.inference_enabled}}</td></tr></table>`;
+const rows=[['Known lane count','mapped',`${{lanes.missing_way_count}} missing; red layer`],['Incorrect oneway','mapped','conflicting directional tags mapped; correctness still needs manual review'],['Roads connected at grade','manual','components are colored; missing joins require source review'],['Roads crossing visually','manual','verify bridge, tunnel, and layer tags before joining'],['Turn restrictions','mapped',`${{restrictions.source_count}} relations; solid full, dashed partial`],['Signal location','mapped','retained green; excluded red; placement correctness is manual'],['Known physical width','mapped',`${{widths.missing_way_count}} missing; orange dashed layer`],['Known mapped stop line','mapped',`${{stops.candidate_way_count}} candidates; black layer`],['Lanelet boundary shape','later','Stage 2 Lanelet2 geometry does not exist yet'],['Lane junction connector','later','Stage 2 Lanelet2 geometry does not exist yet'],['Signal-to-lanelet association','later','inspect after Stage 2 association'],['Inferred stop-line placement','later','inspect after Stage 2 inference']]; document.getElementById('coverage').innerHTML=rows.map(([name,state,text])=>`<tr><td>${{esc(name)}}</td><td class="${{state}}">${{esc(text)}}</td></tr>`).join('');
+</script></body></html>"""
 
 
 def _render_html(*, title: str, data: dict[str, Any], summary: dict[str, Any]) -> str:
@@ -245,6 +383,72 @@ def generate_inspection(*, workspace: Path, view: InspectionView) -> Path:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     report = json.loads(report_path.read_text(encoding="utf-8"))
     source_path = workspace / manifest["source"]["path"]
+    if view == "audit":
+        audit_path = workspace / "reports" / "stage-1b-data-audit.json"
+        if not audit_path.is_file():
+            raise InspectionError(
+                "Stage 1B audit is unavailable; rerun fetch to generate "
+                f"{audit_path}"
+            )
+        audit = json.loads(audit_path.read_text(encoding="utf-8"))
+        data = _audit_map_data(source_path, audit, report)
+        inspection_dir = workspace / "inspection"
+        reports_dir = workspace / "reports"
+        inspection_dir.mkdir(parents=True, exist_ok=True)
+        output_path = inspection_dir / "stage-1-audit.html"
+        output_path.write_text(_render_audit_html(data=data, audit=audit), encoding="utf-8")
+        inspection_report = {
+            "report_version": 1,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "view": view,
+            "status": audit["downstream_readiness"],
+            "html": output_path.relative_to(workspace).as_posix(),
+            "html_sha256": _sha256(output_path),
+            "summary": {
+                "stage_1b_status": audit["stage_1b_status"],
+                "downstream_readiness": audit["downstream_readiness"],
+                "inference_enabled": audit["lane_count_coverage"]["inference_enabled"],
+            },
+            "layers": {name: len(collection["features"]) for name, collection in data.items()},
+            "coverage": {
+                "source_review": [
+                    "lane_count",
+                    "oneway_and_direction",
+                    "connectivity",
+                    "grade_separation",
+                    "turn_restrictions",
+                    "traffic_signals",
+                    "physical_width",
+                    "mapped_stop_lines",
+                ],
+                "post_stage_2": [
+                    "lanelet_boundary_shape",
+                    "lane_junction_connectors",
+                    "signal_to_lanelet_association",
+                    "inferred_stop_line_placement",
+                ],
+            },
+        }
+        json_path = reports_dir / "inspection-audit.json"
+        markdown_path = reports_dir / "inspection-audit.md"
+        json_path.write_text(json.dumps(inspection_report, indent=2, sort_keys=True) + "\n")
+        markdown_path.write_text(
+            "\n".join(
+                [
+                    "# Stage 1B Audit Inspection",
+                    "",
+                    f"- Downstream readiness: **{audit['downstream_readiness']}**",
+                    f"- HTML: `{inspection_report['html']}`",
+                    f"- Lane inference enabled: {str(audit['lane_count_coverage']['inference_enabled']).lower()}",
+                    "",
+                    "The map separates source-correctable evidence from checks that require manual review or Stage 2 geometry.",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return output_path
+
     source_graph_path = workspace / manifest["artifacts"]["graphml"]["path"]
     projected_graph_path = workspace / manifest["stage_1b"]["artifacts"]["projected_graphml"]["path"]
 
