@@ -124,6 +124,30 @@ def _json_for_script(value: Any) -> str:
 def _render_html(*, title: str, data: dict[str, Any], summary: dict[str, Any]) -> str:
     payload = _json_for_script(data)
     summary_json = _json_for_script(summary)
+    legend_items = {
+        "selected": ('#178a45', "Selected public driving road"),
+        "excluded": ('#7f8b94', "Excluded source highway"),
+        "warnings": ('#d64933', "Preflight warning"),
+        "projected": ('#0077b6', "Stage 1B projected geometry"),
+    }
+    legend_html = "\n".join(
+        f'      <p><span class="swatch" style="background:{color}"></span>{label}</p>'
+        for name, (color, label) in legend_items.items()
+        if summary["visible_layers"].get(name, False)
+    )
+    layer_labels = {
+        "selected": "Selected source roads",
+        "excluded": "Excluded source highways",
+        "projected": "Stage 1B projected overlay",
+        "warnings": "Preflight warnings",
+        "directions": "Directed graph edges",
+        "signals": "Traffic signals",
+    }
+    layer_definitions = ",\n".join(
+        f"      ['{name}', '{layer_labels[name]}', {name}]"
+        for name in layer_labels
+        if summary["visible_layers"].get(name, False)
+    )
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -152,10 +176,7 @@ def _render_html(*, title: str, data: dict[str, Any], summary: dict[str, Any]) -
 <body>
   <aside id="panel"><h1>{title}</h1><div id="summary"></div>
     <div class="legend">
-      <p><span class="swatch" style="background:#178a45"></span>Selected public driving road</p>
-      <p><span class="swatch" style="background:#7f8b94"></span>Excluded source highway</p>
-      <p><span class="swatch" style="background:#d64933"></span>Preflight warning</p>
-      <p><span class="swatch" style="background:#0077b6"></span>Stage 1B projected geometry</p>
+{legend_html}
       <p>Use the layer control at top right to isolate each transformation.</p>
     </div>
   </aside>
@@ -179,16 +200,24 @@ def _render_html(*, title: str, data: dict[str, Any], summary: dict[str, Any]) -
         (rows ? `<table class="tag-table">${{rows}}</table>` : '');
     }}
     function lines(geojson, style) {{ return L.geoJSON(geojson, {{style, onEachFeature: (f,l) => l.bindPopup(popup(f))}}); }}
-    const selected = lines(data.selected, {{color:'#178a45', weight:4, opacity:.86}}).addTo(map);
-    const excluded = lines(data.excluded, {{color:'#7f8b94', weight:3, opacity:.55, dashArray:'5 5'}}).addTo(map);
+    const selected = lines(data.selected, {{color:'#178a45', weight:4, opacity:.86}});
+    const excluded = lines(data.excluded, {{color:'#7f8b94', weight:3, opacity:.55, dashArray:'5 5'}});
     const projected = lines(data.projected, {{color:'#0077b6', weight:2, opacity:.8, dashArray:'8 4'}});
-    if (summary.show_projected) projected.addTo(map);
-    const warnings = lines(data.warnings, {{color:'#d64933', weight:6, opacity:.8}}).addTo(map);
+    const warnings = lines(data.warnings, {{color:'#d64933', weight:6, opacity:.8}});
     const directions = lines(data.directions, {{color:'#4b4f54', weight:1, opacity:.25}});
     directions.eachLayer(layer => {{ if (layer.getLatLngs) L.polylineDecorator(layer, {{patterns:[{{offset:'55%', repeat:0, symbol:L.Symbol.arrowHead({{pixelSize:8, polygon:false, pathOptions:{{color:'#111', weight:2}}}})}}]}}).addTo(directions); }});
-    const signals = L.geoJSON(data.signals, {{pointToLayer:(f,ll)=>L.circleMarker(ll,{{radius:6,color:'#111',weight:2,fillColor:'#ffd43b',fillOpacity:1}}), onEachFeature:(f,l)=>l.bindPopup(popup(f))}}).addTo(map);
-    L.control.layers(null, {{'Selected source roads':selected,'Excluded source highways':excluded,'Stage 1B projected overlay':projected,'Preflight warnings':warnings,'Directed graph edges':directions,'Traffic signals':signals}}, {{collapsed:window.innerWidth < 800}}).addTo(map);
-    const bounds = selected.getBounds();
+    const signals = L.geoJSON(data.signals, {{pointToLayer:(f,ll)=>L.circleMarker(ll,{{radius:6,color:'#111',weight:2,fillColor:'#ffd43b',fillOpacity:1}}), onEachFeature:(f,l)=>l.bindPopup(popup(f))}});
+    const layerDefinitions = [
+{layer_definitions}
+    ];
+    const overlays = {{}};
+    layerDefinitions.forEach(([key, label, layer]) => {{
+      if (!summary.visible_layers[key]) return;
+      overlays[label] = layer;
+      if (summary.enabled_layers[key]) layer.addTo(map);
+    }});
+    L.control.layers(null, overlays, {{collapsed:window.innerWidth < 800}}).addTo(map);
+    const bounds = (summary.visible_layers.selected ? selected : projected).getBounds();
     if (bounds.isValid()) map.fitBounds(bounds.pad(0.05)); else map.setView([0,0],2);
     document.getElementById('summary').innerHTML = `<dl><dt>Audit</dt><dd class="status-${{escapeHtml(summary.audit_status)}}">${{escapeHtml(summary.audit_status)}}</dd><dt>Selected ways</dt><dd>${{summary.selected_ways}}</dd><dt>Excluded ways</dt><dd>${{summary.excluded_ways}}</dd><dt>Graph edges</dt><dd>${{summary.directed_edges}}</dd><dt>Warnings</dt><dd>${{summary.warnings}}</dd><dt>Projection error</dt><dd>${{summary.round_trip_error}}</dd></dl>`;
   </script>
@@ -232,7 +261,25 @@ def generate_inspection(*, workspace: Path, view: InspectionView) -> Path:
     if view == "source":
         projected = _feature_collection([])
     elif view == "normalized":
+        selected = _feature_collection([])
         excluded = _feature_collection([])
+        signals = _feature_collection([])
+        directions = _feature_collection([])
+        warnings = _feature_collection([])
+
+    visible_layers = {
+        "selected": view in {"source", "stage-1"},
+        "excluded": view in {"source", "stage-1"},
+        "projected": view in {"normalized", "stage-1"},
+        "warnings": view in {"source", "stage-1"},
+        "directions": view in {"source", "stage-1"},
+        "signals": view in {"source", "stage-1"},
+    }
+    enabled_layers = {
+        **visible_layers,
+        "projected": view == "normalized",
+        "directions": False,
+    }
 
     road_selection = manifest.get("road_selection", {})
     summary = {
@@ -242,7 +289,8 @@ def generate_inspection(*, workspace: Path, view: InspectionView) -> Path:
         "directed_edges": report["feature_counts"]["edges"],
         "warnings": len(report["preflight"]["warnings"]),
         "round_trip_error": f"{report['projection']['round_trip']['maximum_error_degrees']:.3e} deg",
-        "show_projected": view == "normalized",
+        "visible_layers": visible_layers,
+        "enabled_layers": enabled_layers,
     }
     data = {
         "selected": selected,

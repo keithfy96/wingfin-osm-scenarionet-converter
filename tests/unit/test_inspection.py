@@ -48,11 +48,34 @@ def test_source_view_omits_projected_layer_features(tmp_path: Path) -> None:
 
     generate_inspection(workspace=workspace, view="source")
 
+    output = workspace / "inspection" / "stage-1-source.html"
+    html = output.read_text(encoding="utf-8")
     report = json.loads((workspace / "reports" / "inspection-source.json").read_text())
     assert report["layers"]["projected"] == 0
+    assert "Stage 1B projected overlay" not in html
+    assert "Stage 1B projected geometry" not in html
 
     second_output = generate_inspection(workspace=workspace, view="source")
     assert second_output == workspace / "inspection" / "stage-1-source.html"
+
+
+def test_normalized_view_contains_only_projected_layer(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    output = generate_inspection(workspace=workspace, view="normalized")
+
+    html = output.read_text(encoding="utf-8")
+    report = json.loads((workspace / "reports" / "inspection-normalized.json").read_text())
+    assert report["layers"]["projected"] > 0
+    assert all(
+        count == 0
+        for name, count in report["layers"].items()
+        if name != "projected"
+    )
+    assert "Stage 1B projected overlay" in html
+    assert "Selected public driving road" not in html
+    assert "Excluded source highway" not in html
+    assert "Preflight warning" not in html
 
 
 def test_inspect_cli_reports_output_and_missing_lanelet2(tmp_path: Path) -> None:

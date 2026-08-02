@@ -76,3 +76,53 @@ Provide visual checkpoints after each conversion stage so malformed maps can be 
 - `git diff --check`: passed.
 - Real mosque generation and source, normalized, and combined inspection commands passed.
 - Headless Chrome desktop and mobile screenshots were visually checked for nonblank content, framing, layer controls, and overlap.
+
+## Follow-up: 2026-08-02 21:13:41 +08
+
+### User Goal
+
+Make the standalone source inspection show only source evidence, make the
+standalone normalized inspection show only the Stage 1B projected overlay, and
+leave the combined inspection unchanged.
+
+### Actions Taken
+
+- Made the legend and Leaflet layer-control keys conditional on the requested view.
+- Removed source, warning, direction, and signal feature data from the normalized view.
+- Kept projected data out of the source view and kept every layer available in the combined view.
+- Added focused regression coverage and regenerated all three mosque inspection pages.
+
+### Files Modified
+
+- `src/osm_scenario/inspection.py`
+- `tests/unit/test_inspection.py`
+- `docs/ai-action-logs/2026-08-02-10:02:53-stage-inspection-workflow.md`
+
+### What Worked
+
+- Source HTML now contains source-layer keys without a Stage 1B projection key.
+- Normalized HTML and its report contain only the Stage 1B projected layer.
+- Combined HTML retains the source and projected layers.
+
+### What Went Wrong
+
+- The first regression assertions found that hidden layer labels still existed in
+  the generated JavaScript. Layer definitions were then generated per view so
+  irrelevant keys are absent from the HTML rather than merely hidden.
+
+### Current State And Recommended Next Step
+
+- The standalone views now have unambiguous representation boundaries. Manually
+  inspect the regenerated source, normalized, and combined mosque HTML pages.
+
+### Generated Code Details
+
+- **What changed:** View-specific feature payloads, legends, layer controls, map
+  bounds, and regression tests.
+- **Why:** A normalized-only defect must be attributable to Stage 1B without source
+  layers obscuring the comparison.
+- **How it works:** `visible_layers` controls which keys are emitted, while
+  `enabled_layers` controls which emitted layers start enabled. The normalized
+  payload is reduced to projected geometry only.
+- **Validation:** `uv run pytest -q` passed 20 tests; focused inspection tests passed
+  6 tests; Ruff and `git diff --check` passed; all mosque inspection views regenerated.
