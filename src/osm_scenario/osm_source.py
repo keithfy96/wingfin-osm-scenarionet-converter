@@ -49,9 +49,24 @@ class OsmWay:
 
 
 @dataclass(frozen=True)
+class OsmRelationMember:
+    member_type: str
+    reference: str
+    role: str
+
+
+@dataclass(frozen=True)
+class OsmRelation:
+    identifier: str
+    members: tuple[OsmRelationMember, ...]
+    tags: dict[str, str]
+
+
+@dataclass(frozen=True)
 class OsmSnapshot:
     nodes: dict[str, OsmNode]
     ways: dict[str, OsmWay]
+    relations: dict[str, OsmRelation]
 
 
 class SourceAuditError(RuntimeError):
@@ -63,6 +78,7 @@ def read_osm_snapshot(path: Path) -> OsmSnapshot:
     root = ET.parse(path).getroot()
     nodes: dict[str, OsmNode] = {}
     ways: dict[str, OsmWay] = {}
+    relations: dict[str, OsmRelation] = {}
 
     for element in root:
         identifier = element.attrib.get("id")
@@ -88,7 +104,21 @@ def read_osm_snapshot(path: Path) -> OsmSnapshot:
                 ),
                 tags=tags,
             )
-    return OsmSnapshot(nodes=nodes, ways=ways)
+        elif element.tag == "relation":
+            relations[identifier] = OsmRelation(
+                identifier=identifier,
+                members=tuple(
+                    OsmRelationMember(
+                        member_type=member.attrib["type"],
+                        reference=member.attrib["ref"],
+                        role=member.attrib.get("role", ""),
+                    )
+                    for member in element.findall("member")
+                    if "type" in member.attrib and "ref" in member.attrib
+                ),
+                tags=tags,
+            )
+    return OsmSnapshot(nodes=nodes, ways=ways, relations=relations)
 
 
 def road_exclusion_reason(tags: dict[str, str]) -> str | None:
