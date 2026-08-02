@@ -243,6 +243,60 @@ shows only work that can be evaluated against the source OSM data.
 - **How validated:** Focused tests passed 8 cases; the full suite passed 22 tests;
   Ruff and `git diff --check` passed; the real mosque audit was regenerated.
 
+## Follow-up: 2026-08-03 04:24:56 +08
+
+### User Goal
+
+Keep complete turn-restriction member ways colorized while also showing the
+specific source location where each restriction is applied.
+
+### Actions Taken
+
+- Added a default-visible restriction via-point layer to the Stage 1 audit map.
+- Placed exact markers at node-based `via` members.
+- Placed explicitly labeled representative midpoint markers for via-way members.
+- Included relation ID, restriction value, via member type, and retention state
+  in each marker popup.
+- Regenerated the mosque audit artifact.
+
+### Files Modified
+
+- `src/osm_scenario/inspection.py`
+- `tests/unit/test_inspection.py`
+- `docs/ai-action-logs/2026-08-02-10:02:53-stage-inspection-workflow.md`
+- `workspaces/mosque/inspection/stage-1-audit.html`
+- `workspaces/mosque/reports/inspection-audit.json`
+- `workspaces/mosque/reports/inspection-audit.md`
+
+### What Worked
+
+- The mosque audit now shows 46 high-contrast via markers for the 47 source
+  restriction relations; missing source members are not assigned invented
+  coordinates.
+- Existing full-way restriction colors and styles remain unchanged.
+
+### What Went Wrong
+
+- The default uv cache was read-only, so validation was rerun with
+  `UV_CACHE_DIR=/tmp/uv-cache`.
+
+### Current State And Recommended Next Step
+
+- Open `workspaces/mosque/inspection/stage-1-audit.html`, enable the desired
+  restriction line layer, and click a yellow marker to inspect its relation.
+
+### Generated Code Details
+
+- **What changed:** Restriction via-point GeoJSON generation, Leaflet marker
+  rendering, layer-control labeling, popup evidence, and regression assertions.
+- **Why:** Coloring complete member ways identifies the affected roads but does
+  not locate the source `via` member where the prohibited movement is defined.
+- **How it works:** Node-via relations use the exact source node coordinate;
+  way-via relations use a representative midpoint that is labeled as such.
+- **How validated:** Focused tests passed 8 cases; the full suite passed 22 tests;
+  Ruff and `git diff --check` passed; the mosque artifact was regenerated with
+  46 visible restriction via markers.
+
 ## Follow-up: 2026-08-03 03:36:34 +08
 
 ### User Goal
