@@ -93,12 +93,17 @@ def test_audit_view_maps_stage_1b_findings_and_discloses_later_checks(
     assert "Connected components" in html
     assert "Retained traffic signals" in html
     assert "Excluded traffic signals" in html
-    assert "Fully retained restrictions" in html
-    assert "Partial restrictions" in html
+    assert "Fully retained restrictions (purple, solid)" in html
+    assert "Partial restrictions (cyan, dashed)" in html
+    assert "color:'#6a1b9a',weight:6,opacity:.9" in html
+    assert "color:'#00a6a6',weight:9,opacity:1,dashArray:'10 7'" in html
     assert "Stop-line candidates" in html
     assert "Direction tag conflicts" in html
-    assert "Lanelet boundary shape" in html
-    assert "Stage 2 Lanelet2 geometry does not exist yet" in html
+    assert "Lanelet boundary shape" not in html
+    assert "Lane junction connector" not in html
+    assert "Signal-to-lanelet association" not in html
+    assert "Inferred stop-line placement" not in html
+    assert "Stage 2 Lanelet2 geometry does not exist yet" not in html
     assert "Lane inference enabled" in html
     assert report["status"] == "review_required"
     assert report["layers"]["selected"] == 2
@@ -106,7 +111,7 @@ def test_audit_view_maps_stage_1b_findings_and_discloses_later_checks(
     assert report["layers"]["missing_widths"] == 1
     assert report["layers"]["retained_restrictions"] == 2
     assert "grade_separation" in report["coverage"]["source_review"]
-    assert "lanelet_boundary_shape" in report["coverage"]["post_stage_2"]
+    assert "post_stage_2" not in report["coverage"]
 
 
 def test_inspect_cli_accepts_audit_view(tmp_path: Path) -> None:

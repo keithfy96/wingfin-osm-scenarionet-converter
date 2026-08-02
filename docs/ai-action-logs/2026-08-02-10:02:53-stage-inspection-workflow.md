@@ -193,3 +193,97 @@ until Lanelet2 geometry is generated.
   those layers and audit metadata in a standalone Leaflet page.
 - **How validated:** The focused inspection suite passed 8 tests; the full suite
   passed 22 tests; Ruff and `git diff --check` passed; the real mosque map was regenerated.
+
+## Follow-up: 2026-08-03 02:37:06 +08
+
+### User Goal
+
+Remove Stage 2 and later correction items from the Stage 1B audit screen so it
+shows only work that can be evaluated against the source OSM data.
+
+### Actions Taken
+
+- Removed Lanelet boundary shape, lane junction connector,
+  signal-to-lanelet association, and inferred stop-line placement rows.
+- Removed the corresponding `post_stage_2` list from the JSON inspection report.
+- Kept source signal placement and mapped stop-line checks because those are
+  Stage 1 source-data concerns.
+- Updated regression coverage and regenerated the mosque audit page and reports.
+
+### Files Modified
+
+- `src/osm_scenario/inspection.py`
+- `tests/unit/test_inspection.py`
+- `docs/ai-action-logs/2026-08-02-10:02:53-stage-inspection-workflow.md`
+
+### What Worked
+
+- The audit screen and machine-readable report now contain Stage 1 work only.
+- The distinction is pipeline-wide: removed items depend on generated Lanelet2
+  objects and were not specific to the mosque source.
+
+### What Went Wrong
+
+- The first validation attempt encountered the read-only uv cache in the
+  sandbox; the approved `uv run` escalation completed successfully.
+
+### Current State And Recommended Next Step
+
+- The regenerated mosque audit page is ready for Stage 1 source review without
+  later-stage tasks occupying the panel.
+
+### Generated Code Details
+
+- **What changed:** Removed four post-Stage-2 UI rows, their JSON coverage field,
+  unused styling, and replaced positive tests with absence assertions.
+- **Why:** The Stage 1B audit should focus only on evidence and corrections that
+  exist before Lanelet2 generation.
+- **How it works:** The coverage table now contains only source OSM checks, and
+  `inspection-audit.json` exposes only the `source_review` category.
+- **How validated:** Focused tests passed 8 cases; the full suite passed 22 tests;
+  Ruff and `git diff --check` passed; the real mosque audit was regenerated.
+
+## Follow-up: 2026-08-03 02:50:13 +08
+
+### User Goal
+
+Make fully retained and partial turn restrictions visually distinguishable when
+their geometry overlaps.
+
+### Actions Taken
+
+- Changed fully retained restrictions to solid purple with higher opacity.
+- Changed partial restrictions to a thicker cyan dashed line at full opacity.
+- Added color and stroke descriptions to both layer-control labels.
+- Added exact style regression assertions and regenerated the mosque audit map.
+
+### Files Modified
+
+- `src/osm_scenario/inspection.py`
+- `tests/unit/test_inspection.py`
+- `docs/ai-action-logs/2026-08-02-10:02:53-stage-inspection-workflow.md`
+
+### What Worked
+
+- Restriction state is now encoded by both hue and stroke pattern instead of
+  dash pattern alone.
+
+### What Went Wrong
+
+- The sandbox uv cache was read-only on the first validation attempt; the
+  approved `uv run` escalation completed successfully.
+
+### Current State And Recommended Next Step
+
+- The regenerated mosque audit uses purple solid lines for fully retained
+  restrictions and thicker cyan dashed lines for partial restrictions.
+
+### Generated Code Details
+
+- **What changed:** Restriction colors, weights, opacity, dash spacing, layer
+  labels, and style assertions.
+- **Why:** Identical colors made overlapping restriction states ambiguous.
+- **How it works:** Leaflet renders the two GeoJSON collections with independent
+  high-contrast styles, and the control names repeat the visual encoding.
+- **How validated:** Focused tests passed 8 cases; the full suite passed 22 tests;
+  Ruff and `git diff --check` passed; the real mosque audit was regenerated.
