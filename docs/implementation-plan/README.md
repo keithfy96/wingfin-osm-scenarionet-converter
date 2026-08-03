@@ -230,30 +230,36 @@ summary. The Stage 1A WGS84 artifacts remain unchanged.
 
 ## Stage 2: Generate Preliminary Lanelet2
 
-- [ ] Normalize OSM tags into directed road segments.
+- [x] Normalize OSM tags into directed road segments.
 - [ ] Honor explicit `lanes`, directional lane counts, `oneway`, `turn:lanes`, `maxspeed`, and restriction relations before applying defaults.
-- [ ] Generate directed lane centerlines with Shapely offsets.
-- [ ] Infer one lane per permitted direction only when OSM lacks lane counts, and report every inference.
-- [ ] Generate left and right boundaries from configured or tagged widths.
-- [ ] Reuse shared boundary objects, maintain consistent orientation, and avoid hand-written geometry or XML operations.
+- [x] Generate directed lane centerlines with Shapely offsets.
+- [x] Infer one lane per permitted direction only when OSM lacks lane counts, and report every inference.
+- [x] Generate left and right boundaries from configured or tagged widths.
+- [x] Reuse shared boundary objects, maintain consistent orientation, and avoid hand-written geometry or XML operations.
 - [ ] Split approaches near junctions and build intersection connectors from graph topology, permitted turns, lane ordering, and restriction relations.
-- [ ] Flag ambiguous connectors for manual review instead of silently selecting questionable geometry.
+- [x] Flag ambiguous connectors for manual review instead of silently selecting questionable geometry.
 - [ ] Handle divided roads, merges, forks, T-junctions, four-way junctions, and roundabouts as explicit geometry cases.
-- [ ] Associate OSM traffic-signal nodes with incoming lanelets and stop lines.
-- [ ] Generate a marked inferred stop line only when no mapped stop line exists.
-- [ ] Write positive, stable Lanelet2 IDs using Lanelet2 primitives and its writer rather than constructing XML manually.
-- [ ] Produce `preliminary.osm`, an inference report, and a confidence-ranked correction queue.
+- [x] Associate OSM traffic-signal nodes with incoming lanelets and stop lines.
+- [x] Generate a marked inferred stop line only when no mapped stop line exists.
+- [x] Write positive, stable Lanelet2 IDs using Lanelet2 primitives and its writer rather than constructing XML manually.
+- [x] Produce `preliminary.osm`, an inference report, and a confidence-ranked correction queue.
+
+Current limitation: node-via restrictions are applied during connector generation,
+but via-way restrictions are placed in the high-priority correction queue pending
+route-context handling. Junction connectors are generated generically; the
+explicit divided-road, merge, fork, T-junction, four-way, and roundabout cases
+remain unchecked until their individual geometry policies and tests exist.
 
 ### Completion gate
 
-- [ ] `preliminary.osm` loads through the Lanelet2 parser.
-- [ ] All generated lanelets have two boundaries, a direction, and traceable source IDs.
-- [ ] Every low-confidence lane, connector, and traffic-light association appears in the correction queue.
+- [x] `preliminary.osm` loads through the Lanelet2 parser.
+- [x] All generated lanelets have two boundaries, a direction, and traceable source IDs.
+- [x] Every low-confidence lane, connector, and traffic-light association appears in the correction queue.
 
 ### Manual verification
 
 1. Run `osm-scenario generate-lanelet2 --workspace workspaces/<map-id>` and
-   confirm that `lanelet2/preliminary.osm` is created while `source/raw.osm`
+   confirm that `lanelet2/preliminary.osm` is created while `source/map.osm`
    remains byte-for-byte unchanged.
 2. Open `preliminary.osm` in JOSM with the Lanelet2 style enabled. Select several
    straight roads, curves, intersection connectors, and signalized approaches;

@@ -9,6 +9,7 @@ import typer
 from osm_scenario.acquisition import AcquisitionError, acquire_osm
 from osm_scenario.config import ConverterConfig, load_config
 from osm_scenario.inspection import InspectionError, generate_inspection
+from osm_scenario.lanelet_generation import LaneletGenerationError, generate_preliminary_lanelet2
 from osm_scenario.logging import configure_logging
 from osm_scenario.normalization import NormalizationError, normalize_workspace
 
@@ -102,10 +103,25 @@ def fetch(
 
 
 @app.command("generate-lanelet2")
-def generate_lanelet2(workspace: Workspace) -> None:
+def generate_lanelet2(
+    workspace: Workspace,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", exists=True, dir_okay=False, help="Versioned YAML config."),
+    ] = None,
+) -> None:
     """Generate a preliminary Lanelet2 map in WORKSPACE."""
-    del workspace
-    _stage_pending(2)
+    try:
+        config = (
+            load_config(config_path)
+            if config_path is not None
+            else ConverterConfig(config_version=1)
+        )
+        output_path = generate_preliminary_lanelet2(workspace=workspace, config=config)
+    except (LaneletGenerationError, ValueError, KeyError) as error:
+        typer.echo(f"Stage 2 failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(f"Stage 2 preliminary Lanelet2 created: {output_path}")
 
 
 @app.command()

@@ -311,6 +311,26 @@ Use the first view where a defect appears to locate its origin:
 `--view lanelet2` intentionally reports that Stage 2 output is unavailable until
 `lanelet2/preliminary.osm` exists and the Stage 2 inspector is implemented.
 
+## Generate Preliminary Lanelet2
+
+After reviewing the Stage 1B audit, generate the preliminary editable map with:
+
+```bash
+uv run osm-scenario generate-lanelet2 \
+  --workspace workspaces/<map-id>
+```
+
+Use `--config path/to/config.yaml` to override versioned lane-width and inference
+settings. The command recreates `lanelet2/preliminary.osm` and writes
+`reports/lanelet2-generation.json` plus a concise Markdown summary. It does not
+modify `source/map.osm` or an existing `lanelet2/edited.osm`.
+
+The JSON report records every generated lanelet and source OSM identifier,
+inferred lane count or width, omitted restricted movement, signal/stop-line
+association, parser result, and confidence-ranked correction item. A
+`review_required` result is expected when preliminary geometry contains
+inferences or ambiguous connectors.
+
 ## Explicit driving-side input
 
 Driving side is never guessed from road shape, street names, imagery, a place
