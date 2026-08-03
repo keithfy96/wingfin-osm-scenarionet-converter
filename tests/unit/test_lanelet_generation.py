@@ -8,11 +8,22 @@ from typer.testing import CliRunner
 from osm_scenario.acquisition import acquire_osm
 from osm_scenario.cli import app
 from osm_scenario.config import ConverterConfig
-from osm_scenario.lanelet_generation import generate_preliminary_lanelet2
+from osm_scenario.lanelet_generation import (
+    _connector_is_ambiguous,
+    generate_preliminary_lanelet2,
+)
 from osm_scenario.normalization import normalize_workspace
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "osm" / "tiny.osm"
 runner = CliRunner()
+
+
+def test_connector_ambiguity_includes_fractional_borderline_angles() -> None:
+    assert _connector_is_ambiguous(1, 30.25)
+    assert _connector_is_ambiguous(1, -39.75)
+    assert not _connector_is_ambiguous(1, 29.99)
+    assert not _connector_is_ambiguous(1, 40.01)
+    assert _connector_is_ambiguous(2, 12.0)
 
 
 def _workspace(tmp_path: Path) -> tuple[Path, Path]:

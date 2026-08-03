@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from osm_scenario.acquisition import acquire_osm
 from osm_scenario.cli import app
 from osm_scenario.config import ConverterConfig
 from osm_scenario.inspection import generate_inspection
+from osm_scenario.lanelet_generation import generate_preliminary_lanelet2
 from osm_scenario.normalization import normalize_workspace
 from osm_scenario.osm_source import read_osm_snapshot, select_public_driving_graph
 
@@ -23,6 +25,104 @@ def _workspace(tmp_path: Path) -> Path:
     acquire_osm(workspace=workspace, driving_side="left", osm_file=source)
     normalize_workspace(workspace=workspace, config=ConverterConfig(config_version=1))
     return workspace
+
+
+def _lanelet_workspace(tmp_path: Path) -> Path:
+    workspace = _workspace(tmp_path)
+    generate_preliminary_lanelet2(
+        workspace=workspace, config=ConverterConfig(config_version=1)
+    )
+    return workspace
+
+
+def test_stage_3a_preliminary_inspection_is_searchable_and_checksum_bound(
+    tmp_path: Path,
+) -> None:
+    workspace = _lanelet_workspace(tmp_path)
+    preliminary = workspace / "lanelet2" / "preliminary.osm"
+    preliminary_sha256 = hashlib.sha256(preliminary.read_bytes()).hexdigest()
+
+    output = generate_inspection(
+        workspace=workspace, view="lanelet2", checkpoint="preliminary"
+    )
+
+    assert output == workspace / "inspection" / "stage-3a-preliminary-audit.html"
+    html = output.read_text(encoding="utf-8")
+    assert "Stage 3A Preliminary Audit" in html
+    assert "Road lanelets" in html
+    assert "Junction connectors" in html
+    assert "Correction queue lanelets" in html
+    assert "Search identifier" in html
+    assert "Source way ID" in html
+    assert "Source node ID" in html
+    report = json.loads(
+        (workspace / "reports" / "inspection-stage-3a-preliminary.json").read_text()
+    )
+    assert report["stage"] == "3a"
+    assert report["checkpoint"] == "preliminary"
+    assert report["inputs"]["preliminary_lanelet2"]["sha256"] == preliminary_sha256
+    assert report["layers"]["roads"] > 0
+    assert report["layers"]["connectors"] > 0
+    assert (workspace / "reports" / "inspection-stage-3a-preliminary.md").is_file()
+
+
+def test_stage_3a_recreates_only_its_own_artifacts(tmp_path: Path) -> None:
+    workspace = _lanelet_workspace(tmp_path)
+    edited_audit = workspace / "inspection" / "stage-3c-edited-audit.html"
+    edited_report = workspace / "reports" / "inspection-stage-3c-edited.json"
+    edited_audit.parent.mkdir(parents=True, exist_ok=True)
+    edited_audit.write_text("stage 3c must survive", encoding="utf-8")
+    edited_report.write_text('{"stage":"3c"}\n', encoding="utf-8")
+    preliminary_before = hashlib.sha256(
+        (workspace / "lanelet2" / "preliminary.osm").read_bytes()
+    ).hexdigest()
+
+    first = generate_inspection(
+        workspace=workspace, view="lanelet2", checkpoint="preliminary"
+    )
+    second = generate_inspection(
+        workspace=workspace, view="lanelet2", checkpoint="preliminary"
+    )
+
+    assert first == second
+    assert edited_audit.read_text(encoding="utf-8") == "stage 3c must survive"
+    assert edited_report.read_text(encoding="utf-8") == '{"stage":"3c"}\n'
+    assert hashlib.sha256(
+        (workspace / "lanelet2" / "preliminary.osm").read_bytes()
+    ).hexdigest() == preliminary_before
+
+
+def test_stage_3a_rejects_untracked_preliminary_changes(tmp_path: Path) -> None:
+    workspace = _lanelet_workspace(tmp_path)
+    preliminary = workspace / "lanelet2" / "preliminary.osm"
+    preliminary.write_text(preliminary.read_text() + "\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "inspect",
+            "--workspace",
+            str(workspace),
+            "--view",
+            "lanelet2",
+            "--checkpoint",
+            "preliminary",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "does not match the Stage 2 manifest" in result.output
+
+
+def test_lanelet2_inspection_requires_preliminary_checkpoint(tmp_path: Path) -> None:
+    workspace = _lanelet_workspace(tmp_path)
+
+    result = runner.invoke(
+        app, ["inspect", "--workspace", str(workspace), "--view", "lanelet2"]
+    )
+
+    assert result.exit_code == 1
+    assert "requires --checkpoint preliminary" in result.output
 
 
 def test_stage_1_inspection_contains_traceable_layers(tmp_path: Path) -> None:
@@ -154,9 +254,20 @@ def test_inspect_cli_reports_output_and_missing_lanelet2(tmp_path: Path) -> None
     assert result.exit_code == 0
     assert "Inspection created:" in result.output
 
-    missing = runner.invoke(app, ["inspect", "--workspace", str(workspace), "--view", "lanelet2"])
+    missing = runner.invoke(
+        app,
+        [
+            "inspect",
+            "--workspace",
+            str(workspace),
+            "--view",
+            "lanelet2",
+            "--checkpoint",
+            "preliminary",
+        ],
+    )
     assert missing.exit_code == 1
-    assert "Stage 2 has not produced" in missing.output
+    assert "Stage 3A requires completed Stage 2 artifacts" in missing.output
     assert "Traceback" not in missing.output
 
 

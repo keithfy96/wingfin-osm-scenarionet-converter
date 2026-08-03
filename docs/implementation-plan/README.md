@@ -278,11 +278,11 @@ overwrite an earlier inspection file.
 
 ### Stage 3A: Preliminary Lanelet2 Inspection
 
-- [ ] Add `osm-scenario inspect --view lanelet2 --checkpoint preliminary`.
-- [ ] Read only `lanelet2/preliminary.osm` and the Stage 2 generation report.
-- [ ] Generate `inspection/stage-3a-preliminary-audit.html`.
-- [ ] Generate matching `reports/inspection-stage-3a-preliminary.json` and `.md` reports that record the exact `preliminary.osm` checksum.
-- [ ] Show OSM centerlines, generated road lanelets, boundaries, connectors, signal positions, mapped or inferred stop lines, inferred tags, and correction-queue hotspots.
+- [x] Add `osm-scenario inspect --view lanelet2 --checkpoint preliminary`.
+- [x] Read only `lanelet2/preliminary.osm` and the Stage 2 generation report.
+- [x] Generate `inspection/stage-3a-preliminary-audit.html`.
+- [x] Generate matching `reports/inspection-stage-3a-preliminary.json` and `.md` reports that record the exact `preliminary.osm` checksum.
+- [x] Show generated road lanelet centerlines, boundaries, connectors, traffic-light geometry, mapped or inferred stop lines, inferred tags, source OSM identifiers, and correction-queue hotspots.
 
 ### Stage 3B: Manual JOSM Correction
 

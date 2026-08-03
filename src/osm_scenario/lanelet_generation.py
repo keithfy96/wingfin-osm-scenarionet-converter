@@ -298,6 +298,10 @@ def _turn_allowed(tokens: frozenset[str], movement: str) -> bool:
     return bool(tokens & aliases[movement])
 
 
+def _connector_is_ambiguous(candidate_count: int, angle: float) -> bool:
+    return candidate_count > 1 or 30 <= abs(angle) <= 40
+
+
 def _node_restrictions(snapshot: OsmSnapshot) -> dict[str, list[OsmRelation]]:
     result: dict[str, list[OsmRelation]] = {}
     for relation in snapshot.relations.values():
@@ -662,7 +666,7 @@ def generate_preliminary_lanelet2(*, workspace: Path, config: ConverterConfig) -
                 )
                 lanelet_map.add(connector)
                 connector_count += 1
-                is_ambiguous = len(candidates) > 1 or abs(angle) in range(30, 41)
+                is_ambiguous = _connector_is_ambiguous(len(candidates), angle)
                 lane_records.append(
                     {
                         "lanelet_id": connector.id,

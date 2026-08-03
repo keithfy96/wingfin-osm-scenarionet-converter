@@ -13,6 +13,10 @@ import osmnx as ox
 from shapely.geometry import LineString, Point, mapping
 from shapely.strtree import STRtree
 
+from osm_scenario.lanelet_inspection import (
+    PreliminaryInspectionError,
+    generate_preliminary_inspection,
+)
 from osm_scenario.osm_source import read_osm_snapshot, road_exclusion_reason
 
 InspectionView = Literal["source", "normalized", "audit", "stage-1", "lanelet2"]
@@ -526,17 +530,22 @@ def _render_html(*, title: str, data: dict[str, Any], summary: dict[str, Any]) -
 """
 
 
-def generate_inspection(*, workspace: Path, view: InspectionView) -> Path:
+def generate_inspection(
+    *, workspace: Path, view: InspectionView, checkpoint: str | None = None
+) -> Path:
     """Generate an inspectable HTML checkpoint for the requested stage view."""
     workspace = workspace.resolve()
     if view == "lanelet2":
-        preliminary = workspace / "lanelet2" / "preliminary.osm"
-        if not preliminary.is_file():
+        if checkpoint != "preliminary":
             raise InspectionError(
-                "Lanelet2 inspection is unavailable because Stage 2 has not produced "
-                f"{preliminary}"
+                "Stage 3A Lanelet2 inspection requires --checkpoint preliminary"
             )
-        raise InspectionError("Lanelet2 inspection will be implemented with Stage 2 geometry")
+        try:
+            return generate_preliminary_inspection(workspace=workspace)
+        except PreliminaryInspectionError as error:
+            raise InspectionError(str(error)) from error
+    if checkpoint is not None:
+        raise InspectionError("--checkpoint is only valid with --view lanelet2")
 
     manifest_path = workspace / "source" / "manifest.json"
     report_path = workspace / "reports" / "acquisition.json"

@@ -33,6 +33,10 @@ class InspectView(str, Enum):
     lanelet2 = "lanelet2"
 
 
+class InspectCheckpoint(str, Enum):
+    preliminary = "preliminary"
+
+
 Workspace = Annotated[
     Path,
     typer.Option("--workspace", "-w", help="Map workspace directory.", file_okay=False),
@@ -134,10 +138,21 @@ def inspect(
             help="Checkpoint to render: source, normalized, audit, stage-1, or lanelet2.",
         ),
     ] = InspectView.stage_1,
+    checkpoint: Annotated[
+        InspectCheckpoint | None,
+        typer.Option(
+            "--checkpoint",
+            help="Lanelet2 checkpoint to render. Stage 3A supports: preliminary.",
+        ),
+    ] = None,
 ) -> None:
     """Generate a browser-based visual checkpoint for WORKSPACE."""
     try:
-        output_path = generate_inspection(workspace=workspace, view=view.value)
+        output_path = generate_inspection(
+            workspace=workspace,
+            view=view.value,
+            checkpoint=checkpoint.value if checkpoint is not None else None,
+        )
     except (InspectionError, ValueError, KeyError) as error:
         typer.echo(f"Inspection failed: {error}", err=True)
         raise typer.Exit(code=1) from error
