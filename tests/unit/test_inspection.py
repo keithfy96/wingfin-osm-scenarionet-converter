@@ -48,13 +48,31 @@ def test_stage_3a_preliminary_inspection_is_searchable_and_checksum_bound(
 
     assert output == workspace / "inspection" / "stage-3a-preliminary-audit.html"
     html = output.read_text(encoding="utf-8")
+    generation = json.loads(
+        (workspace / "reports" / "lanelet2-generation.json").read_text()
+    )
+    connector = next(
+        item for item in generation["lanelets"] if item["kind"] == "connector"
+    )
     assert "Stage 3A Preliminary Audit" in html
     assert "Road lanelets" in html
     assert "Junction connectors" in html
-    assert "Correction queue lanelets" in html
+    assert "Review queue" in html
+    assert "ambiguous_connector" in html
+    assert "lane_count_ambiguous" in html
+    assert "stop_line_inferred" in html
+    assert "traffic_signal_association_review" in html
+    assert "via_way_restriction_review" in html
     assert "Search identifier" in html
     assert "Source way ID" in html
     assert "Source node ID" in html
+    assert "Source relation ID" in html
+    assert "proximity-based signal-to-incoming-lanelet association requires review" in html
+    assert f'"lanelet_id":"{connector["lanelet_id"]}"' in html
+    assert f'"from_lanelet_id":"{connector["from_lanelet_id"]}"' in html
+    assert f'"to_lanelet_id":"{connector["to_lanelet_id"]}"' in html
+    assert f'"lanelet_id":{connector["lanelet_id"]}' not in html
+    assert '"linestring_id":"' in html
     report = json.loads(
         (workspace / "reports" / "inspection-stage-3a-preliminary.json").read_text()
     )
@@ -63,7 +81,66 @@ def test_stage_3a_preliminary_inspection_is_searchable_and_checksum_bound(
     assert report["inputs"]["preliminary_lanelet2"]["sha256"] == preliminary_sha256
     assert report["layers"]["roads"] > 0
     assert report["layers"]["connectors"] > 0
+    assert report["layers"]["reviews"]["stop_line_inferred"]["items"] > 0
+    assert (
+        report["layers"]["reviews"]["traffic_signal_association_review"][
+            "mapped_features"
+        ]
+        > 0
+    )
+    assert "lane_count_inferred" not in report["summary"]["review_codes"]
+    assert "lane_width_inferred" not in report["summary"]["review_codes"]
+    assert report["summary"]["unmapped_review_items"] == 0
     assert (workspace / "reports" / "inspection-stage-3a-preliminary.md").is_file()
+
+
+def test_stage_3a_maps_edge_and_relation_reviews_with_reasons(tmp_path: Path) -> None:
+    workspace = _lanelet_workspace(tmp_path)
+    generation_path = workspace / "reports" / "lanelet2-generation.json"
+    generation = json.loads(generation_path.read_text(encoding="utf-8"))
+    road = next(item for item in generation["lanelets"] if item["kind"] == "road")
+    generation["correction_queue"].extend(
+        [
+            {
+                "code": "lane_count_ambiguous",
+                "confidence": "low",
+                "priority": "high",
+                "reason": "test edge needs directional lane review",
+                "source_edge": road["source_edge"],
+                "source_osm_way_id": road["source_osm_way_id"],
+                "value": 2,
+            },
+            {
+                "code": "via_way_restriction_review",
+                "confidence": "low",
+                "priority": "high",
+                "reason": "test relation needs route-context review",
+                "source_osm_relation_id": "20",
+            },
+        ]
+    )
+    generation_path.write_text(
+        json.dumps(generation, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    output = generate_inspection(
+        workspace=workspace, view="lanelet2", checkpoint="preliminary"
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "test edge needs directional lane review" in html
+    assert "test relation needs route-context review" in html
+    assert "from: way 10" in html
+    assert "to: way 10" in html
+    report = json.loads(
+        (workspace / "reports" / "inspection-stage-3a-preliminary.json").read_text()
+    )
+    assert report["layers"]["reviews"]["lane_count_ambiguous"]["items"] == 1
+    assert (
+        report["layers"]["reviews"]["via_way_restriction_review"]["mapped_features"]
+        > 0
+    )
+    assert report["summary"]["unmapped_review_items"] == 0
 
 
 def test_stage_3a_recreates_only_its_own_artifacts(tmp_path: Path) -> None:
