@@ -273,31 +273,58 @@ remain unchecked until their individual geometry policies and tests exist.
 
 ## Stage 3: Visual Inspection and Manual Correction
 
-- [ ] Generate before/after overlays showing OSM centerlines, lanelet boundaries, connectors, signal positions, inferred tags, and validation hotspots.
+Stage 3 uses separate, checksum-bound checkpoints. A later inspection must never
+overwrite an earlier inspection file.
+
+### Stage 3A: Preliminary Lanelet2 Inspection
+
+- [ ] Add `osm-scenario inspect --view lanelet2 --checkpoint preliminary`.
+- [ ] Read only `lanelet2/preliminary.osm` and the Stage 2 generation report.
+- [ ] Generate `inspection/stage-3a-preliminary-audit.html`.
+- [ ] Generate matching `reports/inspection-stage-3a-preliminary.json` and `.md` reports that record the exact `preliminary.osm` checksum.
+- [ ] Show OSM centerlines, generated road lanelets, boundaries, connectors, signal positions, mapped or inferred stop lines, inferred tags, and correction-queue hotspots.
+
+### Stage 3B: Manual JOSM Correction
+
 - [ ] Configure JOSM with the official Lanelet2 map styles and presets.
 - [ ] Keep `preliminary.osm` immutable and save manual work as `edited.osm`.
 - [ ] Review lane direction, lane count, shared boundaries, connector turns, roundabouts, stop lines, signal associations, overlaps, and disconnected roads.
-- [ ] Record resolved correction-queue items and any intentional deviations in a review checklist.
+- [ ] Record resolved correction-queue items and intentional deviations in `reports/stage-3b-review.yaml`.
+- [ ] Record the operator, review date, preliminary checksum, and edited checksum.
+
+### Stage 3C: Edited and Comparison Inspection
+
+- [ ] Add `osm-scenario inspect --view lanelet2 --checkpoint edited` and read only `lanelet2/edited.osm`.
+- [ ] Generate `inspection/stage-3c-edited-audit.html` with matching `reports/inspection-stage-3c-edited.json` and `.md` reports.
+- [ ] Add `--checkpoint comparison` to compare `preliminary.osm` with `edited.osm` without modifying either map.
+- [ ] Generate `inspection/stage-3c-comparison.html` with matching `reports/inspection-stage-3c-comparison.json` and `.md` reports.
+- [ ] Record both input checksums and summarize added, removed, and changed Lanelet2 primitives in the comparison report.
 - [ ] Block final dataset conversion until `edited.osm` exists or the operator explicitly approves the preliminary map.
+
+Each checkpoint may recreate only its own HTML, JSON, and Markdown files. It
+must not delete or overwrite another checkpoint's artifacts.
 
 ### Completion gate
 
-- [ ] The operator signs off the visual review checklist.
+- [ ] Preliminary, edited, and comparison reports identify the exact map checksums they cover.
+- [ ] The operator signs off `reports/stage-3b-review.yaml`.
 - [ ] All high-confidence automated findings are either corrected or explicitly waived.
 
 ### Manual verification
 
-1. Run `osm-scenario inspect --workspace workspaces/<map-id>` and open the
-   generated overlay and `preliminary.osm` in JOSM.
+1. Run `osm-scenario inspect --workspace workspaces/<map-id> --view lanelet2 --checkpoint preliminary`, then open `stage-3a-preliminary-audit.html` and `preliminary.osm` in JOSM.
 2. Compare the lanelet map against the OSM source or imagery at every flagged
    intersection. Check lane direction, lane count, shared boundaries, permitted
    turns, roundabouts, stop lines, signal positions, overlaps, and disconnected
    roads.
 3. Save corrections only to `lanelet2/edited.osm`. Confirm that the checksum of
    `preliminary.osm` has not changed.
-4. Mark every correction-queue item as corrected or waived with a reason, then
-   sign and date the review checklist. Confirm that conversion remains blocked
-   while an unreviewed blocking item exists.
+4. Run the edited and comparison checkpoints. Confirm that the preliminary
+   audit still exists unchanged and that each new report names its own input
+   checksum.
+5. Mark every correction-queue item as corrected or waived with a reason in
+   `stage-3b-review.yaml`, then sign and date it. Confirm that conversion remains
+   blocked while an unreviewed blocking item exists.
 
 ## Stage 4: Validate Lanelet2
 

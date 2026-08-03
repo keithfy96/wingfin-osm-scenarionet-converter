@@ -68,8 +68,33 @@ The implemented Stage 1 inspection views can create:
 | `inspection/stage-1-audit.html` | Displays the programmatic Stage 1B audit layers and searchable OSM evidence. |
 | `inspection/stage-1.html` | Combined Stage 1 source and normalized inspection map. |
 
-The Lanelet2 browser inspection view has not been implemented yet. Until that
-view exists, inspect `lanelet2/preliminary.osm` directly in JOSM.
+The Lanelet2 browser inspection view has not been implemented yet. Its planned
+Stage 3 checkpoints deliberately use separate files:
+
+| Checkpoint | Files | Purpose |
+| --- | --- | --- |
+| Stage 3A preliminary | `inspection/stage-3a-preliminary-audit.html`, `reports/inspection-stage-3a-preliminary.json`, and `reports/inspection-stage-3a-preliminary.md` | Inspect the immutable Stage 2 `preliminary.osm` and record its checksum. |
+| Stage 3B manual review | `lanelet2/edited.osm` and `reports/stage-3b-review.yaml` | Preserve manual JOSM corrections, decisions, waivers, operator, and input/output checksums. |
+| Stage 3C edited | `inspection/stage-3c-edited-audit.html`, `reports/inspection-stage-3c-edited.json`, and `reports/inspection-stage-3c-edited.md` | Inspect only the manually edited map and record its checksum. |
+| Stage 3C comparison | `inspection/stage-3c-comparison.html`, `reports/inspection-stage-3c-comparison.json`, and `reports/inspection-stage-3c-comparison.md` | Compare the preliminary and edited maps and record both checksums. |
+
+The future CLI will select these outputs explicitly with:
+
+```bash
+uv run osm-scenario inspect --workspace workspaces/mosque \
+  --view lanelet2 --checkpoint preliminary
+
+uv run osm-scenario inspect --workspace workspaces/mosque \
+  --view lanelet2 --checkpoint edited
+
+uv run osm-scenario inspect --workspace workspaces/mosque \
+  --view lanelet2 --checkpoint comparison
+```
+
+Running one checkpoint may recreate only that checkpoint's files. It must not
+overwrite the preliminary, edited, or comparison artifacts belonging to another
+checkpoint. Until these views are implemented, inspect
+`lanelet2/preliminary.osm` directly in JOSM.
 
 ## Repeat Execution
 
