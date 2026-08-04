@@ -82,6 +82,9 @@ show completed increments beneath it.
     - `inspection/stage-2-map-review.html` - read-only lane, connector,
       restriction-status, and stop-line preview; Stage 3 will provide
       authoritative decision capture.
+    - `inspection/stage-2-review-audit.html` - searchable and filterable
+      finding-to-geometry audit on an OSM basemap; clicking a finding focuses
+      and highlights its affected generated features.
     - `source/manifest.json` updated with the `stage_2` generation record and
       output checksums.
   - Verify:
@@ -181,6 +184,13 @@ show completed increments beneath it.
 
 - [x] **Stage 2 exit criteria complete.** See the Stage 2 progress checklist and
   verification procedure above.
+
+The implemented decision rules, evidence hierarchy, connector/continuation
+boundary, lane mapping, U-turn handling, restrictions, signals, and Stage 2/3/4
+ownership are documented in
+[`stage-2-generation-v1`](../policies/stage-2-generation-v1.md). These rules run
+during Stage 2; Stage 3 records manual decisions and Stage 4 applies them during
+automatic regeneration.
 
 - Add `osm-scenario generate-map --workspace ...`.
 - Verify the Stage 1 manifest and checksums, then read the immutable source OSM

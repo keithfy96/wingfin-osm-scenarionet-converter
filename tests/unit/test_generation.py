@@ -11,7 +11,10 @@ from osm_scenario.config import ConverterConfig
 from osm_scenario.generation import (
     GenerationError,
     _directional_lane_count,
+    _is_decision_node,
+    _mapped_lane_index,
     _speed_kph,
+    _turn_permissions,
     generate_lane_model,
 )
 from osm_scenario.lane_model import PreliminaryLaneModel
@@ -45,6 +48,52 @@ def test_speed_parser_preserves_kph_and_converts_mph() -> None:
     assert _speed_kph("50 km/h") == 50
     assert _speed_kph("30 mph") == pytest.approx(48.28032)
     assert _speed_kph("signals") is None
+
+
+def test_turn_lane_tags_follow_osm_left_to_right_order() -> None:
+    tags = {"turn:lanes": "left|through|through;reverse"}
+    assert _turn_permissions(tags, "forward", 0, 3, "left") == [
+        "reverse",
+        "through",
+    ]
+    assert _turn_permissions(tags, "forward", 0, 3, "right") == ["left"]
+
+
+def test_lane_order_mapping_is_deterministic_across_lane_count_changes() -> None:
+    class SourceLane:
+        lane_count = 3
+
+        def __init__(self, lane_index: int) -> None:
+            self.lane_index = lane_index
+
+    assert [_mapped_lane_index(SourceLane(index), 2) for index in range(3)] == [0, 0, 1]
+
+
+def test_only_real_branch_control_or_explicit_uturn_is_a_decision_node() -> None:
+    assert not _is_decision_node(
+        non_reverse_group_count=1,
+        adjacent_node_count=2,
+        has_control_or_restriction=False,
+        explicit_reverse=False,
+    )
+    assert _is_decision_node(
+        non_reverse_group_count=2,
+        adjacent_node_count=3,
+        has_control_or_restriction=False,
+        explicit_reverse=False,
+    )
+    assert _is_decision_node(
+        non_reverse_group_count=1,
+        adjacent_node_count=2,
+        has_control_or_restriction=True,
+        explicit_reverse=False,
+    )
+    assert _is_decision_node(
+        non_reverse_group_count=1,
+        adjacent_node_count=2,
+        has_control_or_restriction=False,
+        explicit_reverse=True,
+    )
 
 
 def test_lane_model_rejects_numeric_identifier() -> None:
@@ -81,22 +130,30 @@ def test_generate_lane_model_writes_deterministic_stage_2_artifacts(tmp_path: Pa
     assert len({finding.identifier for finding in first.findings}) == len(first.findings)
     assert first.signals
     assert first.stop_lines
-    assert first.connectors
+    assert not first.connectors
+    assert any(lane.exit_lanes for lane in first.lanes)
     assert first.restrictions
     assert first.restrictions[0].status in {"enforced", "already_satisfied"}
     assert all(connector.from_lane_id != connector.to_lane_id for connector in first.connectors)
     assert all(connector.from_way_id != connector.to_way_id for connector in first.connectors)
     assert all(stop_line.source == "inferred" for stop_line in first.stop_lines)
     assert (workspace / "inspection" / "stage-2-map-review.html").is_file()
+    assert (workspace / "inspection" / "stage-2-review-audit.html").is_file()
     html = (workspace / "inspection" / "stage-2-map-review.html").read_text()
-    assert "connector" in html
-    assert "stop_line" in html
+    assert "Stage 2 Review Audit" in html
+    assert "Review filters" in html
+    assert "Selected finding" in html
+    assert "review_required" in html
+    assert "geometry_ids" in html
+    assert "OpenStreetMap contributors" in html
+    assert (workspace / "inspection" / "stage-2-review-audit.html").read_text() == html
     report = json.loads(report_path.read_text())
     assert report["feature_counts"]["connectors"] == len(first.connectors)
     assert report["feature_counts"]["stop_lines"] == len(first.stop_lines)
     assert first_manifest["stage_2"]["generation_fingerprint"] == (
         first.metadata.generation_fingerprint
     )
+    assert "review_audit_html" in first_manifest["stage_2"]["artifacts"]
 
     generate_lane_model(workspace=workspace, config=config)
     assert (workspace / "lane-model" / "preliminary.json").read_bytes() == first_model_bytes

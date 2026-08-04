@@ -65,6 +65,15 @@ def movement_family(movement: str) -> str:
     return movement
 
 
+def uturn_evidence_status(turn_permissions: list[str]) -> str:
+    """Classify a plausible U-turn from lane-tag evidence alone."""
+    if any(permission in {"reverse", "uturn"} for permission in turn_permissions):
+        return "active"
+    if turn_permissions:
+        return "excluded"
+    return "review_required"
+
+
 def connector_curve(
     incoming: LineString, outgoing: LineString, junction_xy: tuple[float, float]
 ) -> LineString:

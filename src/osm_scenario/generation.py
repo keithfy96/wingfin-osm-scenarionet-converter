@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import osmnx as ox
+from pyproj import Transformer
 from shapely.geometry import LineString, Polygon
 
 from osm_scenario.config import ConverterConfig
@@ -37,10 +38,11 @@ from osm_scenario.topology import (
     movement_matches,
     restriction_roles,
     signed_turn_angle,
+    uturn_evidence_status,
     via_way_resolution,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v3"
+GENERATOR_VERSION = "direct-osm-stage2-v4"
 LANE_MODEL_SCHEMA_VERSION = 2
 
 
@@ -137,14 +139,49 @@ def _directional_lane_count(tags: dict[str, str], direction: str) -> tuple[int, 
     return 1, "default_single_lane", "low"
 
 
-def _turn_permissions(tags: dict[str, str], direction: str, lane_index: int) -> list[str]:
+def _turn_permissions(
+    tags: dict[str, str],
+    direction: str,
+    lane_index: int,
+    lane_count: int,
+    driving_side: str,
+) -> list[str]:
     value = tags.get(f"turn:lanes:{direction}") or tags.get("turn:lanes")
     if not value:
         return []
     lanes = value.split("|")
-    if lane_index >= len(lanes):
+    tag_index = lane_count - 1 - lane_index if driving_side == "left" else lane_index
+    if tag_index >= len(lanes):
         return []
-    return sorted(item.strip() for item in lanes[lane_index].split(";") if item.strip())
+    return sorted(item.strip() for item in lanes[tag_index].split(";") if item.strip())
+
+
+def _is_exact_reverse(source: LaneFeature, target: LaneFeature) -> bool:
+    return (
+        source.source_edge[0] == target.source_edge[1]
+        and source.source_edge[1] == target.source_edge[0]
+    )
+
+
+def _mapped_lane_index(source: LaneFeature, target_count: int) -> int:
+    if source.lane_count > 1 and target_count > 1:
+        return round(source.lane_index * (target_count - 1) / (source.lane_count - 1))
+    return min(source.lane_index, target_count - 1)
+
+
+def _is_decision_node(
+    *,
+    non_reverse_group_count: int,
+    adjacent_node_count: int,
+    has_control_or_restriction: bool,
+    explicit_reverse: bool,
+) -> bool:
+    return (
+        non_reverse_group_count > 1
+        or adjacent_node_count > 2
+        or has_control_or_restriction
+        or explicit_reverse
+    )
 
 
 def _points(line: LineString) -> list[Point2D]:
@@ -191,21 +228,40 @@ def _finding(
 
 
 def _render_review_html(model: PreliminaryLaneModel) -> str:
-    features = []
+    transformer = Transformer.from_crs(
+        model.metadata.coordinate_system_wkt, "EPSG:4326", always_xy=True
+    )
+
+    def coordinates(points: list[Point2D]) -> list[list[float]]:
+        return [list(transformer.transform(point.x, point.y)) for point in points]
+
+    features: list[dict[str, Any]] = []
     for lane in model.lanes:
-        polygon = [[point.x, point.y] for point in lane.polygon]
-        centerline = [[point.x, point.y] for point in lane.centerline]
+        properties = {
+            "id": lane.identifier,
+            "source_way_ids": lane.source_way_ids,
+            "source_edge": lane.source_edge,
+            "lane_index": lane.lane_index,
+            "lane_count": lane.lane_count,
+            "turn_permissions": lane.turn_permissions,
+        }
         features.extend(
             [
                 {
                     "type": "Feature",
-                    "geometry": {"type": "Polygon", "coordinates": [polygon]},
-                    "properties": {"id": lane.identifier, "kind": "lane"},
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [coordinates(lane.polygon)],
+                    },
+                    "properties": {**properties, "kind": "lane_polygon"},
                 },
                 {
                     "type": "Feature",
-                    "geometry": {"type": "LineString", "coordinates": centerline},
-                    "properties": {"id": lane.identifier, "kind": "centerline"},
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": coordinates(lane.centerline),
+                    },
+                    "properties": {**properties, "kind": "lane_centerline"},
                 },
             ]
         )
@@ -215,7 +271,7 @@ def _render_review_html(model: PreliminaryLaneModel) -> str:
                 "type": "Feature",
                 "geometry": {
                     "type": "LineString",
-                    "coordinates": [[point.x, point.y] for point in connector.centerline],
+                    "coordinates": coordinates(connector.centerline),
                 },
                 "properties": {
                     "id": connector.identifier,
@@ -223,6 +279,10 @@ def _render_review_html(model: PreliminaryLaneModel) -> str:
                     "status": connector.status,
                     "movement": connector.movement,
                     "source": f"{connector.from_way_id} -> {connector.to_way_id}",
+                    "from_lane_id": connector.from_lane_id,
+                    "to_lane_id": connector.to_lane_id,
+                    "junction_node_id": connector.junction_node_id,
+                    "turn_angle_degrees": connector.turn_angle_degrees,
                 },
             }
         )
@@ -232,7 +292,7 @@ def _render_review_html(model: PreliminaryLaneModel) -> str:
                 "type": "Feature",
                 "geometry": {
                     "type": "LineString",
-                    "coordinates": [[point.x, point.y] for point in stop_line.points],
+                    "coordinates": coordinates(stop_line.points),
                 },
                 "properties": {
                     "id": stop_line.identifier,
@@ -242,15 +302,66 @@ def _render_review_html(model: PreliminaryLaneModel) -> str:
                 },
             }
         )
-    payload = json.dumps({"type": "FeatureCollection", "features": features}).replace("</", "<\\/")
-    return f"""<!doctype html>
-<html><head><meta charset=\"utf-8\"><title>Stage 2 map review</title>
-<link rel=\"stylesheet\" href=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css\">
-<style>html,body,#map{{height:100%;margin:0}} .summary{{position:absolute;z-index:1000;top:12px;right:12px;background:white;padding:10px;border-radius:6px;font:14px sans-serif}}</style></head>
-<body><div id=\"map\"></div><div class=\"summary\">Stage 2 read-only inspection<br>Lanes: {len(model.lanes)}<br>Connectors: {len(model.connectors)}<br>Signals: {len(model.signals)}<br>Stop lines: {len(model.stop_lines)}<br>Restrictions: {len(model.restrictions)}<br>Findings: {len(model.findings)}</div>
-<script src=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\"></script><script>
-const data={payload}; const map=L.map('map',{{crs:L.CRS.Simple}}); const layer=L.geoJSON(data,{{style:f=>f.properties.kind==='lane'?{{color:'#277da1',weight:1,fillOpacity:.25}}:f.properties.kind==='stop_line'?{{color:'#f9c74f',weight:5}}:{{color:f.properties.status==='forbidden'?'#9b2226':f.properties.status==='review_required'?'#f8961e':'#43aa8b',weight:4,dashArray:f.properties.status==='review_required'?'6 4':null}},onEachFeature:(f,l)=>l.bindPopup('<b>'+f.properties.kind+'</b><br>'+f.properties.id+'<br>'+JSON.stringify(f.properties))}}).addTo(map); map.fitBounds(layer.getBounds().pad(.05));
+
+    feature_ids = {feature["properties"]["id"] for feature in features}
+    lanes_by_way: dict[str, list[str]] = {}
+    for lane in model.lanes:
+        for way_id in lane.source_way_ids:
+            lanes_by_way.setdefault(way_id, []).append(lane.identifier)
+    restrictions = {item.identifier: item for item in model.restrictions}
+    findings = []
+    for finding in model.findings:
+        finding_data = finding.model_dump(mode="json")
+        geometry_ids = {
+            identifier for identifier in finding.affected_feature_ids if identifier in feature_ids
+        }
+        for identifier in finding.affected_feature_ids:
+            restriction = restrictions.get(identifier)
+            if restriction is None:
+                continue
+            geometry_ids.update(restriction.forbidden_connector_ids)
+            for way_id in restriction.from_way_ids + restriction.to_way_ids:
+                geometry_ids.update(lanes_by_way.get(way_id, []))
+        finding_data["geometry_ids"] = sorted(geometry_ids)
+        findings.append(finding_data)
+
+    payload = json.dumps(
+        {
+            "features": {"type": "FeatureCollection", "features": features},
+            "findings": findings,
+            "summary": {
+                "lanes": len(model.lanes),
+                "connectors": len(model.connectors),
+                "signals": len(model.signals),
+                "stop_lines": len(model.stop_lines),
+                "restrictions": len(model.restrictions),
+                "findings": len(model.findings),
+            },
+        },
+        separators=(",", ":"),
+    ).replace("</", "<\\/")
+    template = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Stage 2 Review Audit</title><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+*{box-sizing:border-box}html,body{height:100%;margin:0;font:14px system-ui,sans-serif;color:#202428}body{display:grid;grid-template-columns:minmax(330px,420px) 1fr;background:#f4f5f6}aside{padding:14px;overflow:auto;border-right:1px solid #c8cdd1;background:#fff}h1{font-size:20px;margin:0 0 5px}h2{font-size:14px;margin:14px 0 7px}.muted{color:#687078;font-size:12px}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin:10px 0}.metric{padding:7px;background:#f1f3f5;border-radius:5px;text-align:center}.metric b{display:block;font-size:16px}.filters{display:grid;gap:7px}.filters input,.filters select{width:100%;padding:7px;border:1px solid #adb5bd;border-radius:4px;background:#fff}.queue{display:grid;gap:6px;margin-top:8px}.finding{border:1px solid #d6dadd;border-left:5px solid #e67700;border-radius:5px;padding:8px;background:#fff;cursor:pointer;text-align:left}.finding.blocker{border-left-color:#c92a2a}.finding:hover,.finding.active{background:#fff3bf}.finding strong{display:block}.finding small{display:block;color:#687078;margin-top:3px}.detail{padding:9px;background:#f8f9fa;border:1px solid #dee2e6;border-radius:5px;overflow-wrap:anywhere}.detail table,.popup-table{border-collapse:collapse;width:100%}.detail td,.popup-table td{border-bottom:1px solid #e5e7e9;padding:4px;vertical-align:top;font-size:12px}.legend{display:grid;grid-template-columns:18px 1fr;gap:6px 8px;align-items:center}.swatch{height:5px}.lane{background:#277da1}.active-connector{background:#2b8a3e}.review-connector{background:#f08c00}.forbidden-connector{background:#c92a2a}.stop-line{background:#7048e8}.highlight{background:#ffec99}.queue-note{font-size:12px;color:#687078;margin:7px 0}#map{height:100%;min-height:520px}.leaflet-popup-content{max-height:300px;overflow:auto}@media(max-width:780px){body{grid-template-columns:1fr;grid-template-rows:minmax(360px,45vh) 1fr}aside{border-right:0;border-bottom:1px solid #c8cdd1}#map{min-height:55vh}}
+</style></head><body><aside><h1>Stage 2 Review Audit</h1><div class="muted">Read-only visual explanation of preliminary generation findings. Decisions are recorded later in Stage 3.</div><div class="summary" id="summary"></div><h2>Review filters</h2><div class="filters"><input id="search" placeholder="Search rule, reason, source ID, or feature ID"><select id="rule"><option value="">All rules</option></select><select id="severity"><option value="">All severities</option><option value="blocker">Blocker</option><option value="warning">Warning</option></select></div><div class="queue-note" id="queue-note"></div><div class="queue" id="queue"></div><h2>Selected finding</h2><div class="detail" id="detail">Select a review item to focus its affected geometry.</div><h2>Legend</h2><div class="legend"><span class="swatch lane"></span><span>Lane centreline</span><span class="swatch active-connector"></span><span>Active connector</span><span class="swatch review-connector"></span><span>Review-required connector</span><span class="swatch forbidden-connector"></span><span>Forbidden connector</span><span class="swatch stop-line"></span><span>Inferred stop line</span><span class="swatch highlight"></span><span>Selected finding geometry</span></div></aside><main id="map"></main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
+const payload=__PAYLOAD__;const reviewPriority={ambiguous_connector:0,restriction_effect_review:1,signal_lane_association:2,lane_transition_count_mismatch:3,inferred_stop_line:4,lane_count_inference:5,lane_width_default:6,speed_default:7};payload.findings.sort((a,b)=>(reviewPriority[a.rule]??99)-(reviewPriority[b.rule]??99)||a.rule.localeCompare(b.rule)||a.identifier.localeCompare(b.identifier));const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const map=L.map('map',{preferCanvas:true});L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:20,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
+const groups={lane_polygon:L.layerGroup(),lane_centerline:L.layerGroup(),active:L.layerGroup(),review_required:L.layerGroup(),forbidden:L.layerGroup(),stop_line:L.layerGroup()};const byId=new Map(),allLayers=[];let selected=[];
+function styleFor(p){if(p.kind==='lane_polygon')return{color:'#74c0fc',weight:1,fillColor:'#74c0fc',fillOpacity:.08};if(p.kind==='lane_centerline')return{color:'#277da1',weight:2,opacity:.75};if(p.kind==='stop_line')return{color:'#7048e8',weight:6};return{color:p.status==='forbidden'?'#c92a2a':p.status==='review_required'?'#f08c00':'#2b8a3e',weight:p.status==='review_required'?5:3,dashArray:p.status==='review_required'?'7 5':null,opacity:.9}}
+function popup(p){return `<strong>${esc(p.kind)}</strong><table class="popup-table">${Object.entries(p).map(([k,v])=>`<tr><td>${esc(k)}</td><td>${esc(Array.isArray(v)?v.join(', '):v)}</td></tr>`).join('')}</table>`}
+for(const feature of payload.features.features){const p=feature.properties;const layer=L.geoJSON(feature,{style:()=>styleFor(p),onEachFeature:(_f,l)=>l.bindPopup(popup(p))});layer.eachLayer(l=>{l._baseStyle=styleFor(p);allLayers.push(l);if(!byId.has(p.id))byId.set(p.id,[]);byId.get(p.id).push(l)});const key=p.kind==='connector'?p.status:p.kind;groups[key].addLayer(layer)}
+groups.lane_centerline.addTo(map);groups.active.addTo(map);groups.review_required.addTo(map);groups.forbidden.addTo(map);groups.stop_line.addTo(map);L.control.layers(null,{'Lane polygons':groups.lane_polygon,'Lane centrelines':groups.lane_centerline,'Active connectors':groups.active,'Review-required connectors':groups.review_required,'Forbidden connectors':groups.forbidden,'Stop lines':groups.stop_line},{collapsed:false}).addTo(map);
+const allGeometry=L.featureGroup(allLayers);if(allGeometry.getBounds().isValid())map.fitBounds(allGeometry.getBounds().pad(.04));
+document.getElementById('summary').innerHTML=Object.entries(payload.summary).map(([k,v])=>`<div class="metric"><b>${v}</b>${esc(k.replaceAll('_',' '))}</div>`).join('');const rules=[...new Set(payload.findings.map(f=>f.rule))].sort();document.getElementById('rule').innerHTML+=[...rules].map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
+function clearSelection(){for(const l of selected)if(l.setStyle)l.setStyle(l._baseStyle);selected=[];document.querySelectorAll('.finding.active').forEach(x=>x.classList.remove('active'))}
+function showFinding(id,button){clearSelection();const f=payload.findings.find(x=>x.identifier===id);button?.classList.add('active');const layers=f.geometry_ids.flatMap(x=>byId.get(x)||[]);for(const l of layers){if(l.setStyle)l.setStyle({color:'#ffd43b',weight:8,fillOpacity:.4,opacity:1});selected.push(l)}const bounds=L.featureGroup(layers).getBounds();if(bounds.isValid())map.fitBounds(bounds.pad(.35),{maxZoom:19});const rows=[['Rule',f.rule],['Severity',f.severity],['Confidence',f.confidence],['Reason',f.reason],['Source',`${f.source_type}: ${f.source_ids.join(', ')}`],['Affected IDs',f.affected_feature_ids.join(', ')||'none'],['Mapped geometry',f.geometry_ids.length],['Proposed value',JSON.stringify(f.proposed_value)],['Finding ID',f.identifier]];document.getElementById('detail').innerHTML=`<table>${rows.map(([k,v])=>`<tr><td><strong>${esc(k)}</strong></td><td>${esc(v)}</td></tr>`).join('')}</table>`+(layers.length?'':'<p class="muted">No generated geometry could be mapped for this finding.</p>')}
+function renderQueue(){const q=document.getElementById('search').value.trim().toLowerCase(),rule=document.getElementById('rule').value,severity=document.getElementById('severity').value;const matches=payload.findings.filter(f=>(!rule||f.rule===rule)&&(!severity||f.severity===severity)&&(!q||JSON.stringify(f).toLowerCase().includes(q)));const shown=matches.slice(0,250);document.getElementById('queue-note').textContent=`${matches.length} matching findings${matches.length>shown.length?`; showing first ${shown.length}`:''}`;const queue=document.getElementById('queue');queue.innerHTML='';for(const f of shown){const b=document.createElement('button');b.className=`finding ${f.severity}`;b.innerHTML=`<strong>${esc(f.rule)}</strong><span>${esc(f.reason)}</span><small>${esc(f.source_type)} ${esc(f.source_ids.join(', '))} · ${f.geometry_ids.length} mapped feature(s)</small>`;b.onclick=()=>showFinding(f.identifier,b);queue.appendChild(b)}}
+for(const id of ['search','rule','severity'])document.getElementById(id).addEventListener(id==='search'?'input':'change',renderQueue);renderQueue();
 </script></body></html>"""
+    return template.replace("__PAYLOAD__", payload)
 
 
 def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
@@ -347,7 +458,13 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                         points=_points(right),
                     ),
                 ],
-                turn_permissions=_turn_permissions(way.tags, direction, lane_index),
+                turn_permissions=_turn_permissions(
+                    way.tags,
+                    direction,
+                    lane_index,
+                    count,
+                    manifest["driving_side"],
+                ),
             )
             lanes.append(lane)
             created.append(lane_id)
@@ -405,9 +522,29 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
     lane_lookup = {lane.identifier: lane for lane in lanes}
     movement_candidates: list[MovementCandidate] = []
     direct_continuations = 0
+    lane_mismatch_findings: set[tuple[str, str, str]] = set()
+    restriction_nodes = {
+        value
+        for relation in snapshot.relations.values()
+        if relation.tags.get("type") == "restriction"
+        for kind, value in restriction_roles(relation)["via"]
+        if kind == "node"
+    }
     for node_id in sorted(set(lanes_by_start) | set(lanes_by_end)):
         incoming = sorted(lanes_by_end.get(node_id, []))
         outgoing = sorted(lanes_by_start.get(node_id, []))
+        graph_node_id = next(key for key in graph.nodes if str(key) == node_id)
+        adjacent_nodes = {str(neighbor) for neighbor in graph.predecessors(graph_node_id)} | {
+            str(neighbor) for neighbor in graph.successors(graph_node_id)
+        }
+        node = snapshot.nodes.get(node_id)
+        controlled_node = bool(
+            node
+            and (
+                node.tags.get("highway") in {"traffic_signals", "stop", "give_way"}
+                or node.tags.get("junction") is not None
+            )
+        )
         for from_id in incoming:
             source = lane_lookup[from_id]
             source_line = LineString((point.x, point.y) for point in source.centerline)
@@ -417,20 +554,54 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                 target = lane_lookup[to_id]
                 group_key = (target.source_way_ids[0], tuple(target.source_edge))
                 outgoing_groups.setdefault(group_key, []).append(target)
+            non_reverse_groups = [
+                targets
+                for targets in outgoing_groups.values()
+                if not _is_exact_reverse(source, targets[0])
+            ]
+            uturn_status = uturn_evidence_status(source.turn_permissions)
+            explicit_reverse = uturn_status == "active"
+            decision_node = _is_decision_node(
+                non_reverse_group_count=len(non_reverse_groups),
+                adjacent_node_count=len(adjacent_nodes),
+                has_control_or_restriction=node_id in restriction_nodes or controlled_node,
+                explicit_reverse=explicit_reverse,
+            )
             for targets in outgoing_groups.values():
                 targets.sort(key=lambda item: (item.lane_index, item.identifier))
-                if (
-                    source.source_edge[0] == targets[0].source_edge[1]
-                    and source.source_edge[1] == targets[0].source_edge[0]
-                ):
+                exact_reverse = _is_exact_reverse(source, targets[0])
+                if exact_reverse and not decision_node:
                     continue
-                target_index = (
-                    round(source.lane_index * (len(targets) - 1) / (source.lane_count - 1))
-                    if source.lane_count > 1 and len(targets) > 1
-                    else min(source.lane_index, len(targets) - 1)
-                )
+                target_index = _mapped_lane_index(source, len(targets))
                 target = targets[target_index]
-                if source.source_way_ids[0] == target.source_way_ids[0]:
+                if source.lane_count != len(targets):
+                    mismatch_key = (
+                        node_id,
+                        source.source_way_ids[0],
+                        target.source_way_ids[0],
+                    )
+                    if mismatch_key not in lane_mismatch_findings:
+                        lane_mismatch_findings.add(mismatch_key)
+                        findings.append(
+                            _finding(
+                                rule="lane_transition_count_mismatch",
+                                severity="warning",
+                                source_type="node",
+                                source_ids=[node_id],
+                                affected_feature_ids=[
+                                    lane.identifier for lane in [source, *targets]
+                                ],
+                                proposed_value={
+                                    "incoming_lane_count": source.lane_count,
+                                    "outgoing_lane_count": len(targets),
+                                },
+                                confidence="medium",
+                                reason="proportional lane-order mapping crosses a lane-count change",
+                            )
+                        )
+                if not exact_reverse and (
+                    source.source_way_ids[0] == target.source_way_ids[0] or not decision_node
+                ):
                     source.exit_lanes.append(target.identifier)
                     target.entry_lanes.append(source.identifier)
                     direct_continuations += 1
@@ -438,11 +609,15 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                 target_line = LineString((point.x, point.y) for point in target.centerline)
                 angle = signed_turn_angle(source_line, target_line)
                 movement = classify_movement(angle)
-                if source.turn_permissions and not any(
+                if movement == "reverse":
+                    if uturn_status == "excluded":
+                        continue
+                    if source.lane_index != 0 and not explicit_reverse:
+                        continue
+                elif source.turn_permissions and not any(
                     movement_matches(permission, movement) for permission in source.turn_permissions
                 ):
                     continue
-                graph_node_id = next(key for key in graph.nodes if str(key) == node_id)
                 curve = connector_curve(
                     source_line,
                     target_line,
@@ -473,7 +648,11 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                     MovementCandidate(
                         **{
                             **candidate.__dict__,
-                            "ambiguous": family_counts[movement_family(candidate.movement)] > 1
+                            "ambiguous": (
+                                candidate.movement == "reverse"
+                                and uturn_status == "review_required"
+                            )
+                            or family_counts[movement_family(candidate.movement)] > 1
                             or 30 <= abs(candidate.angle_degrees) <= 40,
                         }
                     )
@@ -691,10 +870,13 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
     model_path = lane_model_dir / "preliminary.json"
     report_path = reports_dir / "lane-model-generation.json"
     inspection_path = inspection_dir / "stage-2-map-review.html"
+    review_audit_path = inspection_dir / "stage-2-review-audit.html"
     model_path.write_text(
         json.dumps(model.model_dump(mode="json"), indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    inspection_path.write_text(_render_review_html(model), encoding="utf-8")
+    review_html = _render_review_html(model)
+    inspection_path.write_text(review_html, encoding="utf-8")
+    review_audit_path.write_text(review_html, encoding="utf-8")
     report = {
         "report_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -728,6 +910,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
         ("preliminary_lane_model", model_path),
         ("generation_report", report_path),
         ("review_html", inspection_path),
+        ("review_audit_html", review_audit_path),
     ):
         artifacts[name] = {
             "path": path.relative_to(workspace).as_posix(),

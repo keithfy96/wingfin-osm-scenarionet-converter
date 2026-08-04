@@ -13,6 +13,7 @@ receive a new policy version rather than silently changing an existing version.
 | Policy | Status | Purpose | Implementation |
 | --- | --- | --- | --- |
 | [`public-driving-v1`](public-driving-v1.md) | Active | Select public motor-vehicle roads from an OSM snapshot | [`osm_source.py`](../../src/osm_scenario/osm_source.py) |
+| [`stage-2-generation-v1`](stage-2-generation-v1.md) | Active | Generate preliminary lane geometry, connectivity, restrictions, signals, and review findings | [`generation.py`](../../src/osm_scenario/generation.py), [`topology.py`](../../src/osm_scenario/topology.py) |
 
 ## Source Of Truth
 
@@ -30,6 +31,11 @@ Tests covering policy selection, toll roads, excluded roads, exact tag
 preservation, and direction mismatches are in
 [`tests/unit/test_inspection.py`](../../tests/unit/test_inspection.py).
 
+The Stage 2 generation policy is tracked by `GENERATOR_VERSION` and the
+generation fingerprint in the workspace manifest. Its focused coverage is in
+[`tests/unit/test_generation.py`](../../tests/unit/test_generation.py) and
+[`tests/unit/test_topology.py`](../../tests/unit/test_topology.py).
+
 ## Versioning Rules
 
 1. Documentation clarification that does not change selection behavior may update
@@ -41,4 +47,6 @@ preservation, and direction mismatches are in
    source ways.
 5. Old policy implementations must remain available while supported workspaces
    still depend on them.
-
+6. Stage 2 geometry or topology semantic changes require a new generator
+   version and generation fingerprint. Review files bound to the old
+   fingerprint must be rejected or explicitly migrated.

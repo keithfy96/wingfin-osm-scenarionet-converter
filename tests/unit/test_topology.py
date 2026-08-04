@@ -10,6 +10,7 @@ from osm_scenario.topology import (
     forbidden_by_node_restriction,
     movement_family,
     signed_turn_angle,
+    uturn_evidence_status,
     via_way_resolution,
 )
 
@@ -69,6 +70,21 @@ def test_groups_slight_turns_with_their_movement_family() -> None:
     assert movement_family("slight_left") == "left"
     assert movement_family("slight_right") == "right"
     assert movement_family("through") == "through"
+
+
+@pytest.mark.parametrize(
+    ("permissions", "status"),
+    [
+        (["reverse"], "active"),
+        (["through", "uturn"], "active"),
+        (["left", "through"], "excluded"),
+        ([], "review_required"),
+    ],
+)
+def test_uturn_status_requires_positive_lane_tag_evidence(
+    permissions: list[str], status: str
+) -> None:
+    assert uturn_evidence_status(permissions) == status
 
 
 def test_angle_and_connector_curve_are_geometry_based() -> None:
