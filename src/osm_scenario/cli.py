@@ -8,6 +8,7 @@ import typer
 
 from osm_scenario.acquisition import AcquisitionError, acquire_osm
 from osm_scenario.config import ConverterConfig, load_config
+from osm_scenario.generation import GenerationError, generate_lane_model
 from osm_scenario.inspection import InspectionError, generate_inspection
 from osm_scenario.logging import configure_logging
 from osm_scenario.normalization import NormalizationError, normalize_workspace
@@ -113,6 +114,28 @@ def inspect(
         typer.echo(f"Inspection failed: {error}", err=True)
         raise typer.Exit(code=1) from error
     typer.echo(f"Inspection created: {output_path}")
+
+
+@app.command("generate-map")
+def generate_map(
+    workspace: Workspace,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", exists=True, dir_okay=False, help="Versioned YAML config."),
+    ] = None,
+) -> None:
+    """Generate the Stage 2 preliminary lane model for WORKSPACE."""
+    try:
+        config = (
+            load_config(config_path)
+            if config_path is not None
+            else ConverterConfig(config_version=1)
+        )
+        report_path = generate_lane_model(workspace=workspace, config=config)
+    except (GenerationError, ValueError, KeyError) as error:
+        typer.echo(f"Stage 2 failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(f"Stage 2 complete: {report_path}")
 
 
 if __name__ == "__main__":

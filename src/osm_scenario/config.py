@@ -34,6 +34,16 @@ class ConverterConfig(BaseModel):
     coordinate_origin: CoordinateOrigin | None = None
     coordinate_round_trip_tolerance_degrees: float = Field(default=1e-9, gt=0)
     lane_width_defaults: LaneWidthDefaults = Field(default_factory=LaneWidthDefaults)
+    default_speed_kph: float = Field(default=50.0, gt=0)
+    speed_defaults_kph: dict[str, float] = Field(
+        default_factory=lambda: {
+            "living_street": 20.0,
+            "motorway": 110.0,
+            "motorway_link": 60.0,
+            "residential": 50.0,
+            "service": 30.0,
+        }
+    )
     tag_inference: TagInferenceConfig = Field(default_factory=TagInferenceConfig)
 
 

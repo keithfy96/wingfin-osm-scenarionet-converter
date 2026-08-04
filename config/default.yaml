@@ -4,5 +4,12 @@ coordinate_origin: null
 coordinate_round_trip_tolerance_degrees: 1.0e-9
 lane_width_defaults:
   vehicle: 3.5
+default_speed_kph: 50.0
+speed_defaults_kph:
+  living_street: 20.0
+  motorway: 110.0
+  motorway_link: 60.0
+  residential: 50.0
+  service: 30.0
 tag_inference:
   infer_missing_lane_count: true

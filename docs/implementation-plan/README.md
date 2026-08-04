@@ -28,9 +28,157 @@ audit HTML. The audit exports those decisions as `review.json`; Stage 4 then
 applies them automatically, regenerates the geometry, and produces
 `review/reviewed.osm` plus the reviewed lane model.
 
+## Progress, Outputs, and Verification
+
+Checkboxes represent the current repository state. A checked stage means its
+stage-level exit criteria are complete, not merely that implementation has
+started. Partially implemented stages keep their main checkbox unchecked and
+show completed increments beneath it.
+
+- [x] **Stage 1 - Acquire, normalize, and audit the source OSM**
+  - Outputs:
+    - `source/map.osm` - immutable OSM acquisition evidence.
+    - `source/manifest.json` - source and artifact checksums, selection policy,
+      projection metadata, and Stage 1 status.
+    - `normalized/road-network.graphml` and
+      `normalized/road-network-local.graphml` - selected directed road graph in
+      geographic and projected coordinates.
+    - `normalized/road-network.gpkg` and
+      `normalized/road-network-local.gpkg` - inspection derivatives.
+    - `reports/acquisition.json`, `reports/acquisition.md`,
+      `reports/stage-1b-data-audit.json`, and
+      `reports/stage-1b-data-audit.md` - machine-readable and human-readable
+      preflight/audit results.
+    - Stage 1 HTML views under `inspection/`, generated on request.
+  - Verify:
+    1. Run `osm-scenario fetch --osm-file INPUT.osm --workspace WORKSPACE
+       --driving-side left` (or use `right`; `--place` and `--bbox` are also
+       supported acquisition sources).
+    2. Confirm `source/manifest.json` contains `stage_1b.status: "passed"` and
+       that `reports/acquisition.json` contains `status: "passed"`.
+    3. Run `osm-scenario inspect --workspace WORKSPACE --view stage-1` and open
+       the reported HTML path.
+    4. Run `uv run pytest -q tests/unit/test_cli.py
+       tests/unit/test_normalization.py tests/unit/test_inspection.py` from the
+       repository when verifying the implementation itself.
+
+- [ ] **Stage 2 - Generate the preliminary lane model** (foundation complete;
+  topology-aware connectors and deeper traffic-control handling remain)
+  - [x] Versioned, JSON-safe lane-model schemas and stable string identifiers.
+  - [x] `generate-map` CLI command and Stage 1 checksum/status gates.
+  - [x] Segment lane centerlines, polygons, boundaries, neighbors, speeds,
+    turn-lane values, and preliminary entry/exit references.
+  - [x] Generation fingerprints, evidence checksums, manifest records, findings,
+    a JSON report, and a read-only preliminary review map.
+  - [x] Initial static signal candidates and restriction review findings.
+  - [ ] Topology-aware intersection connector geometry and lane mapping.
+  - [ ] Deterministic node-via and via-way restriction enforcement.
+  - [ ] Complete signal-to-lane association and stop-line candidate generation.
+  - [ ] Full Stage 2 topology and traffic-control fixture coverage.
+  - Outputs:
+    - `lane-model/preliminary.json` - deterministic projected lane model and
+      review findings.
+    - `reports/lane-model-generation.json` - generation status, versions,
+      checksums, fingerprint, and feature counts.
+    - `inspection/stage-2-map-review.html` - current read-only geometry preview;
+      Stage 3 will provide authoritative decision capture.
+    - `source/manifest.json` updated with the `stage_2` generation record and
+      output checksums.
+  - Verify the implemented foundation:
+    1. Run `osm-scenario generate-map --workspace WORKSPACE` after Stage 1
+       passes. Supply `--config config/default.yaml` when an explicit checked-in
+       configuration is desired.
+    2. Confirm the command reports `Stage 2 complete` and
+       `reports/lane-model-generation.json` contains `status: "passed"`.
+    3. Confirm the report fingerprint matches
+       `lane-model/preliminary.json.metadata.generation_fingerprint` and
+       `source/manifest.json.stage_2.generation_fingerprint`.
+    4. Open `inspection/stage-2-map-review.html` and visually check lane
+       centerlines and polygons. This preview does not yet record decisions.
+    5. Run `uv run pytest -q tests/unit/test_generation.py`; run
+       `uv run pytest -q` and `uv run ruff check .` for the full regression and
+       lint gates.
+  - Stage 2 is complete only when all unchecked items above are implemented,
+    the planned intersection/restriction/signal fixtures pass, and the audit
+    shows no silently selected ambiguous movement.
+
+- [ ] **Stage 3 - Record manual review decisions**
+  - Outputs:
+    - `inspection/stage-2-map-review.html` regenerated as the stateful review
+      application through `inspect --view review`.
+    - Browser-local autosave draft keyed by source checksum and generation
+      fingerprint; this is recoverable working state, not authoritative output.
+    - An explicitly exported `review.json` submission containing every decision,
+      evidence checksum, provenance field, and readiness state.
+  - Verify after implementation:
+    1. Run `osm-scenario inspect --workspace WORKSPACE --view review` and open
+       the reported single-file HTML.
+    2. Make a decision, reload the page, and confirm the non-authoritative draft
+       restores; then reset it and confirm the draft is removed.
+    3. Export `review.json`, reload it, and confirm the decisions round-trip
+       without changing finding IDs or evidence checksums.
+    4. Confirm export/promotion readiness is blocked while any blocking finding
+       is `unresolved`.
+    5. Change the Stage 2 generation fingerprint and confirm stale review data
+       is rejected or explicitly migrated only where both the finding ID and
+       evidence checksum still match.
+
+- [ ] **Stage 4 - Apply decisions and regenerate automatically**
+  - Outputs:
+    - `review/reviewed.osm` - OSM-native reviewed corrections, leaving
+      `source/map.osm` unchanged.
+    - `review/review.json` - authoritative decisions and non-OSM overrides.
+    - `lane-model/reviewed.json` - fully regenerated reviewed lane model.
+    - A preliminary-versus-reviewed comparison audit and its checksums.
+  - Verify after implementation:
+    1. Record the checksum of `source/map.osm`.
+    2. Run `osm-scenario apply-review --workspace WORKSPACE --submission
+       EXPORTED_REVIEW.json`.
+    3. Confirm all four output groups above exist and validate against their
+       versioned schemas.
+    4. Confirm the original source checksum is unchanged and reviewed geometry
+       was regenerated rather than patched directly in `preliminary.json`.
+    5. Confirm stale fingerprints, invalid references, and unresolved blockers
+       cause a non-zero command exit.
+
+- [ ] **Stage 5 - Validate the reviewed map**
+  - Outputs:
+    - JSON and Markdown map-validation reports under `reports/`, containing
+      direct OSM and generated-feature identifiers for every issue.
+    - A validation status/checksum recorded for the exact reviewed lane model.
+  - Verify after implementation:
+    1. Run `osm-scenario validate-map --workspace WORKSPACE`.
+    2. Confirm the validation report status is `passed`, references the checksum
+       of `lane-model/reviewed.json`, and has no unresolved errors or warnings.
+    3. Open the reviewed comparison audit and inspect representative ordinary
+       roads, merges, forks, roundabouts, and intersections.
+    4. Run the negative fixtures and confirm invalid polygons, dangling links,
+       forbidden movements, stale reviews, and unassociated signals fail.
+
+- [ ] **Stage 6 - Convert and validate the ScenarioNet dataset**
+  - Outputs:
+    - `scenario.pkl` - map-only ScenarioNet scenario.
+    - `dataset_summary.pkl` and `dataset_mapping.pkl` - ScenarioNet dataset
+      indices.
+    - Conversion/isolated-validation provenance identifying the reviewed model
+      checksum.
+  - Verify after implementation:
+    1. Run `osm-scenario convert --workspace WORKSPACE` only after Stage 5
+       passes.
+    2. Load the three pickle files in the lockfile-pinned isolated ScenarioNet
+       environment and run `ScenarioDescription.sanity_check()`.
+    3. Confirm `tracks == {}` and `dynamic_map_states == {}` and that map
+       features preserve lane geometry, topology, speed, boundaries, source OSM
+       IDs, and review provenance.
+    4. Load the dataset in MetaDrive, render the map, and verify routing crosses
+       representative reviewed intersections.
+
 ## Implementation Changes
 
 ### Stage 2 - Automatic Lane-Geometry and Connectivity Generation
+
+- [ ] **Stage 2 exit criteria complete.** See the Stage 2 progress checklist and
+  verification procedure above.
 
 - Add `osm-scenario generate-map --workspace ...`.
 - Verify the Stage 1 manifest and checksums, then read the immutable source OSM
@@ -65,6 +213,8 @@ applies them automatically, regenerates the geometry, and produces
   timing, actors, or traffic-light state sequences.
 
 ### Stage 3 - Stateful Manual Review Application
+
+- [ ] **Stage 3 exit criteria complete.**
 
 Build a stateful review application using the existing Stage 1 audit viewer as
 its visual foundation. This is the largest engineering stage in the plan, not
@@ -124,6 +274,8 @@ Deliver Stage 3 in three internal milestones:
 
 ### Stage 4 - Materialize Decisions and Regenerate
 
+- [ ] **Stage 4 exit criteria complete.**
+
 Add `osm-scenario apply-review --workspace ... --submission ...`.
 
 This stage is automatic. It consumes the `review.json` exported by Stage 3,
@@ -155,6 +307,8 @@ geometry edits.
 
 ### Stage 5 - Validate the Reviewed Map
 
+- [ ] **Stage 5 exit criteria complete.**
+
 Add `osm-scenario validate-map --workspace ...`.
 
 Validation must reject:
@@ -174,6 +328,8 @@ generated-feature identifiers. Warnings require an explicit review disposition
 before approval.
 
 ### Stage 6 - Convert to a Map-Only ScenarioNet Dataset
+
+- [ ] **Stage 6 exit criteria complete.**
 
 Add `osm-scenario convert --workspace ...`.
 
