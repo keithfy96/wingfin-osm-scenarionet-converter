@@ -85,6 +85,7 @@ def test_generate_lane_model_writes_deterministic_stage_2_artifacts(tmp_path: Pa
     assert first.restrictions
     assert first.restrictions[0].status in {"enforced", "already_satisfied"}
     assert all(connector.from_lane_id != connector.to_lane_id for connector in first.connectors)
+    assert all(connector.from_way_id != connector.to_way_id for connector in first.connectors)
     assert all(stop_line.source == "inferred" for stop_line in first.stop_lines)
     assert (workspace / "inspection" / "stage-2-map-review.html").is_file()
     html = (workspace / "inspection" / "stage-2-map-review.html").read_text()

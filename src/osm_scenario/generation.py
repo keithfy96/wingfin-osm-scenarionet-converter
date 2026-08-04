@@ -33,13 +33,14 @@ from osm_scenario.topology import (
     classify_movement,
     connector_curve,
     forbidden_by_node_restriction,
+    movement_family,
     movement_matches,
     restriction_roles,
     signed_turn_angle,
     via_way_resolution,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v2"
+GENERATOR_VERSION = "direct-osm-stage2-v3"
 LANE_MODEL_SCHEMA_VERSION = 2
 
 
@@ -403,6 +404,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
 
     lane_lookup = {lane.identifier: lane for lane in lanes}
     movement_candidates: list[MovementCandidate] = []
+    direct_continuations = 0
     for node_id in sorted(set(lanes_by_start) | set(lanes_by_end)):
         incoming = sorted(lanes_by_end.get(node_id, []))
         outgoing = sorted(lanes_by_start.get(node_id, []))
@@ -410,10 +412,29 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
             source = lane_lookup[from_id]
             source_line = LineString((point.x, point.y) for point in source.centerline)
             candidates_for_lane: list[MovementCandidate] = []
+            outgoing_groups: dict[tuple[str, tuple[str, ...]], list[LaneFeature]] = {}
             for to_id in outgoing:
-                if from_id == to_id:
-                    continue
                 target = lane_lookup[to_id]
+                group_key = (target.source_way_ids[0], tuple(target.source_edge))
+                outgoing_groups.setdefault(group_key, []).append(target)
+            for targets in outgoing_groups.values():
+                targets.sort(key=lambda item: (item.lane_index, item.identifier))
+                if (
+                    source.source_edge[0] == targets[0].source_edge[1]
+                    and source.source_edge[1] == targets[0].source_edge[0]
+                ):
+                    continue
+                target_index = (
+                    round(source.lane_index * (len(targets) - 1) / (source.lane_count - 1))
+                    if source.lane_count > 1 and len(targets) > 1
+                    else min(source.lane_index, len(targets) - 1)
+                )
+                target = targets[target_index]
+                if source.source_way_ids[0] == target.source_way_ids[0]:
+                    source.exit_lanes.append(target.identifier)
+                    target.entry_lanes.append(source.identifier)
+                    direct_continuations += 1
+                    continue
                 target_line = LineString((point.x, point.y) for point in target.centerline)
                 angle = signed_turn_angle(source_line, target_line)
                 movement = classify_movement(angle)
@@ -434,7 +455,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                     MovementCandidate(
                         junction_node_id=node_id,
                         from_lane_id=from_id,
-                        to_lane_id=to_id,
+                        to_lane_id=target.identifier,
                         from_way_id=source.source_way_ids[0],
                         to_way_id=target.source_way_ids[0],
                         movement=movement,
@@ -443,13 +464,17 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                         ambiguous=False,
                     )
                 )
-            ambiguous = len(candidates_for_lane) > 1
+            family_counts: dict[str, int] = {}
+            for candidate in candidates_for_lane:
+                family = movement_family(candidate.movement)
+                family_counts[family] = family_counts.get(family, 0) + 1
             for candidate in candidates_for_lane:
                 movement_candidates.append(
                     MovementCandidate(
                         **{
                             **candidate.__dict__,
-                            "ambiguous": ambiguous or 30 <= abs(candidate.angle_degrees) <= 40,
+                            "ambiguous": family_counts[movement_family(candidate.movement)] > 1
+                            or 30 <= abs(candidate.angle_degrees) <= 40,
                         }
                     )
                 )
@@ -685,6 +710,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
         "feature_counts": {
             "lanes": len(lanes),
             "connectors": len(connectors),
+            "direct_continuations": direct_continuations,
             "signals": len(signals),
             "stop_lines": len(stop_lines),
             "restrictions": len(restrictions),

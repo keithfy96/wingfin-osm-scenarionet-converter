@@ -57,6 +57,14 @@ def movement_matches(permission: str, movement: str) -> bool:
     return movement in aliases.get(permission, {permission})
 
 
+def movement_family(movement: str) -> str:
+    if movement in {"left", "slight_left"}:
+        return "left"
+    if movement in {"right", "slight_right"}:
+        return "right"
+    return movement
+
+
 def connector_curve(
     incoming: LineString, outgoing: LineString, junction_xy: tuple[float, float]
 ) -> LineString:
@@ -126,14 +134,17 @@ def via_way_resolution(
             for index, candidate in enumerate(candidates)
             if candidate.from_way_id == source and candidate.to_way_id == target
         ]
-        if len(matches) != 1:
-            return "review_required", set(), "via-way connector chain is missing or branching"
+        if not matches:
+            return "review_required", set(), "via-way connector chain is missing"
+        junctions = {candidates[index].junction_node_id for index in matches}
+        if len(junctions) != 1:
+            return "review_required", set(), "via-way connector chain is branching"
         matching_steps.append(matches)
     restriction = relation.tags.get("restriction", "")
     final_source = chain[-2]
     final_target = chain[-1]
     if restriction.startswith("no_"):
-        return "enforced", {matching_steps[-1][0]}, "unique prohibited via-way suffix removed"
+        return "enforced", set(matching_steps[-1]), "prohibited via-way suffix removed"
     if restriction.startswith("only_"):
         junction = candidates[matching_steps[-1][0]].junction_node_id
         removed = {

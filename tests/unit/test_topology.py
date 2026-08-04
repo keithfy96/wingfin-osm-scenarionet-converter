@@ -8,6 +8,7 @@ from osm_scenario.topology import (
     classify_movement,
     connector_curve,
     forbidden_by_node_restriction,
+    movement_family,
     signed_turn_angle,
     via_way_resolution,
 )
@@ -64,6 +65,12 @@ def test_classifies_movements(angle: float, movement: str) -> None:
     assert classify_movement(angle) == movement
 
 
+def test_groups_slight_turns_with_their_movement_family() -> None:
+    assert movement_family("slight_left") == "left"
+    assert movement_family("slight_right") == "right"
+    assert movement_family("through") == "through"
+
+
 def test_angle_and_connector_curve_are_geometry_based() -> None:
     incoming = LineString([(-1, 0), (0, 0)])
     outgoing = LineString([(0, 0), (0, 1)])
@@ -92,6 +99,31 @@ def test_unique_via_way_chain_is_enforced() -> None:
     )
     assert status == "enforced"
     assert removed == {1}
+
+
+def test_via_way_enforcement_accepts_multiple_lane_connectors_at_one_junction() -> None:
+    restriction = relation("no_straight_on", (("way", "b"),))
+    candidates = [
+        candidate("a", "b", "1"),
+        MovementCandidate(
+            **{
+                **candidate("a", "b", "1").__dict__,
+                "from_lane_id": "lane-a-2",
+                "to_lane_id": "lane-b-2",
+            }
+        ),
+        candidate("b", "c", "2"),
+        MovementCandidate(
+            **{
+                **candidate("b", "c", "2").__dict__,
+                "from_lane_id": "lane-b-2",
+                "to_lane_id": "lane-c-2",
+            }
+        ),
+    ]
+    status, removed, _ = via_way_resolution(restriction, candidates)
+    assert status == "enforced"
+    assert removed == {2, 3}
 
 
 def test_branching_via_way_chain_requires_review() -> None:
