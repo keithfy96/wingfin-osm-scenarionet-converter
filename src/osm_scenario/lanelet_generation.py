@@ -45,6 +45,23 @@ class GeneratedLane:
     turn_tokens: frozenset[str]
 
 
+@dataclass(frozen=True)
+class ConnectorCandidate:
+    node_id: str
+    source_lane: GeneratedLane
+    target_lane: GeneratedLane
+    movement: str
+    angle: float
+    enforcing_relation_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ViaWayRestriction:
+    relation_id: str
+    restriction_type: str
+    way_sequence: tuple[str, ...]
+
+
 class StableIds:
     """Allocate deterministic positive 63-bit IDs and reject collisions."""
 
@@ -337,6 +354,294 @@ def _restriction_allows(
     return True, applied
 
 
+def _via_way_restriction(relation: OsmRelation) -> ViaWayRestriction | None:
+    if relation.tags.get("type") != "restriction":
+        return None
+    from_ways = [
+        member.reference
+        for member in relation.members
+        if member.member_type == "way" and member.role == "from"
+    ]
+    via_ways = [
+        member.reference
+        for member in relation.members
+        if member.member_type == "way" and member.role == "via"
+    ]
+    to_ways = [
+        member.reference
+        for member in relation.members
+        if member.member_type == "way" and member.role == "to"
+    ]
+    if not via_ways:
+        return None
+    restriction_type = relation.tags.get("restriction", "")
+    sequence = (*from_ways, *via_ways, *to_ways)
+    return ViaWayRestriction(relation.identifier, restriction_type, sequence)
+
+
+def _candidate_key(candidate: ConnectorCandidate) -> tuple[int, int, str]:
+    return (candidate.source_lane.lanelet.id, candidate.target_lane.lanelet.id, candidate.node_id)
+
+
+def _transition_candidates(
+    candidates: list[ConnectorCandidate], from_way: str, to_way: str
+) -> list[ConnectorCandidate]:
+    return [
+        candidate
+        for candidate in candidates
+        if candidate.source_lane.source_way_id == from_way
+        and candidate.target_lane.source_way_id == to_way
+    ]
+
+
+def _transition_node(
+    candidates: list[ConnectorCandidate], from_way: str, to_way: str
+) -> tuple[str | None, str | None]:
+    matches = _transition_candidates(candidates, from_way, to_way)
+    nodes = {candidate.node_id for candidate in matches}
+    if not matches:
+        return None, "required generated transition is absent"
+    if len(nodes) != 1:
+        return None, "member ways do not have one exact generated junction"
+    return next(iter(nodes)), None
+
+
+def _prefix_is_unique(
+    candidates: list[ConnectorCandidate], sequence: tuple[str, ...], transition_index: int
+) -> bool:
+    """Prove that taking a transition carries the required restriction history."""
+    for index in range(transition_index, 0, -1):
+        node, error = _transition_node(candidates, sequence[index - 1], sequence[index])
+        if error or node is None:
+            return False
+        predecessors = {
+            candidate.source_lane.source_way_id
+            for candidate in candidates
+            if candidate.node_id == node and candidate.target_lane.source_way_id == sequence[index]
+        }
+        if predecessors != {sequence[index - 1]}:
+            return False
+    return True
+
+
+def _suffix_is_unique(
+    candidates: list[ConnectorCandidate], sequence: tuple[str, ...], transition_index: int
+) -> bool:
+    """Prove that taking a transition forces the rest of the restricted sequence."""
+    for index in range(transition_index + 1, len(sequence) - 1):
+        node, error = _transition_node(candidates, sequence[index], sequence[index + 1])
+        if error or node is None:
+            return False
+        successors = {
+            candidate.target_lane.source_way_id
+            for candidate in candidates
+            if candidate.node_id == node and candidate.source_lane.source_way_id == sequence[index]
+        }
+        if successors != {sequence[index + 1]}:
+            return False
+    return True
+
+
+def _review_resolution(
+    restriction: ViaWayRestriction, reason: str, *, missing_way_ids: list[str] | None = None
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "relation_id": restriction.relation_id,
+        "restriction_type": restriction.restriction_type,
+        "member_way_sequence": list(restriction.way_sequence),
+        "status": "review_required",
+        "topology_proof": reason,
+        "enforcing_relation_ids": [],
+        "removed_connector_count": 0,
+    }
+    if missing_way_ids:
+        result["missing_way_ids"] = missing_way_ids
+    return result
+
+
+def _resolve_via_way_restrictions(
+    *,
+    snapshot: OsmSnapshot,
+    candidates: list[ConnectorCandidate],
+    omitted_node_transitions: dict[tuple[str, str], set[str]],
+) -> tuple[list[ConnectorCandidate], list[dict[str, Any]], list[dict[str, Any]], int]:
+    """Filter connector candidates only when route topology proves that it is safe."""
+    active = list(candidates)
+    resolutions: list[dict[str, Any]] = []
+    corrections: list[dict[str, Any]] = []
+    omitted = 0
+    restrictions = sorted(
+        filter(None, (_via_way_restriction(item) for item in snapshot.relations.values())),
+        key=lambda item: item.relation_id,
+    )
+    for restriction in restrictions:
+        sequence = restriction.way_sequence
+        relation = snapshot.relations[restriction.relation_id]
+        from_count = sum(member.role == "from" for member in relation.members)
+        to_count = sum(member.role == "to" for member in relation.members)
+        missing = sorted({way_id for way_id in sequence if way_id not in snapshot.ways})
+        if missing:
+            resolution = _review_resolution(
+                restriction,
+                "restriction member ways are missing from source OSM",
+                missing_way_ids=missing,
+            )
+        elif len(sequence) < 3 or from_count != 1 or to_count != 1:
+            resolution = _review_resolution(
+                restriction,
+                "restriction must contain exactly one from, one or more via, and one to way",
+            )
+        elif not (
+            restriction.restriction_type.startswith("no_")
+            or restriction.restriction_type.startswith("only_")
+        ):
+            resolution = _review_resolution(restriction, "unsupported restriction type")
+        else:
+            transitions = list(zip(sequence, sequence[1:], strict=False))
+            source_junction_error = next(
+                (
+                    "consecutive member ways are disconnected"
+                    if not shared
+                    else "consecutive member ways share more than one source junction"
+                    for from_way, to_way in transitions
+                    for shared in [
+                        set(snapshot.ways[from_way].node_ids) & set(snapshot.ways[to_way].node_ids)
+                    ]
+                    if len(shared) != 1
+                ),
+                None,
+            )
+            absent_index = next(
+                (
+                    index
+                    for index, (from_way, to_way) in enumerate(transitions)
+                    if not _transition_candidates(active, from_way, to_way)
+                ),
+                None,
+            )
+            disconnected = next(
+                (
+                    error
+                    for from_way, to_way in transitions
+                    for _, error in [_transition_node(active, from_way, to_way)]
+                    if error and error != "required generated transition is absent"
+                ),
+                None,
+            )
+            if source_junction_error:
+                resolution = _review_resolution(restriction, source_junction_error)
+            elif disconnected:
+                resolution = _review_resolution(restriction, disconnected)
+            elif restriction.restriction_type.startswith("no_") and absent_index is not None:
+                from_way, to_way = transitions[absent_index]
+                enforcing = sorted(omitted_node_transitions.get((from_way, to_way), set()))
+                resolution = {
+                    "relation_id": restriction.relation_id,
+                    "restriction_type": restriction.restriction_type,
+                    "member_way_sequence": list(sequence),
+                    "status": "already_satisfied",
+                    "topology_proof": (
+                        f"required transition {from_way}->{to_way} is already absent after lane, "
+                        "direction, and node-restriction filtering"
+                    ),
+                    "enforcing_relation_ids": enforcing,
+                    "removed_connector_count": 0,
+                }
+            elif restriction.restriction_type.startswith("no_"):
+                removable: list[tuple[int, list[ConnectorCandidate]]] = []
+                for index, (from_way, to_way) in enumerate(transitions):
+                    matches = _transition_candidates(active, from_way, to_way)
+                    if _prefix_is_unique(active, sequence, index) and _suffix_is_unique(
+                        active, sequence, index
+                    ):
+                        removable.append((index, matches))
+                if removable:
+                    index, matches = min(removable, key=lambda item: (len(item[1]), item[0]))
+                    removed_keys = {_candidate_key(item) for item in matches}
+                    active = [item for item in active if _candidate_key(item) not in removed_keys]
+                    omitted += len(matches)
+                    from_way, to_way = transitions[index]
+                    resolution = {
+                        "relation_id": restriction.relation_id,
+                        "restriction_type": restriction.restriction_type,
+                        "member_way_sequence": list(sequence),
+                        "status": "topology_enforced",
+                        "topology_proof": (
+                            f"exact-junction transition {from_way}->{to_way} has the complete "
+                            "required prefix and suffix by unique predecessor/successor topology"
+                        ),
+                        "enforcing_relation_ids": [restriction.relation_id],
+                        "removed_connector_count": len(matches),
+                    }
+                else:
+                    resolution = _review_resolution(
+                        restriction, "no transition has both a proven restriction prefix and suffix"
+                    )
+            else:
+                last_index = len(transitions) - 1
+                from_way, allowed_way = transitions[last_index]
+                node, error = _transition_node(active, from_way, allowed_way)
+                alternatives = (
+                    []
+                    if node is None
+                    else [
+                        candidate
+                        for candidate in active
+                        if candidate.node_id == node
+                        and candidate.source_lane.source_way_id == from_way
+                        and candidate.target_lane.source_way_id != allowed_way
+                    ]
+                )
+                if error:
+                    resolution = _review_resolution(restriction, error)
+                elif not alternatives:
+                    resolution = {
+                        "relation_id": restriction.relation_id,
+                        "restriction_type": restriction.restriction_type,
+                        "member_way_sequence": list(sequence),
+                        "status": "already_satisfied",
+                        "topology_proof": (
+                            "no prohibited alternative leaves the final via way at its "
+                            "exact junction"
+                        ),
+                        "enforcing_relation_ids": [],
+                        "removed_connector_count": 0,
+                    }
+                elif _prefix_is_unique(active, sequence, last_index):
+                    removed_keys = {_candidate_key(item) for item in alternatives}
+                    active = [item for item in active if _candidate_key(item) not in removed_keys]
+                    omitted += len(alternatives)
+                    resolution = {
+                        "relation_id": restriction.relation_id,
+                        "restriction_type": restriction.restriction_type,
+                        "member_way_sequence": list(sequence),
+                        "status": "topology_enforced",
+                        "topology_proof": (
+                            "unique-predecessor topology proves the conditional route context"
+                        ),
+                        "enforcing_relation_ids": [restriction.relation_id],
+                        "removed_connector_count": len(alternatives),
+                    }
+                else:
+                    resolution = _review_resolution(
+                        restriction,
+                        "the final via way can be reached without the restricted prefix",
+                    )
+        resolutions.append(resolution)
+        if resolution["status"] == "review_required":
+            correction = {
+                "code": "via_way_restriction_review",
+                "priority": "high",
+                "confidence": "low",
+                "source_osm_relation_id": restriction.relation_id,
+                "reason": resolution["topology_proof"],
+            }
+            if resolution.get("missing_way_ids"):
+                correction["missing_way_ids"] = resolution["missing_way_ids"]
+            corrections.append(correction)
+    return active, resolutions, corrections, omitted
+
+
 def _connector_curve(
     incoming: LineString, outgoing: LineString, node_xy: tuple[float, float]
 ) -> LineString:
@@ -356,7 +661,13 @@ def _connector_curve(
 
 
 def _lanelet_attributes(
-    *, source_way_id: str, source_u: str, source_v: str, lane_index: int, tags: dict[str, str]
+    *,
+    source_way_id: str,
+    source_u: str,
+    source_v: str,
+    lane_index: int,
+    tags: dict[str, str],
+    spawn_eligible: bool,
 ) -> dict[str, str]:
     attributes = {
         "type": "lanelet",
@@ -368,6 +679,7 @@ def _lanelet_attributes(
         "source_osm_from_node": source_u,
         "source_osm_to_node": source_v,
         "source_lane_index": str(lane_index),
+        "spawn_eligible": "yes" if spawn_eligible else "no",
     }
     if tags.get("highway"):
         attributes["source_highway"] = tags["highway"]
@@ -393,6 +705,13 @@ def _report_markdown(report: dict[str, Any]) -> str:
         f"- Traffic-light associations: {counts['traffic_light_associations']}",
         f"- Mapped stop lines used: {counts['mapped_stop_lines']}",
         f"- Inferred stop lines: {counts['inferred_stop_lines']}",
+        f"- Via-way restrictions: {counts['via_way_restrictions_total']}",
+        "- Already satisfied via-way restrictions: "
+        f"{counts['via_way_restrictions_already_satisfied']}",
+        "- Topology-enforced via-way restrictions: "
+        f"{counts['via_way_restrictions_topology_enforced']}",
+        f"- Review-required via-way restrictions: {counts['via_way_restrictions_review_required']}",
+        f"- Topology-omitted movements: {counts['topology_omitted_movements']}",
         f"- Parser errors: {len(report['parser_errors'])}",
         "",
         "## Inference Summary",
@@ -475,6 +794,13 @@ def generate_preliminary_lanelet2(*, workspace: Path, config: ConverterConfig) -
     incoming: dict[str, list[GeneratedLane]] = {}
     outgoing: dict[str, list[GeneratedLane]] = {}
     lane_records: list[dict[str, Any]] = []
+    via_way_ids = {
+        member.reference
+        for relation in snapshot.relations.values()
+        if relation.tags.get("type") == "restriction"
+        for member in relation.members
+        if member.member_type == "way" and member.role == "via"
+    }
 
     for u, v, key, data in sorted(
         graph.edges(keys=True, data=True), key=lambda item: tuple(map(str, item[:3]))
@@ -556,6 +882,7 @@ def generate_preliminary_lanelet2(*, workspace: Path, config: ConverterConfig) -
                         source_v=str(v),
                         lane_index=lane_index,
                         tags=tags,
+                        spawn_eligible=way_id not in via_way_ids,
                     )
                 ),
             )
@@ -588,15 +915,15 @@ def generate_preliminary_lanelet2(*, workspace: Path, config: ConverterConfig) -
                     "lane_width_metres": width,
                     "lane_width_source": width_source,
                     "turn_tokens": sorted(generated.turn_tokens),
+                    "spawn_eligible": way_id not in via_way_ids,
                 }
             )
 
     node_restrictions = _node_restrictions(snapshot)
-    connector_count = 0
+    connector_candidates: list[ConnectorCandidate] = []
+    omitted_node_transitions: dict[tuple[str, str], set[str]] = {}
     restricted_movements = 0
-    ambiguous_connectors = 0
     for node_id in sorted(set(incoming) & set(outgoing)):
-        node_xy = (float(graph.nodes[int(node_id)]["x"]), float(graph.nodes[int(node_id)]["y"]))
         for source_lane in incoming[node_id]:
             candidates: list[tuple[GeneratedLane, str, float]] = []
             for target_lane in outgoing[node_id]:
@@ -605,13 +932,16 @@ def generate_preliminary_lanelet2(*, workspace: Path, config: ConverterConfig) -
                     continue
                 if not _turn_allowed(source_lane.turn_tokens, movement):
                     continue
-                allowed, _ = _restriction_allows(
+                allowed, enforcing_ids = _restriction_allows(
                     node_restrictions.get(node_id, []),
                     source_lane.source_way_id,
                     target_lane.source_way_id,
                 )
                 if not allowed:
                     restricted_movements += 1
+                    omitted_node_transitions.setdefault(
+                        (source_lane.source_way_id, target_lane.source_way_id), set()
+                    ).update(enforcing_ids)
                     continue
                 candidates.append((target_lane, movement, angle))
 
@@ -627,88 +957,108 @@ def generate_preliminary_lanelet2(*, workspace: Path, config: ConverterConfig) -
                     if candidate[0].lane_index == source_lane.lane_index
                 ]
                 candidates = same_index or same_way[:1]
-            for target_lane, movement, angle in candidates:
-                curve = _connector_curve(source_lane.centerline, target_lane.centerline, node_xy)
-                width = config.lane_width_defaults.vehicle
-                left = _offset(curve, width / 2)
-                right = _offset(curve, -width / 2)
-                namespace = f"connector:{node_id}:{source_lane.lanelet.id}:{target_lane.lanelet.id}"
-                connector = Lanelet(
-                    identifiers.get("lanelet", namespace),
-                    primitives.linestring(
-                        f"{namespace}:left",
-                        list(left.coords),
-                        {"type": "line_thin", "subtype": "solid"},
-                        reuse=True,
-                    ),
-                    primitives.linestring(
-                        f"{namespace}:right",
-                        list(right.coords),
-                        {"type": "line_thin", "subtype": "solid"},
-                        reuse=True,
-                    ),
-                    AttributeMap(
-                        {
-                            "type": "lanelet",
-                            "subtype": "road",
-                            "location": "urban",
-                            "participant:vehicle": "yes",
-                            "one_way": "yes",
-                            "source_osm_node_id": node_id,
-                            "source_from_way_id": source_lane.source_way_id,
-                            "source_to_way_id": target_lane.source_way_id,
-                            "turn_direction": movement,
-                        }
-                    ),
-                )
-                connector.centerline = primitives.linestring(
-                    f"{namespace}:center", list(curve.coords), {"type": "virtual"}
-                )
-                lanelet_map.add(connector)
-                connector_count += 1
-                is_ambiguous = _connector_is_ambiguous(len(candidates), angle)
-                lane_records.append(
-                    {
-                        "lanelet_id": connector.id,
-                        "kind": "connector",
-                        "source_osm_node_id": node_id,
-                        "from_lanelet_id": source_lane.lanelet.id,
-                        "to_lanelet_id": target_lane.lanelet.id,
-                        "movement": movement,
-                        "turn_angle_degrees": round(angle, 3),
-                        "confidence": "low" if is_ambiguous else "medium",
-                    }
-                )
-                if is_ambiguous:
-                    ambiguous_connectors += 1
-                    corrections.append(
-                        {
-                            "code": "ambiguous_connector",
-                            "priority": "high",
-                            "confidence": "low",
-                            "generated_lanelet_id": connector.id,
-                            "source_osm_node_id": node_id,
-                            "reason": (
-                                "multiple permitted outgoing movements or borderline turn angle"
-                            ),
-                        }
-                    )
+            connector_candidates.extend(
+                ConnectorCandidate(node_id, source_lane, target_lane, movement, angle)
+                for target_lane, movement, angle in candidates
+            )
 
-    unsupported_restrictions = []
-    for relation in snapshot.relations.values():
-        if relation.tags.get("type") != "restriction":
-            continue
-        if any(member.member_type == "way" and member.role == "via" for member in relation.members):
-            unsupported_restrictions.append(relation.identifier)
-            corrections.append(
+    (
+        connector_candidates,
+        restriction_resolutions,
+        restriction_corrections,
+        topology_omitted_movements,
+    ) = _resolve_via_way_restrictions(
+        snapshot=snapshot,
+        candidates=connector_candidates,
+        omitted_node_transitions=omitted_node_transitions,
+    )
+    corrections.extend(restriction_corrections)
+
+    connector_count = 0
+    ambiguous_connectors = 0
+    candidates_by_source: dict[int, list[ConnectorCandidate]] = {}
+    for candidate in connector_candidates:
+        candidates_by_source.setdefault(candidate.source_lane.lanelet.id, []).append(candidate)
+    for source_id in sorted(candidates_by_source):
+        source_candidates = candidates_by_source[source_id]
+        for candidate in sorted(
+            source_candidates,
+            key=lambda item: (item.node_id, item.target_lane.lanelet.id),
+        ):
+            node_id = candidate.node_id
+            source_lane = candidate.source_lane
+            target_lane = candidate.target_lane
+            movement = candidate.movement
+            angle = candidate.angle
+            node_xy = (
+                float(graph.nodes[int(node_id)]["x"]),
+                float(graph.nodes[int(node_id)]["y"]),
+            )
+            curve = _connector_curve(source_lane.centerline, target_lane.centerline, node_xy)
+            width = config.lane_width_defaults.vehicle
+            left = _offset(curve, width / 2)
+            right = _offset(curve, -width / 2)
+            namespace = f"connector:{node_id}:{source_lane.lanelet.id}:{target_lane.lanelet.id}"
+            connector = Lanelet(
+                identifiers.get("lanelet", namespace),
+                primitives.linestring(
+                    f"{namespace}:left",
+                    list(left.coords),
+                    {"type": "line_thin", "subtype": "solid"},
+                    reuse=True,
+                ),
+                primitives.linestring(
+                    f"{namespace}:right",
+                    list(right.coords),
+                    {"type": "line_thin", "subtype": "solid"},
+                    reuse=True,
+                ),
+                AttributeMap(
+                    {
+                        "type": "lanelet",
+                        "subtype": "road",
+                        "location": "urban",
+                        "participant:vehicle": "yes",
+                        "one_way": "yes",
+                        "source_osm_node_id": node_id,
+                        "source_from_way_id": source_lane.source_way_id,
+                        "source_to_way_id": target_lane.source_way_id,
+                        "turn_direction": movement,
+                    }
+                ),
+            )
+            connector.centerline = primitives.linestring(
+                f"{namespace}:center", list(curve.coords), {"type": "virtual"}
+            )
+            lanelet_map.add(connector)
+            connector_count += 1
+            is_ambiguous = _connector_is_ambiguous(len(source_candidates), angle)
+            lane_records.append(
                 {
-                    "code": "via_way_restriction_review",
-                    "priority": "high",
-                    "confidence": "low",
-                    "source_osm_relation_id": relation.identifier,
-                    "reason": "via-way restrictions require route-context validation",
+                    "lanelet_id": connector.id,
+                    "kind": "connector",
+                    "source_osm_node_id": node_id,
+                    "from_lanelet_id": source_lane.lanelet.id,
+                    "to_lanelet_id": target_lane.lanelet.id,
+                    "movement": movement,
+                    "turn_angle_degrees": round(angle, 3),
+                    "confidence": "low" if is_ambiguous else "medium",
                 }
             )
+            if is_ambiguous:
+                ambiguous_connectors += 1
+                corrections.append(
+                    {
+                        "code": "ambiguous_connector",
+                        "priority": "high",
+                        "confidence": "low",
+                        "generated_lanelet_id": connector.id,
+                        "source_osm_node_id": node_id,
+                        "reason": (
+                            "multiple permitted outgoing movements or borderline turn angle"
+                        ),
+                    }
+                )
 
     signal_associations = 0
     inferred_stop_lines = 0
@@ -835,7 +1185,7 @@ def generate_preliminary_lanelet2(*, workspace: Path, config: ConverterConfig) -
         )
 
     report = {
-        "report_version": 1,
+        "report_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "status": "review_required" if corrections else "passed",
         "source": {
@@ -859,11 +1209,25 @@ def generate_preliminary_lanelet2(*, workspace: Path, config: ConverterConfig) -
             "inferred_stop_lines": inferred_stop_lines,
             "mapped_stop_lines": mapped_stop_lines,
             "restricted_movements_omitted": restricted_movements,
-            "unsupported_via_way_restrictions": len(unsupported_restrictions),
+            "topology_omitted_movements": topology_omitted_movements,
+            "via_way_restrictions_total": len(restriction_resolutions),
+            "via_way_restrictions_already_satisfied": sum(
+                item["status"] == "already_satisfied" for item in restriction_resolutions
+            ),
+            "via_way_restrictions_topology_enforced": sum(
+                item["status"] == "topology_enforced" for item in restriction_resolutions
+            ),
+            "via_way_restrictions_review_required": sum(
+                item["status"] == "review_required" for item in restriction_resolutions
+            ),
+            "unsupported_via_way_restrictions": sum(
+                item["status"] == "review_required" for item in restriction_resolutions
+            ),
             "ambiguous_connectors": ambiguous_connectors,
         },
         "parser_errors": parser_errors,
         "lanelets": lane_records,
+        "restriction_resolutions": restriction_resolutions,
         "inferences": inferences,
         "correction_queue": sorted(
             corrections,

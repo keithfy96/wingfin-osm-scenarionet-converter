@@ -244,9 +244,12 @@ summary. The Stage 1A WGS84 artifacts remain unchanged.
 - [x] Write positive, stable Lanelet2 IDs using Lanelet2 primitives and its writer rather than constructing XML manually.
 - [x] Produce `preliminary.osm`, an inference report, and a confidence-ranked correction queue.
 
-Current limitation: node-via restrictions are applied during connector generation,
-but via-way restrictions are placed in the high-priority correction queue pending
-route-context handling. Junction connectors are generated generically; the
+Node-via restrictions and provably safe via-way restrictions are applied during
+connector generation. Via-way relations are parsed as ordered source-way chains;
+the generator records whether each chain was already satisfied, enforced through
+exact-junction connector removal, or retained for review because its members or
+route context could not be proved. Restriction via-way lanelets are marked
+`spawn_eligible=no`. Junction connectors are generated generically; the
 explicit divided-road, merge, fork, T-junction, four-way, and roundabout cases
 remain unchecked until their individual geometry policies and tests exist.
 

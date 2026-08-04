@@ -70,7 +70,18 @@ Node-based restriction relations are checked:
 
 In the current mosque workspace generation, this removed 87 candidate movements.
 
-Restrictions using a `via` way are not currently applied automatically. Seven such restrictions in the current mosque workspace are placed in the correction queue because they require route context.
+Restrictions using one or more `via` ways are evaluated against the filtered
+connector topology before geometry is created. A relation is recognized when a
+required transition is already absent, and a connector is removed only when
+unique predecessor/successor topology proves that every route using that exact
+junction movement belongs to the prohibited sequence. `only_*` alternatives are
+removed only with equivalent unique-history proof.
+
+In the current mosque workspace, four of seven via-way relations are already
+satisfied by node restrictions, two are topology-enforced, and relation
+`15336555` remains in the correction queue because source ways `776369869` and
+`776369868` are missing. Via-way road lanelets are traversal-only and carry
+`spawn_eligible=no`.
 
 These counts describe the current mosque input and can change when its source OSM or conversion policy changes.
 
@@ -114,6 +125,7 @@ Review is required particularly when:
 - OSM does not provide usable `turn:lanes*` tags.
 - Different OSM ways meet and cannot use same-way lane-index matching.
 - A turn angle is close to a classification boundary.
-- A restriction uses a `via` way and needs route-level interpretation.
+- A via-way restriction has missing or disconnected members, or its route
+  history cannot be proved uniquely.
 
 The correction queue records these uncertain cases. It does not mean every listed connector is wrong; it means the source data is insufficient to confirm the generated lane-level movement automatically.
