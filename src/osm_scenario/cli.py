@@ -10,6 +10,10 @@ from osm_scenario.acquisition import AcquisitionError, acquire_osm
 from osm_scenario.config import ConverterConfig, load_config
 from osm_scenario.inspection import InspectionError, generate_inspection
 from osm_scenario.lanelet_generation import LaneletGenerationError, generate_preliminary_lanelet2
+from osm_scenario.lanelet_validation import (
+    LaneletValidationError,
+    validate_lanelet2_workspace,
+)
 from osm_scenario.logging import configure_logging
 from osm_scenario.normalization import NormalizationError, normalize_workspace
 
@@ -162,8 +166,12 @@ def inspect(
 @app.command("validate-lanelet2")
 def validate_lanelet2(workspace: Workspace) -> None:
     """Validate the reviewed Lanelet2 map in WORKSPACE."""
-    del workspace
-    _stage_pending(4)
+    try:
+        report_path = validate_lanelet2_workspace(workspace)
+    except (LaneletValidationError, ValueError, KeyError) as error:
+        typer.echo(f"Stage 4 failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(f"Stage 4 Lanelet2 validation passed: {report_path}")
 
 
 @app.command()
