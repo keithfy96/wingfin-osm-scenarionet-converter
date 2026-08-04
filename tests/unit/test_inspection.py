@@ -17,6 +17,10 @@ runner = CliRunner()
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "osm" / "tiny.osm"
 
 
+def _stage_3a_data(html: str) -> dict[str, object]:
+    return json.loads(html.split("const data=", 1)[1].split("; const summary=", 1)[0])
+
+
 def _workspace(tmp_path: Path) -> Path:
     workspace = tmp_path / "map-workspace"
     source = workspace / "source" / "map.osm"
@@ -73,6 +77,42 @@ def test_stage_3a_preliminary_inspection_is_searchable_and_checksum_bound(
     assert f'"to_lanelet_id":"{connector["to_lanelet_id"]}"' in html
     assert f'"lanelet_id":{connector["lanelet_id"]}' not in html
     assert '"linestring_id":"' in html
+    assert "map.createPane('reviewPointers')" in html
+    assert "style.zIndex=650" in html
+    assert "const pointerRenderer=L.svg({pane:'reviewPointers'})" in html
+    assert "reviewLines=L.geoJSON" in html
+    assert "const layer=L.featureGroup([reviewLines,pointers])" in html
+    assert "overlays[`${review.label} (${review.item_count})`]=layer" in html
+    assert "L.featureGroup([reviewLines,pointers]).addTo(map)" not in html
+    assert "overlays[`Pointers:" not in html
+    assert "pointToLayer:(feature,latlng)=>L.circleMarker" in html
+    assert "renderer:pointerRenderer" in html
+    assert "l.bindPopup(popup(f))" in html
+    assert "focusLanelets([f.properties.lanelet_id],false)" in html
+    assert "l.openPopup()" in html
+    assert "if(event.originalEvent)L.DomEvent.stop(event.originalEvent)" in html
+    assert "focusLanelets(f.properties.target_lanelet_ids||[])" in html
+    assert "function focusLayers(found,openPopup=true)" in html
+    assert "requestAnimationFrame(()=>found[0].openPopup())" in html
+    assert "layer.on('click',()=>focusLayers([layer]))" in html
+    assert "addIndex(laneletIndex,p.generated_lanelet_id,layer)" in html
+    data = _stage_3a_data(html)
+    for code in (
+        "ambiguous_connector",
+        "stop_line_inferred",
+        "traffic_signal_association_review",
+    ):
+        review = data["reviews"][code]
+        assert review["pointer_count"] == review["item_count"]
+        assert all(
+            feature["properties"]["location_accuracy"] == "exact"
+            for feature in review["pointers"]["features"]
+        )
+        assert all(
+            feature["properties"]["target_lanelet_ids"]
+            for feature in review["pointers"]["features"]
+        )
+    assert data["reviews"]["lane_count_ambiguous"]["pointer_count"] == 0
     report = json.loads(
         (workspace / "reports" / "inspection-stage-3a-preliminary.json").read_text()
     )
@@ -132,6 +172,15 @@ def test_stage_3a_maps_edge_and_relation_reviews_with_reasons(tmp_path: Path) ->
     assert "test relation needs route-context review" in html
     assert "from: way 10" in html
     assert "to: way 10" in html
+    data = _stage_3a_data(html)
+    via_pointer = data["reviews"]["via_way_restriction_review"]["pointers"][
+        "features"
+    ][0]
+    assert via_pointer["geometry"]["coordinates"] == [101.7001, 3.1501]
+    assert via_pointer["properties"]["location_accuracy"] == "exact"
+    assert via_pointer["properties"]["location_reason"] == "exact OSM via node"
+    assert via_pointer["properties"]["source_osm_relation_id"] == "20"
+    assert via_pointer["properties"]["target_lanelet_ids"]
     report = json.loads(
         (workspace / "reports" / "inspection-stage-3a-preliminary.json").read_text()
     )
@@ -141,6 +190,57 @@ def test_stage_3a_maps_edge_and_relation_reviews_with_reasons(tmp_path: Path) ->
         > 0
     )
     assert report["summary"]["unmapped_review_items"] == 0
+
+
+def test_stage_3a_marks_incomplete_via_way_pointer_as_approximate(
+    tmp_path: Path,
+) -> None:
+    workspace = _lanelet_workspace(tmp_path)
+    source_path = workspace / "source" / "map.osm"
+    source = source_path.read_text(encoding="utf-8")
+    source_path.write_text(
+        source.replace(
+            "</osm>",
+            """  <relation id="21">
+    <member type="way" ref="10" role="from" />
+    <member type="way" ref="999" role="via" />
+    <member type="way" ref="998" role="to" />
+    <tag k="type" v="restriction" />
+    <tag k="restriction" v="no_right_turn" />
+  </relation>
+</osm>""",
+        ),
+        encoding="utf-8",
+    )
+    generation_path = workspace / "reports" / "lanelet2-generation.json"
+    generation = json.loads(generation_path.read_text(encoding="utf-8"))
+    generation["correction_queue"].append(
+        {
+            "code": "via_way_restriction_review",
+            "confidence": "low",
+            "priority": "high",
+            "reason": "restriction member ways are missing from source OSM",
+            "missing_way_ids": ["998", "999"],
+            "source_osm_relation_id": "21",
+        }
+    )
+    generation_path.write_text(
+        json.dumps(generation, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    output = generate_inspection(
+        workspace=workspace, view="lanelet2", checkpoint="preliminary"
+    )
+
+    data = _stage_3a_data(output.read_text(encoding="utf-8"))
+    pointer = data["reviews"]["via_way_restriction_review"]["pointers"][
+        "features"
+    ][0]
+    properties = pointer["properties"]
+    assert properties["location_accuracy"] == "approximate"
+    assert "nearest available from way 10" in properties["location_reason"]
+    assert properties["missing_way_ids"] == ["998", "999"]
+    assert properties["target_lanelet_ids"]
 
 
 def test_stage_3a_recreates_only_its_own_artifacts(tmp_path: Path) -> None:

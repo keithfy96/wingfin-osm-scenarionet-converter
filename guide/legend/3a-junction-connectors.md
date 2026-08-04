@@ -129,3 +129,33 @@ Review is required particularly when:
   history cannot be proved uniquely.
 
 The correction queue records these uncertain cases. It does not mean every listed connector is wrong; it means the source data is insufficient to confirm the generated lane-level movement automatically.
+
+## How Review Locations Are Shown
+
+Each Stage 3A review category is one optional entry in the map's layer control.
+Selecting a category such as **Ambiguous connectors** shows its colored
+full-lane overlays and matching circle pointers together; deselecting it hides
+both. The line shows all affected geometry, and the circle shows where to begin
+the review:
+
+- Ambiguous connector circles use the midpoint of the generated connector.
+- Inferred stop-line circles use the midpoint of the generated stop line.
+- Traffic-signal association circles use the midpoint of the generated
+  traffic-light geometry.
+- Via-way restriction circles use the exact via node or an available via-way
+  midpoint. If relation members are missing, the popup labels the circle
+  `approximate` and explains which nearest available member supplies the
+  fallback location.
+
+Each circle carries the issue type, reason, related Lanelet/OSM identifiers, and
+`location_accuracy`. Clicking it highlights its affected lane or lanes in yellow
+and opens the underlying lane-data popup. Clicking a colored review line also
+highlights its associated lane and opens the review object's popup, including its
+review code and reason. Source lanes outside the displayed review geometry remain
+directly clickable and highlightable. Pointer circles
+use an SVG overlay so the full pointer pane cannot intercept lane clicks; only a
+visible circle itself receives a pointer click. Their white border and higher map
+pane keep them visible above review lines. Lanelet,
+source way, source node, and source relation searches include both pointers and
+affected lane geometry. Ambiguous lane-count records retain their existing
+line-only behavior.

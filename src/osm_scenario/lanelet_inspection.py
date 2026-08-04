@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -72,6 +73,39 @@ def _feature(coordinates: list[list[float]], properties: dict[str, Any]) -> dict
     }
 
 
+def _point_feature(
+    coordinate: list[float], properties: dict[str, Any]
+) -> dict[str, Any]:
+    return {
+        "type": "Feature",
+        "geometry": {"type": "Point", "coordinates": coordinate},
+        "properties": properties,
+    }
+
+
+def _midpoint(coordinates: list[list[float]]) -> list[float]:
+    """Return the length-weighted midpoint of a WGS84 line."""
+    if len(coordinates) == 1:
+        return coordinates[0]
+    lengths = [
+        math.hypot(end[0] - start[0], end[1] - start[1])
+        for start, end in zip(coordinates, coordinates[1:], strict=False)
+    ]
+    target = sum(lengths) / 2
+    traversed = 0.0
+    for start, end, length in zip(
+        coordinates, coordinates[1:], lengths, strict=False
+    ):
+        if traversed + length >= target:
+            fraction = 0.0 if length == 0 else (target - traversed) / length
+            return [
+                start[0] + ((end[0] - start[0]) * fraction),
+                start[1] + ((end[1] - start[1]) * fraction),
+            ]
+        traversed += length
+    return coordinates[-1]
+
+
 def _collection(features: list[dict[str, Any]]) -> dict[str, Any]:
     return {"type": "FeatureCollection", "features": features}
 
@@ -123,7 +157,7 @@ def _render_html(*, data: dict[str, Any], summary: dict[str, Any]) -> str:
     .legend{{display:grid;grid-template-columns:18px 1fr;gap:8px;align-items:center}}
     .swatch{{height:5px}} .road{{background:#087f5b}} .connector{{background:#e67700}}
     .boundary{{background:#495057}} .stop{{background:#7048e8;height:8px}}
-    .review-swatch{{height:8px}}
+    .review-swatch{{height:8px}} .pointer-swatch{{height:14px;width:14px;border:3px solid #fff;border-radius:50%;box-shadow:0 0 0 1px #202428}}
     #map{{height:100%;min-height:520px}} .leaflet-popup-content{{max-height:260px;overflow:auto}}
     table{{border-collapse:collapse}} td{{padding:3px 7px;border-bottom:1px solid #e5e7e9;vertical-align:top}}
     @media(max-width:760px){{body{{grid-template-columns:1fr;grid-template-rows:auto minmax(520px,1fr)}} aside{{border-right:0;border-bottom:1px solid #c8cdd1}}}}
@@ -142,7 +176,7 @@ def _render_html(*, data: dict[str, Any], summary: dict[str, Any]) -> str:
     <div class="legend"><span class="swatch road"></span><span>Road lanelets</span><span class="swatch connector"></span><span>Junction connectors</span><span class="swatch boundary"></span><span>Lane boundaries</span><span class="swatch stop"></span><span>Stop lines and traffic-light geometry</span></div>
     <h2>Review queue</h2>
     <div class="legend" id="review-legend"></div>
-    <p class="muted">Review overlays are available in the layer control. Click any affected road or connector to see why review is required.</p>
+    <p class="muted">Each review-queue layer shows its affected geometry and matching circle pointers together. Pointers are included in identifier searches.</p>
   </aside>
   <main id="map"></main>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -158,18 +192,24 @@ def _render_html(*, data: dict[str, Any], summary: dict[str, Any]) -> str:
     const connectors=lines(data.connectors,{{color:'#e67700',weight:3,opacity:.8}}).addTo(map);
     const controls=lines(data.controls,{{color:'#7048e8',weight:7,opacity:1}}).addTo(map);
     const overlays={{'Road lanelets':roads,'Junction connectors':connectors,'Lane boundaries':boundaries,'Stop lines and traffic lights':controls}};
+    map.createPane('reviewPointers');map.getPane('reviewPointers').style.zIndex=650;
+    const pointerRenderer=L.svg({{pane:'reviewPointers'}});
     const reviewLayers={{}};
-    Object.entries(data.reviews).forEach(([code,review])=>{{const layer=lines(review.features,{{color:review.color,weight:8,opacity:.95,dashArray:review.dash_array}});reviewLayers[code]=layer;overlays[`${{review.label}} (${{review.item_count}})`]=layer;}});
+    Object.entries(data.reviews).forEach(([code,review])=>{{const reviewLines=L.geoJSON(review.features,{{style:{{color:review.color,weight:8,opacity:.95,dashArray:review.dash_array}},onEachFeature:(f,l)=>{{l.bindPopup(popup(f));l.on('click',event=>{{if(event.originalEvent)L.DomEvent.stop(event.originalEvent);focusLanelets([f.properties.lanelet_id],false);l.openPopup();}});}}}});const pointers=L.geoJSON(review.pointers,{{pointToLayer:(feature,latlng)=>L.circleMarker(latlng,{{renderer:pointerRenderer,pane:'reviewPointers',radius:8,color:'#fff',weight:3,fillColor:review.color,fillOpacity:1}}),onEachFeature:(f,l)=>l.on('click',event=>{{if(event.originalEvent)L.DomEvent.stop(event.originalEvent);focusLanelets(f.properties.target_lanelet_ids||[]);}})}});const layer=L.featureGroup([reviewLines,pointers]);reviewLayers[code]=layer;overlays[`${{review.label}} (${{review.item_count}})`]=layer;}});
     L.control.layers(null,overlays,{{collapsed:window.innerWidth<800}}).addTo(map);
     const all=L.featureGroup([roads,connectors,boundaries,controls]); const bounds=all.getBounds(); if(bounds.isValid())map.fitBounds(bounds.pad(.04));else map.setView([0,0],2);
-    const layerByLanelet=new Map(); const wayIndex=new Map(); const nodeIndex=new Map(); const relationIndex=new Map();
+    const laneletIndex=new Map(); const wayIndex=new Map(); const nodeIndex=new Map(); const relationIndex=new Map();
     function addIndex(index,key,layer){{if(key===null||key===undefined)return;key=String(key);if(!index.has(key))index.set(key,[]);index.get(key).push(layer);}}
-    [roads,connectors].forEach(group=>group.eachLayer(layer=>{{const p=layer.feature.properties;if(p.lanelet_id)layerByLanelet.set(String(p.lanelet_id),layer);addIndex(wayIndex,p.source_osm_way_id,layer);addIndex(nodeIndex,p.source_osm_node_id,layer);(p.review_relation_ids||[]).forEach(id=>addIndex(relationIndex,id,layer));}}));
+    [roads,connectors].forEach(group=>group.eachLayer(layer=>{{const p=layer.feature.properties;addIndex(laneletIndex,p.lanelet_id,layer);addIndex(wayIndex,p.source_osm_way_id,layer);addIndex(nodeIndex,p.source_osm_node_id,layer);(p.review_relation_ids||[]).forEach(id=>addIndex(relationIndex,id,layer));}}));
+    Object.values(reviewLayers).forEach(group=>group.eachLayer(subgroup=>{{if(!subgroup.eachLayer)return;subgroup.eachLayer(layer=>{{if(!layer.feature)return;const p=layer.feature.properties;addIndex(wayIndex,p.source_osm_way_id,layer);(p.missing_way_ids||[]).forEach(id=>addIndex(wayIndex,id,layer));addIndex(nodeIndex,p.source_osm_node_id,layer);addIndex(relationIndex,p.source_osm_relation_id,layer);addIndex(laneletIndex,p.generated_lanelet_id,layer);}});}}));
     const selection=L.featureGroup().addTo(map);
-    function find(){{selection.clearLayers();const kind=document.getElementById('search-kind').value;const value=document.getElementById('search-value').value.trim();let found=[];if(kind==='lanelet'){{const layer=layerByLanelet.get(value);if(layer)found=[layer];}}else{{const index={{way:wayIndex,node:nodeIndex,relation:relationIndex}}[kind];found=index.get(value)||[];}}const result=document.getElementById('search-result');if(!found.length){{result.textContent=`No ${{kind}} ${{value}} found in this preliminary map.`;return;}}found.forEach(layer=>L.geoJSON(layer.feature,{{style:{{color:'#ffe066',weight:11,opacity:1}}}}).addTo(selection));map.fitBounds(selection.getBounds().pad(.35));found[0].openPopup();result.textContent=`Found ${{found.length}} matching feature${{found.length===1?'':'s'}}. Highlighted yellow.`;}}
+    function focusLayers(found,openPopup=true){{selection.clearLayers();found.forEach(layer=>L.geoJSON(layer.feature,{{pointToLayer:(feature,latlng)=>L.circleMarker(latlng,{{radius:11,color:'#202428',weight:3,fillColor:'#ffe066',fillOpacity:1}}),style:{{color:'#ffe066',weight:11,opacity:1}}}}).addTo(selection));if(found.length){{map.fitBounds(selection.getBounds().pad(.35));if(openPopup)requestAnimationFrame(()=>found[0].openPopup());}}}}
+    function focusLanelets(ids,openPopup=true){{const found=[];ids.forEach(id=>(laneletIndex.get(String(id))||[]).forEach(layer=>{{if(layer.feature.geometry.type==='LineString'&&!layer.feature.properties.review_code&&!found.includes(layer))found.push(layer);}}));focusLayers(found,openPopup);}}
+    [roads,connectors].forEach(group=>group.eachLayer(layer=>layer.on('click',()=>focusLayers([layer]))));
+    function find(){{const kind=document.getElementById('search-kind').value;const value=document.getElementById('search-value').value.trim();const index={{lanelet:laneletIndex,way:wayIndex,node:nodeIndex,relation:relationIndex}}[kind];const found=index.get(value)||[];const result=document.getElementById('search-result');if(!found.length){{selection.clearLayers();result.textContent=`No ${{kind}} ${{value}} found in this preliminary map.`;return;}}focusLayers(found);result.textContent=`Found ${{found.length}} matching feature${{found.length===1?'':'s'}}. Highlighted yellow.`;}}
     document.getElementById('search-button').addEventListener('click',find);document.getElementById('search-value').addEventListener('keydown',e=>{{if(e.key==='Enter')find();}});
     document.getElementById('summary').innerHTML=`<dt>Status</dt><dd class="status">${{escapeHtml(summary.status)}}</dd><dt>Road lanelets</dt><dd>${{summary.road_lanelets}}</dd><dt>Connectors</dt><dd>${{summary.connector_lanelets}}</dd><dt>Boundaries</dt><dd>${{summary.boundaries}}</dd><dt>Review items</dt><dd>${{summary.review_items}}</dd><dt>Unmapped reviews</dt><dd>${{summary.unmapped_review_items}}</dd><dt>Map SHA-256</dt><dd title="${{summary.preliminary_sha256}}">${{summary.preliminary_sha256.slice(0,12)}}...</dd>`;
-    document.getElementById('review-legend').innerHTML=Object.entries(data.reviews).map(([code,review])=>`<span class="review-swatch" style="background:${{escapeHtml(review.color)}}"></span><span><code>${{escapeHtml(code)}}</code>: ${{review.item_count}}</span>`).join('');
+    document.getElementById('review-legend').innerHTML=Object.entries(data.reviews).map(([code,review])=>`<span class="pointer-swatch" style="background:${{escapeHtml(review.color)}}"></span><span><code>${{escapeHtml(code)}}</code>: ${{review.item_count}} items, ${{review.pointer_count}} pointers</span>`).join('');
   </script>
 </body>
 </html>
@@ -256,6 +296,12 @@ def generate_preliminary_inspection(*, workspace: Path) -> Path:
     review_features: dict[str, list[dict[str, Any]]] = {
         code: [] for code in REVIEW_LAYERS
     }
+    review_pointers: dict[str, list[dict[str, Any]]] = {
+        code: [] for code in REVIEW_LAYERS
+    }
+    lanelet_coordinates: dict[str, list[list[float]]] = {}
+    control_coordinates: dict[str, dict[str, list[list[float]]]] = {}
+    review_lanelet_ids: dict[int, set[str]] = {}
     mapped_review_item_ids: set[int] = set()
     for lanelet in lanelet_map.laneletLayer:
         lanelet_id = str(lanelet.id)
@@ -270,6 +316,8 @@ def generate_preliminary_inspection(*, workspace: Path) -> Path:
         lanelet_reviews = list(
             {item["review_item_id"]: item for item in lanelet_reviews}.values()
         )
+        for item in lanelet_reviews:
+            review_lanelet_ids.setdefault(item["review_item_id"], set()).add(lanelet_id)
         mapped_review_item_ids.update(item["review_item_id"] for item in lanelet_reviews)
         properties = _stringify_identifiers(
             {
@@ -286,8 +334,25 @@ def generate_preliminary_inspection(*, workspace: Path) -> Path:
                 ),
             }
         )
-        feature = _feature(_coordinates(lanelet.centerline, projector), properties)
+        centerline_coordinates = _coordinates(lanelet.centerline, projector)
+        lanelet_coordinates[lanelet_id] = centerline_coordinates
+        feature = _feature(centerline_coordinates, properties)
         (connectors if record.get("kind") == "connector" else roads).append(feature)
+        for regulatory_element in lanelet.regulatoryElements:
+            element_node_id = dict(regulatory_element.attributes).get(
+                "source_osm_node_id"
+            )
+            if element_node_id is None:
+                continue
+            controls_for_lanelet = control_coordinates.setdefault(lanelet_id, {})
+            if regulatory_element.stopLine:
+                controls_for_lanelet["stop_line_inferred"] = _coordinates(
+                    regulatory_element.stopLine, projector
+                )
+            if regulatory_element.trafficLights:
+                controls_for_lanelet["traffic_signal_association_review"] = (
+                    _coordinates(regulatory_element.trafficLights[0], projector)
+                )
         for code in sorted({item["code"] for item in lanelet_reviews}):
             code_items = [item for item in lanelet_reviews if item["code"] == code]
             review_features[code].append(
@@ -305,6 +370,113 @@ def generate_preliminary_inspection(*, workspace: Path) -> Path:
                             }
                         ),
                     },
+                )
+            )
+
+    def pointer_properties(
+        item: dict[str, Any], *, accuracy: str, location_reason: str
+    ) -> dict[str, Any]:
+        return _stringify_identifiers(
+            {
+                **{key: value for key, value in item.items() if key != "review_item_id"},
+                "issue_type": REVIEW_LAYERS[item["code"]]["label"],
+                "location_accuracy": accuracy,
+                "location_reason": location_reason,
+                "target_lanelet_ids": sorted(
+                    review_lanelet_ids.get(item["review_item_id"], set())
+                ),
+            }
+        )
+
+    for item in review_items:
+        code = item["code"]
+        if code == "lane_count_ambiguous":
+            continue
+        coordinate: list[float] | None = None
+        accuracy = "exact"
+        location_reason = ""
+        lanelet_id = item.get("generated_lanelet_id")
+        if code == "ambiguous_connector" and lanelet_id is not None:
+            coordinates = lanelet_coordinates.get(str(lanelet_id))
+            if coordinates:
+                coordinate = _midpoint(coordinates)
+                location_reason = "midpoint of the affected connector curve"
+        elif code in {
+            "stop_line_inferred",
+            "traffic_signal_association_review",
+        } and lanelet_id is not None:
+            coordinates = control_coordinates.get(str(lanelet_id), {}).get(code)
+            if coordinates:
+                coordinate = _midpoint(coordinates)
+                location_reason = (
+                    "midpoint of the generated stop-line geometry"
+                    if code == "stop_line_inferred"
+                    else "midpoint of the generated traffic-light geometry"
+                )
+        elif code == "via_way_restriction_review":
+            relation_id = item.get("source_osm_relation_id")
+            relation = snapshot.relations.get(str(relation_id)) if relation_id else None
+            if relation is not None:
+                via_nodes = [
+                    member
+                    for member in relation.members
+                    if member.role == "via" and member.member_type == "node"
+                ]
+                for member in via_nodes:
+                    node = snapshot.nodes.get(member.reference)
+                    if node is not None:
+                        coordinate = [node.longitude, node.latitude]
+                        location_reason = "exact OSM via node"
+                        break
+                if coordinate is None:
+                    via_ways = [
+                        member
+                        for member in relation.members
+                        if member.role == "via" and member.member_type == "way"
+                    ]
+                    available_via_ways = [
+                        (member, snapshot.ways.get(member.reference))
+                        for member in via_ways
+                        if snapshot.ways.get(member.reference) is not None
+                    ]
+                    if available_via_ways:
+                        member, way = available_via_ways[0]
+                        coordinates = [
+                            [snapshot.nodes[node_id].longitude, snapshot.nodes[node_id].latitude]
+                            for node_id in way.node_ids
+                            if node_id in snapshot.nodes
+                        ]
+                        if coordinates:
+                            coordinate = _midpoint(coordinates)
+                            location_reason = f"midpoint of OSM via way {member.reference}"
+                if coordinate is None:
+                    available_members = [
+                        (member, snapshot.ways.get(member.reference))
+                        for member in relation.members
+                        if member.member_type == "way"
+                        and snapshot.ways.get(member.reference) is not None
+                    ]
+                    if available_members:
+                        member, way = available_members[0]
+                        coordinates = [
+                            [snapshot.nodes[node_id].longitude, snapshot.nodes[node_id].latitude]
+                            for node_id in way.node_ids
+                            if node_id in snapshot.nodes
+                        ]
+                        if coordinates:
+                            coordinate = _midpoint(coordinates)
+                            accuracy = "approximate"
+                            location_reason = (
+                                f"approximate fallback on nearest available {member.role} "
+                                f"way {member.reference}; via geometry is unavailable"
+                            )
+        if coordinate is not None:
+            review_pointers[code].append(
+                _point_feature(
+                    coordinate,
+                    pointer_properties(
+                        item, accuracy=accuracy, location_reason=location_reason
+                    ),
                 )
             )
 
@@ -331,7 +503,9 @@ def generate_preliminary_inspection(*, workspace: Path) -> Path:
             **settings,
             "item_count": review_counts.get(code, 0),
             "mapped_feature_count": len(review_features[code]),
+            "pointer_count": len(review_pointers[code]),
             "features": _collection(review_features[code]),
+            "pointers": _collection(review_pointers[code]),
         }
         for code, settings in REVIEW_LAYERS.items()
     }
