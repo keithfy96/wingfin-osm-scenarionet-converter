@@ -62,29 +62,29 @@ show completed increments beneath it.
        tests/unit/test_normalization.py tests/unit/test_inspection.py` from the
        repository when verifying the implementation itself.
 
-- [ ] **Stage 2 - Generate the preliminary lane model** (foundation complete;
-  topology-aware connectors and deeper traffic-control handling remain)
+- [x] **Stage 2 - Generate the preliminary lane model**
   - [x] Versioned, JSON-safe lane-model schemas and stable string identifiers.
   - [x] `generate-map` CLI command and Stage 1 checksum/status gates.
   - [x] Segment lane centerlines, polygons, boundaries, neighbors, speeds,
     turn-lane values, and preliminary entry/exit references.
   - [x] Generation fingerprints, evidence checksums, manifest records, findings,
     a JSON report, and a read-only preliminary review map.
-  - [x] Initial static signal candidates and restriction review findings.
-  - [ ] Topology-aware intersection connector geometry and lane mapping.
-  - [ ] Deterministic node-via and via-way restriction enforcement.
-  - [ ] Complete signal-to-lane association and stop-line candidate generation.
-  - [ ] Full Stage 2 topology and traffic-control fixture coverage.
+  - [x] Static signal candidates and restriction review findings.
+  - [x] Topology-aware intersection connector geometry and lane mapping.
+  - [x] Deterministic node-via and proof-gated via-way restriction enforcement.
+  - [x] Signal-to-approaching-lane association and inferred stop-line candidates.
+  - [x] Stage 2 topology and traffic-control fixture coverage.
   - Outputs:
     - `lane-model/preliminary.json` - deterministic projected lane model and
       review findings.
     - `reports/lane-model-generation.json` - generation status, versions,
       checksums, fingerprint, and feature counts.
-    - `inspection/stage-2-map-review.html` - current read-only geometry preview;
-      Stage 3 will provide authoritative decision capture.
+    - `inspection/stage-2-map-review.html` - read-only lane, connector,
+      restriction-status, and stop-line preview; Stage 3 will provide
+      authoritative decision capture.
     - `source/manifest.json` updated with the `stage_2` generation record and
       output checksums.
-  - Verify the implemented foundation:
+  - Verify:
     1. Run `osm-scenario generate-map --workspace WORKSPACE` after Stage 1
        passes. Supply `--config config/default.yaml` when an explicit checked-in
        configuration is desired.
@@ -94,13 +94,15 @@ show completed increments beneath it.
        `lane-model/preliminary.json.metadata.generation_fingerprint` and
        `source/manifest.json.stage_2.generation_fingerprint`.
     4. Open `inspection/stage-2-map-review.html` and visually check lane
-       centerlines and polygons. This preview does not yet record decisions.
-    5. Run `uv run pytest -q tests/unit/test_generation.py`; run
+       centerlines, polygons, connector colors/statuses, and stop lines. This
+       preview does not record decisions; manual decisions start in Stage 3.
+    5. Run `uv run pytest -q tests/unit/test_generation.py
+       tests/unit/test_topology.py`; run
        `uv run pytest -q` and `uv run ruff check .` for the full regression and
        lint gates.
-  - Stage 2 is complete only when all unchecked items above are implemented,
-    the planned intersection/restriction/signal fixtures pass, and the audit
-    shows no silently selected ambiguous movement.
+  - Completed: ambiguous movements are emitted as `review_required`, forbidden
+    movements are retained as inspectable evidence but excluded from active
+    lane links, and the topology/restriction/signal fixtures pass.
 
 - [ ] **Stage 3 - Record manual review decisions**
   - Outputs:
@@ -177,7 +179,7 @@ show completed increments beneath it.
 
 ### Stage 2 - Automatic Lane-Geometry and Connectivity Generation
 
-- [ ] **Stage 2 exit criteria complete.** See the Stage 2 progress checklist and
+- [x] **Stage 2 exit criteria complete.** See the Stage 2 progress checklist and
   verification procedure above.
 
 - Add `osm-scenario generate-map --workspace ...`.

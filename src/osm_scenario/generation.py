@@ -16,6 +16,7 @@ from shapely.geometry import LineString, Polygon
 from osm_scenario.config import ConverterConfig
 from osm_scenario.ids import deterministic_id
 from osm_scenario.lane_model import (
+    ConnectorFeature,
     GenerationMetadata,
     LaneBoundary,
     LaneFeature,
@@ -24,11 +25,22 @@ from osm_scenario.lane_model import (
     RestrictionEffect,
     ReviewFinding,
     SignalAssociation,
+    StopLine,
 )
 from osm_scenario.osm_source import ONEWAY_VALUES, read_osm_snapshot
+from osm_scenario.topology import (
+    MovementCandidate,
+    classify_movement,
+    connector_curve,
+    forbidden_by_node_restriction,
+    movement_matches,
+    restriction_roles,
+    signed_turn_angle,
+    via_way_resolution,
+)
 
-GENERATOR_VERSION = "stage2-foundation-v1"
-LANE_MODEL_SCHEMA_VERSION = 1
+GENERATOR_VERSION = "direct-osm-stage2-v2"
+LANE_MODEL_SCHEMA_VERSION = 2
 
 
 class GenerationError(RuntimeError):
@@ -196,14 +208,47 @@ def _render_review_html(model: PreliminaryLaneModel) -> str:
                 },
             ]
         )
+    for connector in model.connectors:
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": [[point.x, point.y] for point in connector.centerline],
+                },
+                "properties": {
+                    "id": connector.identifier,
+                    "kind": "connector",
+                    "status": connector.status,
+                    "movement": connector.movement,
+                    "source": f"{connector.from_way_id} -> {connector.to_way_id}",
+                },
+            }
+        )
+    for stop_line in model.stop_lines:
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": [[point.x, point.y] for point in stop_line.points],
+                },
+                "properties": {
+                    "id": stop_line.identifier,
+                    "kind": "stop_line",
+                    "status": stop_line.status,
+                    "source": stop_line.source_node_id,
+                },
+            }
+        )
     payload = json.dumps({"type": "FeatureCollection", "features": features}).replace("</", "<\\/")
     return f"""<!doctype html>
 <html><head><meta charset=\"utf-8\"><title>Stage 2 map review</title>
 <link rel=\"stylesheet\" href=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css\">
 <style>html,body,#map{{height:100%;margin:0}} .summary{{position:absolute;z-index:1000;top:12px;right:12px;background:white;padding:10px;border-radius:6px;font:14px sans-serif}}</style></head>
-<body><div id=\"map\"></div><div class=\"summary\">Lanes: {len(model.lanes)}<br>Findings: {len(model.findings)}</div>
+<body><div id=\"map\"></div><div class=\"summary\">Stage 2 read-only inspection<br>Lanes: {len(model.lanes)}<br>Connectors: {len(model.connectors)}<br>Signals: {len(model.signals)}<br>Stop lines: {len(model.stop_lines)}<br>Restrictions: {len(model.restrictions)}<br>Findings: {len(model.findings)}</div>
 <script src=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\"></script><script>
-const data={payload}; const map=L.map('map',{{crs:L.CRS.Simple}}); const layer=L.geoJSON(data,{{style:f=>f.properties.kind==='lane'?{{color:'#277da1',weight:1,fillOpacity:.25}}:{{color:'#f94144',weight:2}}}}).addTo(map); map.fitBounds(layer.getBounds().pad(.05));
+const data={payload}; const map=L.map('map',{{crs:L.CRS.Simple}}); const layer=L.geoJSON(data,{{style:f=>f.properties.kind==='lane'?{{color:'#277da1',weight:1,fillOpacity:.25}}:f.properties.kind==='stop_line'?{{color:'#f9c74f',weight:5}}:{{color:f.properties.status==='forbidden'?'#9b2226':f.properties.status==='review_required'?'#f8961e':'#43aa8b',weight:4,dashArray:f.properties.status==='review_required'?'6 4':null}},onEachFeature:(f,l)=>l.bindPopup('<b>'+f.properties.kind+'</b><br>'+f.properties.id+'<br>'+JSON.stringify(f.properties))}}).addTo(map); map.fitBounds(layer.getBounds().pad(.05));
 </script></body></html>"""
 
 
@@ -357,26 +402,144 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
             )
 
     lane_lookup = {lane.identifier: lane for lane in lanes}
+    movement_candidates: list[MovementCandidate] = []
     for node_id in sorted(set(lanes_by_start) | set(lanes_by_end)):
-        incoming = lanes_by_end.get(node_id, [])
-        outgoing = lanes_by_start.get(node_id, [])
-        for lane_id in incoming:
-            lane_lookup[lane_id].exit_lanes = sorted(
-                candidate for candidate in outgoing if candidate != lane_id
+        incoming = sorted(lanes_by_end.get(node_id, []))
+        outgoing = sorted(lanes_by_start.get(node_id, []))
+        for from_id in incoming:
+            source = lane_lookup[from_id]
+            source_line = LineString((point.x, point.y) for point in source.centerline)
+            candidates_for_lane: list[MovementCandidate] = []
+            for to_id in outgoing:
+                if from_id == to_id:
+                    continue
+                target = lane_lookup[to_id]
+                target_line = LineString((point.x, point.y) for point in target.centerline)
+                angle = signed_turn_angle(source_line, target_line)
+                movement = classify_movement(angle)
+                if source.turn_permissions and not any(
+                    movement_matches(permission, movement) for permission in source.turn_permissions
+                ):
+                    continue
+                graph_node_id = next(key for key in graph.nodes if str(key) == node_id)
+                curve = connector_curve(
+                    source_line,
+                    target_line,
+                    (
+                        float(graph.nodes[graph_node_id]["x"]),
+                        float(graph.nodes[graph_node_id]["y"]),
+                    ),
+                )
+                candidates_for_lane.append(
+                    MovementCandidate(
+                        junction_node_id=node_id,
+                        from_lane_id=from_id,
+                        to_lane_id=to_id,
+                        from_way_id=source.source_way_ids[0],
+                        to_way_id=target.source_way_ids[0],
+                        movement=movement,
+                        angle_degrees=angle,
+                        centerline=curve,
+                        ambiguous=False,
+                    )
+                )
+            ambiguous = len(candidates_for_lane) > 1
+            for candidate in candidates_for_lane:
+                movement_candidates.append(
+                    MovementCandidate(
+                        **{
+                            **candidate.__dict__,
+                            "ambiguous": ambiguous or 30 <= abs(candidate.angle_degrees) <= 40,
+                        }
+                    )
+                )
+
+    relation_status: dict[str, tuple[str, set[int], str]] = {}
+    forbidden_indexes: set[int] = set()
+    for relation in sorted(snapshot.relations.values(), key=lambda item: item.identifier):
+        if relation.tags.get("type") != "restriction":
+            continue
+        roles = restriction_roles(relation)
+        via_way_ids = [value for kind, value in roles["via"] if kind == "way"]
+        if via_way_ids:
+            status, removed, reason = via_way_resolution(relation, movement_candidates)
+        else:
+            removed = {
+                index
+                for index, candidate in enumerate(movement_candidates)
+                if forbidden_by_node_restriction(candidate, relation)
+            }
+            status = "enforced" if removed else "already_satisfied"
+            reason = (
+                "node-via restriction removed matching movement"
+                if removed
+                else "prohibited node-via movement was already absent"
             )
-        for lane_id in outgoing:
-            lane_lookup[lane_id].entry_lanes = sorted(
-                candidate for candidate in incoming if candidate != lane_id
+        relation_status[relation.identifier] = (status, removed, reason)
+        forbidden_indexes.update(removed)
+
+    connectors: list[ConnectorFeature] = []
+    for index, candidate in enumerate(movement_candidates):
+        connector_id = deterministic_id(
+            "connector",
+            candidate.junction_node_id,
+            candidate.from_lane_id,
+            candidate.to_lane_id,
+        )
+        width = min(
+            lane_lookup[candidate.from_lane_id].width_m,
+            lane_lookup[candidate.to_lane_id].width_m,
+        )
+        status = (
+            "forbidden"
+            if index in forbidden_indexes
+            else "review_required"
+            if candidate.ambiguous
+            else "active"
+        )
+        connectors.append(
+            ConnectorFeature(
+                identifier=connector_id,
+                junction_node_id=candidate.junction_node_id,
+                from_lane_id=candidate.from_lane_id,
+                to_lane_id=candidate.to_lane_id,
+                from_way_id=candidate.from_way_id,
+                to_way_id=candidate.to_way_id,
+                movement=candidate.movement,
+                turn_angle_degrees=round(candidate.angle_degrees, 3),
+                status=status,
+                centerline=_points(candidate.centerline),
+                polygon=_polygon_points(
+                    candidate.centerline.buffer(width / 2, cap_style="flat", join_style="mitre")
+                ),
+            )
+        )
+        if status == "active":
+            lane_lookup[candidate.from_lane_id].exit_lanes.append(connector_id)
+            lane_lookup[candidate.to_lane_id].entry_lanes.append(connector_id)
+        elif status == "review_required":
+            findings.append(
+                _finding(
+                    rule="ambiguous_connector",
+                    severity="blocker",
+                    source_type="node",
+                    source_ids=[candidate.junction_node_id],
+                    affected_feature_ids=[connector_id],
+                    proposed_value={
+                        "movement": candidate.movement,
+                        "to_lane_id": candidate.to_lane_id,
+                    },
+                    confidence="low",
+                    reason="movement has multiple or borderline geometric interpretations",
+                )
             )
 
     signals: list[SignalAssociation] = []
     for node in sorted(snapshot.nodes.values(), key=lambda item: item.identifier):
         if node.tags.get("highway") != "traffic_signals" and "traffic_signals" not in node.tags:
             continue
-        associated = sorted(
-            set(lanes_by_start.get(node.identifier, []) + lanes_by_end.get(node.identifier, []))
-        )
-        status = "mapped" if len(associated) == 1 else "review_required"
+        associated = sorted(set(lanes_by_end.get(node.identifier, [])))
+        status = "mapped" if associated else "review_required"
         association_id = deterministic_id("signal-association", node.identifier, *associated)
         signals.append(
             SignalAssociation(
@@ -396,7 +559,46 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                     affected_feature_ids=associated,
                     proposed_value=associated,
                     confidence="low",
-                    reason="signal has zero or multiple candidate lanes",
+                    reason="signal has no generated approaching lane",
+                )
+            )
+
+    stop_lines: list[StopLine] = []
+    for signal in signals:
+        for lane_id in signal.lane_ids:
+            lane = lane_lookup[lane_id]
+            line = LineString((point.x, point.y) for point in lane.centerline)
+            distance = max(0.0, line.length - 2.0)
+            point = line.interpolate(distance)
+            before = line.interpolate(max(0.0, distance - 0.25))
+            dx, dy = point.x - before.x, point.y - before.y
+            norm = math.hypot(dx, dy) or 1.0
+            half = lane.width_m / 2
+            endpoints = [
+                Point2D(x=point.x - dy / norm * half, y=point.y + dx / norm * half),
+                Point2D(x=point.x + dy / norm * half, y=point.y - dx / norm * half),
+            ]
+            stop_line_id = deterministic_id("stop-line", signal.source_node_id, lane_id)
+            stop_lines.append(
+                StopLine(
+                    identifier=stop_line_id,
+                    source_node_id=signal.source_node_id,
+                    lane_ids=[lane_id],
+                    points=endpoints,
+                    source="inferred",
+                    status="review_required",
+                )
+            )
+            findings.append(
+                _finding(
+                    rule="inferred_stop_line",
+                    severity="warning",
+                    source_type="node",
+                    source_ids=[signal.source_node_id],
+                    affected_feature_ids=[stop_line_id, lane_id],
+                    proposed_value={"distance_upstream_m": 2.0},
+                    confidence="medium",
+                    reason="no explicit stop-line geometry was available",
                 )
             )
 
@@ -404,10 +606,13 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
     for relation in sorted(snapshot.relations.values(), key=lambda item: item.identifier):
         if relation.tags.get("type") != "restriction":
             continue
-        roles: dict[str, list[str]] = {"from": [], "via": [], "to": []}
-        for member in relation.members:
-            if member.role in roles:
-                roles[member.role].append(member.reference)
+        typed_roles = restriction_roles(relation)
+        roles = {
+            role: [reference for _kind, reference in members]
+            for role, members in typed_roles.items()
+        }
+        status, removed, reason = relation_status[relation.identifier]
+        forbidden_ids = [connectors[index].identifier for index in sorted(removed)]
         restriction = RestrictionEffect(
             identifier=deterministic_id("restriction-effect", relation.identifier),
             source_relation_id=relation.identifier,
@@ -415,25 +620,24 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
             from_way_ids=roles["from"],
             via_member_ids=roles["via"],
             to_way_ids=roles["to"],
+            status=status,
+            forbidden_connector_ids=forbidden_ids,
+            reason=reason,
         )
         restrictions.append(restriction)
-        affected = sorted(
-            lane.identifier
-            for lane in lanes
-            if set(lane.source_way_ids) & set(roles["from"] + roles["to"])
-        )
-        findings.append(
-            _finding(
-                rule="restriction_effect_review",
-                severity="blocker",
-                source_type="relation",
-                source_ids=[relation.identifier],
-                affected_feature_ids=affected,
-                proposed_value=restriction.model_dump(mode="json"),
-                confidence="low",
-                reason="restriction enforcement is not implemented in the Stage 2 foundation",
+        if status == "review_required":
+            findings.append(
+                _finding(
+                    rule="restriction_effect_review",
+                    severity="blocker",
+                    source_type="relation",
+                    source_ids=[relation.identifier],
+                    affected_feature_ids=forbidden_ids,
+                    proposed_value=restriction.model_dump(mode="json"),
+                    confidence="low",
+                    reason=reason,
+                )
             )
-        )
 
     metadata = GenerationMetadata(
         generator_version=GENERATOR_VERSION,
@@ -447,7 +651,9 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
     model = PreliminaryLaneModel(
         metadata=metadata,
         lanes=lanes,
+        connectors=connectors,
         signals=signals,
+        stop_lines=stop_lines,
         restrictions=restrictions,
         findings=sorted(findings, key=lambda item: item.identifier),
     )
@@ -478,9 +684,15 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
         },
         "feature_counts": {
             "lanes": len(lanes),
-            "connectors": 0,
+            "connectors": len(connectors),
             "signals": len(signals),
+            "stop_lines": len(stop_lines),
             "restrictions": len(restrictions),
+            "active_connectors": sum(item.status == "active" for item in connectors),
+            "forbidden_connectors": sum(item.status == "forbidden" for item in connectors),
+            "review_required_connectors": sum(
+                item.status == "review_required" for item in connectors
+            ),
             "findings": len(findings),
         },
     }

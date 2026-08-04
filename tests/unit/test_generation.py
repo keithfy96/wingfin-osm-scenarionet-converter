@@ -80,8 +80,19 @@ def test_generate_lane_model_writes_deterministic_stage_2_artifacts(tmp_path: Pa
     assert all(lane.polygon[0] == lane.polygon[-1] for lane in first.lanes)
     assert len({finding.identifier for finding in first.findings}) == len(first.findings)
     assert first.signals
+    assert first.stop_lines
+    assert first.connectors
     assert first.restrictions
+    assert first.restrictions[0].status in {"enforced", "already_satisfied"}
+    assert all(connector.from_lane_id != connector.to_lane_id for connector in first.connectors)
+    assert all(stop_line.source == "inferred" for stop_line in first.stop_lines)
     assert (workspace / "inspection" / "stage-2-map-review.html").is_file()
+    html = (workspace / "inspection" / "stage-2-map-review.html").read_text()
+    assert "connector" in html
+    assert "stop_line" in html
+    report = json.loads(report_path.read_text())
+    assert report["feature_counts"]["connectors"] == len(first.connectors)
+    assert report["feature_counts"]["stop_lines"] == len(first.stop_lines)
     assert first_manifest["stage_2"]["generation_fingerprint"] == (
         first.metadata.generation_fingerprint
     )

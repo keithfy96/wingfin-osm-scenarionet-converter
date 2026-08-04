@@ -45,12 +45,39 @@ class LaneFeature(BaseModel):
     turn_permissions: list[str] = Field(default_factory=list)
 
 
+class ConnectorFeature(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    identifier: str
+    junction_node_id: str
+    from_lane_id: str
+    to_lane_id: str
+    from_way_id: str
+    to_way_id: str
+    movement: Literal["reverse", "left", "slight_left", "through", "slight_right", "right"]
+    turn_angle_degrees: float
+    status: Literal["active", "forbidden", "review_required"]
+    centerline: list[Point2D]
+    polygon: list[Point2D]
+
+
 class SignalAssociation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     identifier: str
     source_node_id: str
     lane_ids: list[str]
+    status: Literal["mapped", "review_required"]
+
+
+class StopLine(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    identifier: str
+    source_node_id: str
+    lane_ids: list[str]
+    points: list[Point2D]
+    source: Literal["explicit", "inferred"]
     status: Literal["mapped", "review_required"]
 
 
@@ -63,7 +90,9 @@ class RestrictionEffect(BaseModel):
     from_way_ids: list[str]
     via_member_ids: list[str]
     to_way_ids: list[str]
-    status: Literal["review_required"] = "review_required"
+    status: Literal["enforced", "already_satisfied", "review_required"]
+    forbidden_connector_ids: list[str] = Field(default_factory=list)
+    reason: str
 
 
 class ReviewFinding(BaseModel):
@@ -98,7 +127,8 @@ class PreliminaryLaneModel(BaseModel):
 
     metadata: GenerationMetadata
     lanes: list[LaneFeature]
-    connectors: list[LaneFeature] = Field(default_factory=list)
+    connectors: list[ConnectorFeature] = Field(default_factory=list)
     signals: list[SignalAssociation] = Field(default_factory=list)
+    stop_lines: list[StopLine] = Field(default_factory=list)
     restrictions: list[RestrictionEffect] = Field(default_factory=list)
     findings: list[ReviewFinding] = Field(default_factory=list)
