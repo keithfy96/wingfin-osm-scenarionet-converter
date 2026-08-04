@@ -13,13 +13,9 @@ import osmnx as ox
 from shapely.geometry import LineString, Point, mapping
 from shapely.strtree import STRtree
 
-from osm_scenario.lanelet_inspection import (
-    PreliminaryInspectionError,
-    generate_preliminary_inspection,
-)
 from osm_scenario.osm_source import read_osm_snapshot, road_exclusion_reason
 
-InspectionView = Literal["source", "normalized", "audit", "stage-1", "lanelet2"]
+InspectionView = Literal["source", "normalized", "audit", "stage-1"]
 
 
 class InspectionError(RuntimeError):
@@ -530,23 +526,9 @@ def _render_html(*, title: str, data: dict[str, Any], summary: dict[str, Any]) -
 """
 
 
-def generate_inspection(
-    *, workspace: Path, view: InspectionView, checkpoint: str | None = None
-) -> Path:
+def generate_inspection(*, workspace: Path, view: InspectionView) -> Path:
     """Generate an inspectable HTML checkpoint for the requested stage view."""
     workspace = workspace.resolve()
-    if view == "lanelet2":
-        if checkpoint != "preliminary":
-            raise InspectionError(
-                "Stage 3A Lanelet2 inspection requires --checkpoint preliminary"
-            )
-        try:
-            return generate_preliminary_inspection(workspace=workspace)
-        except PreliminaryInspectionError as error:
-            raise InspectionError(str(error)) from error
-    if checkpoint is not None:
-        raise InspectionError("--checkpoint is only valid with --view lanelet2")
-
     manifest_path = workspace / "source" / "manifest.json"
     report_path = workspace / "reports" / "acquisition.json"
     if not manifest_path.is_file() or not report_path.is_file():
@@ -614,7 +596,7 @@ def generate_inspection(
                     f"- HTML: `{inspection_report['html']}`",
                     f"- Lane inference enabled: {str(audit['lane_count_coverage']['inference_enabled']).lower()}",
                     "",
-                    "The map separates source-correctable evidence from checks that require manual review or Stage 2 geometry.",
+                    "The map separates source-correctable evidence from checks that require manual review.",
                     "",
                 ]
             ),

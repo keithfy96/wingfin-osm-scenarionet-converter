@@ -1,14 +1,12 @@
 [project]
 name = "wingfin-osm-scenarionet-converter"
 version = "0.1.0"
-description = "Convert OpenStreetMap road layouts into standalone scenario datasets."
+description = "Acquire, normalize, audit, and inspect OpenStreetMap road data."
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
 dependencies = [
   "geopandas>=0.14,<2",
-  "lanelet2>=1.2,<2",
   "networkx>=3.2,<4",
-  "numpy>=1.26,<3",
   "osmnx>=2,<3",
   "pydantic>=2.8,<3",
   "pyproj>=3.6,<4",

@@ -1,4 +1,3 @@
-import hashlib
 import json
 from pathlib import Path
 
@@ -9,16 +8,11 @@ from osm_scenario.acquisition import acquire_osm
 from osm_scenario.cli import app
 from osm_scenario.config import ConverterConfig
 from osm_scenario.inspection import generate_inspection
-from osm_scenario.lanelet_generation import generate_preliminary_lanelet2
 from osm_scenario.normalization import normalize_workspace
 from osm_scenario.osm_source import read_osm_snapshot, select_public_driving_graph
 
 runner = CliRunner()
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "osm" / "tiny.osm"
-
-
-def _stage_3a_data(html: str) -> dict[str, object]:
-    return json.loads(html.split("const data=", 1)[1].split("; const summary=", 1)[0])
 
 
 def _workspace(tmp_path: Path) -> Path:
@@ -29,277 +23,6 @@ def _workspace(tmp_path: Path) -> Path:
     acquire_osm(workspace=workspace, driving_side="left", osm_file=source)
     normalize_workspace(workspace=workspace, config=ConverterConfig(config_version=1))
     return workspace
-
-
-def _lanelet_workspace(tmp_path: Path) -> Path:
-    workspace = _workspace(tmp_path)
-    generate_preliminary_lanelet2(
-        workspace=workspace, config=ConverterConfig(config_version=1)
-    )
-    return workspace
-
-
-def test_stage_3a_preliminary_inspection_is_searchable_and_checksum_bound(
-    tmp_path: Path,
-) -> None:
-    workspace = _lanelet_workspace(tmp_path)
-    preliminary = workspace / "lanelet2" / "preliminary.osm"
-    preliminary_sha256 = hashlib.sha256(preliminary.read_bytes()).hexdigest()
-
-    output = generate_inspection(
-        workspace=workspace, view="lanelet2", checkpoint="preliminary"
-    )
-
-    assert output == workspace / "inspection" / "stage-3a-preliminary-audit.html"
-    html = output.read_text(encoding="utf-8")
-    generation = json.loads(
-        (workspace / "reports" / "lanelet2-generation.json").read_text()
-    )
-    connector = next(
-        item for item in generation["lanelets"] if item["kind"] == "connector"
-    )
-    assert "Stage 3A Preliminary Audit" in html
-    assert "Road lanelets" in html
-    assert "Junction connectors" in html
-    assert "Review queue" in html
-    assert "ambiguous_connector" in html
-    assert "lane_count_ambiguous" in html
-    assert "stop_line_inferred" in html
-    assert "traffic_signal_association_review" in html
-    assert "via_way_restriction_review" in html
-    assert "Search identifier" in html
-    assert "Source way ID" in html
-    assert "Source node ID" in html
-    assert "Source relation ID" in html
-    assert "proximity-based signal-to-incoming-lanelet association requires review" in html
-    assert f'"lanelet_id":"{connector["lanelet_id"]}"' in html
-    assert f'"from_lanelet_id":"{connector["from_lanelet_id"]}"' in html
-    assert f'"to_lanelet_id":"{connector["to_lanelet_id"]}"' in html
-    assert f'"lanelet_id":{connector["lanelet_id"]}' not in html
-    assert '"linestring_id":"' in html
-    assert "map.createPane('reviewPointers')" in html
-    assert "style.zIndex=650" in html
-    assert "const pointerRenderer=L.svg({pane:'reviewPointers'})" in html
-    assert "reviewLines=L.geoJSON" in html
-    assert "const layer=L.featureGroup([reviewLines,pointers])" in html
-    assert "overlays[`${review.label} (${review.item_count})`]=layer" in html
-    assert "L.featureGroup([reviewLines,pointers]).addTo(map)" not in html
-    assert "overlays[`Pointers:" not in html
-    assert "pointToLayer:(feature,latlng)=>L.circleMarker" in html
-    assert "renderer:pointerRenderer" in html
-    assert "l.bindPopup(popup(f))" in html
-    assert "focusLanelets([f.properties.lanelet_id],false)" in html
-    assert "l.openPopup()" in html
-    assert "if(event.originalEvent)L.DomEvent.stop(event.originalEvent)" in html
-    assert "focusLanelets(f.properties.target_lanelet_ids||[])" in html
-    assert "function focusLayers(found,openPopup=true)" in html
-    assert "requestAnimationFrame(()=>found[0].openPopup())" in html
-    assert "layer.on('click',()=>focusLayers([layer]))" in html
-    assert "addIndex(laneletIndex,p.generated_lanelet_id,layer)" in html
-    data = _stage_3a_data(html)
-    for code in (
-        "ambiguous_connector",
-        "stop_line_inferred",
-        "traffic_signal_association_review",
-    ):
-        review = data["reviews"][code]
-        assert review["pointer_count"] == review["item_count"]
-        assert all(
-            feature["properties"]["location_accuracy"] == "exact"
-            for feature in review["pointers"]["features"]
-        )
-        assert all(
-            feature["properties"]["target_lanelet_ids"]
-            for feature in review["pointers"]["features"]
-        )
-    assert data["reviews"]["lane_count_ambiguous"]["pointer_count"] == 0
-    report = json.loads(
-        (workspace / "reports" / "inspection-stage-3a-preliminary.json").read_text()
-    )
-    assert report["stage"] == "3a"
-    assert report["checkpoint"] == "preliminary"
-    assert report["inputs"]["preliminary_lanelet2"]["sha256"] == preliminary_sha256
-    assert report["layers"]["roads"] > 0
-    assert report["layers"]["connectors"] > 0
-    assert report["layers"]["reviews"]["stop_line_inferred"]["items"] > 0
-    assert (
-        report["layers"]["reviews"]["traffic_signal_association_review"][
-            "mapped_features"
-        ]
-        > 0
-    )
-    assert "lane_count_inferred" not in report["summary"]["review_codes"]
-    assert "lane_width_inferred" not in report["summary"]["review_codes"]
-    assert report["summary"]["unmapped_review_items"] == 0
-    assert (workspace / "reports" / "inspection-stage-3a-preliminary.md").is_file()
-
-
-def test_stage_3a_maps_edge_and_relation_reviews_with_reasons(tmp_path: Path) -> None:
-    workspace = _lanelet_workspace(tmp_path)
-    generation_path = workspace / "reports" / "lanelet2-generation.json"
-    generation = json.loads(generation_path.read_text(encoding="utf-8"))
-    road = next(item for item in generation["lanelets"] if item["kind"] == "road")
-    generation["correction_queue"].extend(
-        [
-            {
-                "code": "lane_count_ambiguous",
-                "confidence": "low",
-                "priority": "high",
-                "reason": "test edge needs directional lane review",
-                "source_edge": road["source_edge"],
-                "source_osm_way_id": road["source_osm_way_id"],
-                "value": 2,
-            },
-            {
-                "code": "via_way_restriction_review",
-                "confidence": "low",
-                "priority": "high",
-                "reason": "test relation needs route-context review",
-                "source_osm_relation_id": "20",
-            },
-        ]
-    )
-    generation_path.write_text(
-        json.dumps(generation, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-
-    output = generate_inspection(
-        workspace=workspace, view="lanelet2", checkpoint="preliminary"
-    )
-
-    html = output.read_text(encoding="utf-8")
-    assert "test edge needs directional lane review" in html
-    assert "test relation needs route-context review" in html
-    assert "from: way 10" in html
-    assert "to: way 10" in html
-    data = _stage_3a_data(html)
-    via_pointer = data["reviews"]["via_way_restriction_review"]["pointers"][
-        "features"
-    ][0]
-    assert via_pointer["geometry"]["coordinates"] == [101.7001, 3.1501]
-    assert via_pointer["properties"]["location_accuracy"] == "exact"
-    assert via_pointer["properties"]["location_reason"] == "exact OSM via node"
-    assert via_pointer["properties"]["source_osm_relation_id"] == "20"
-    assert via_pointer["properties"]["target_lanelet_ids"]
-    report = json.loads(
-        (workspace / "reports" / "inspection-stage-3a-preliminary.json").read_text()
-    )
-    assert report["layers"]["reviews"]["lane_count_ambiguous"]["items"] == 1
-    assert (
-        report["layers"]["reviews"]["via_way_restriction_review"]["mapped_features"]
-        > 0
-    )
-    assert report["summary"]["unmapped_review_items"] == 0
-
-
-def test_stage_3a_marks_incomplete_via_way_pointer_as_approximate(
-    tmp_path: Path,
-) -> None:
-    workspace = _lanelet_workspace(tmp_path)
-    source_path = workspace / "source" / "map.osm"
-    source = source_path.read_text(encoding="utf-8")
-    source_path.write_text(
-        source.replace(
-            "</osm>",
-            """  <relation id="21">
-    <member type="way" ref="10" role="from" />
-    <member type="way" ref="999" role="via" />
-    <member type="way" ref="998" role="to" />
-    <tag k="type" v="restriction" />
-    <tag k="restriction" v="no_right_turn" />
-  </relation>
-</osm>""",
-        ),
-        encoding="utf-8",
-    )
-    generation_path = workspace / "reports" / "lanelet2-generation.json"
-    generation = json.loads(generation_path.read_text(encoding="utf-8"))
-    generation["correction_queue"].append(
-        {
-            "code": "via_way_restriction_review",
-            "confidence": "low",
-            "priority": "high",
-            "reason": "restriction member ways are missing from source OSM",
-            "missing_way_ids": ["998", "999"],
-            "source_osm_relation_id": "21",
-        }
-    )
-    generation_path.write_text(
-        json.dumps(generation, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-
-    output = generate_inspection(
-        workspace=workspace, view="lanelet2", checkpoint="preliminary"
-    )
-
-    data = _stage_3a_data(output.read_text(encoding="utf-8"))
-    pointer = data["reviews"]["via_way_restriction_review"]["pointers"][
-        "features"
-    ][0]
-    properties = pointer["properties"]
-    assert properties["location_accuracy"] == "approximate"
-    assert "nearest available from way 10" in properties["location_reason"]
-    assert properties["missing_way_ids"] == ["998", "999"]
-    assert properties["target_lanelet_ids"]
-
-
-def test_stage_3a_recreates_only_its_own_artifacts(tmp_path: Path) -> None:
-    workspace = _lanelet_workspace(tmp_path)
-    edited_audit = workspace / "inspection" / "stage-3c-edited-audit.html"
-    edited_report = workspace / "reports" / "inspection-stage-3c-edited.json"
-    edited_audit.parent.mkdir(parents=True, exist_ok=True)
-    edited_audit.write_text("stage 3c must survive", encoding="utf-8")
-    edited_report.write_text('{"stage":"3c"}\n', encoding="utf-8")
-    preliminary_before = hashlib.sha256(
-        (workspace / "lanelet2" / "preliminary.osm").read_bytes()
-    ).hexdigest()
-
-    first = generate_inspection(
-        workspace=workspace, view="lanelet2", checkpoint="preliminary"
-    )
-    second = generate_inspection(
-        workspace=workspace, view="lanelet2", checkpoint="preliminary"
-    )
-
-    assert first == second
-    assert edited_audit.read_text(encoding="utf-8") == "stage 3c must survive"
-    assert edited_report.read_text(encoding="utf-8") == '{"stage":"3c"}\n'
-    assert hashlib.sha256(
-        (workspace / "lanelet2" / "preliminary.osm").read_bytes()
-    ).hexdigest() == preliminary_before
-
-
-def test_stage_3a_rejects_untracked_preliminary_changes(tmp_path: Path) -> None:
-    workspace = _lanelet_workspace(tmp_path)
-    preliminary = workspace / "lanelet2" / "preliminary.osm"
-    preliminary.write_text(preliminary.read_text() + "\n", encoding="utf-8")
-
-    result = runner.invoke(
-        app,
-        [
-            "inspect",
-            "--workspace",
-            str(workspace),
-            "--view",
-            "lanelet2",
-            "--checkpoint",
-            "preliminary",
-        ],
-    )
-
-    assert result.exit_code == 1
-    assert "does not match the Stage 2 manifest" in result.output
-
-
-def test_lanelet2_inspection_requires_preliminary_checkpoint(tmp_path: Path) -> None:
-    workspace = _lanelet_workspace(tmp_path)
-
-    result = runner.invoke(
-        app, ["inspect", "--workspace", str(workspace), "--view", "lanelet2"]
-    )
-
-    assert result.exit_code == 1
-    assert "requires --checkpoint preliminary" in result.output
 
 
 def test_stage_1_inspection_contains_traceable_layers(tmp_path: Path) -> None:
@@ -390,7 +113,6 @@ def test_audit_view_maps_stage_1b_findings_and_discloses_later_checks(
     assert "Lane junction connector" not in html
     assert "Signal-to-lanelet association" not in html
     assert "Inferred stop-line placement" not in html
-    assert "Stage 2 Lanelet2 geometry does not exist yet" not in html
     assert "Lane inference enabled" in html
     assert "Search by OSM Way or Node ID" in html
     assert '<option value="node">Node</option>' in html
@@ -424,29 +146,12 @@ def test_inspect_cli_accepts_audit_view(tmp_path: Path) -> None:
     assert "stage-1-audit.html" in result.output
 
 
-def test_inspect_cli_reports_output_and_missing_lanelet2(tmp_path: Path) -> None:
+def test_inspect_cli_reports_output(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
 
     result = runner.invoke(app, ["inspect", "--workspace", str(workspace), "--view", "normalized"])
     assert result.exit_code == 0
     assert "Inspection created:" in result.output
-
-    missing = runner.invoke(
-        app,
-        [
-            "inspect",
-            "--workspace",
-            str(workspace),
-            "--view",
-            "lanelet2",
-            "--checkpoint",
-            "preliminary",
-        ],
-    )
-    assert missing.exit_code == 1
-    assert "Stage 3A requires completed Stage 2 artifacts" in missing.output
-    assert "Traceback" not in missing.output
-
 
 def test_source_audit_filters_non_driving_ways_and_preserves_all_tags(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)

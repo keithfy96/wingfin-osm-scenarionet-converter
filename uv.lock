@@ -108,14 +108,6 @@ wheels = [
 ]
 
 [[package]]
-name = "lanelet2"
-version = "1.2.3"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/8a/9e/228d8a1d55926329bd5b804f7b9d2993c14b6d0127bd46bf4f70459f12e5/lanelet2-1.2.3-cp310-cp310-manylinux_2_31_x86_64.whl", hash = "sha256:2c6f9c6a983b7188861c015b6300d890aba459f3dfb01b7e08ccc2a6360d3860", size = 4379833, upload-time = "2026-06-18T15:19:48.167Z" },
-]
-
-[[package]]
 name = "markdown-it-py"
 version = "4.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -543,9 +535,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "geopandas" },
-    { name = "lanelet2" },
     { name = "networkx" },
-    { name = "numpy" },
     { name = "osmnx" },
     { name = "pydantic" },
     { name = "pyproj" },
@@ -564,9 +554,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "geopandas", specifier = ">=0.14,<2" },
-    { name = "lanelet2", specifier = ">=1.2,<2" },
     { name = "networkx", specifier = ">=3.2,<4" },
-    { name = "numpy", specifier = ">=1.26,<3" },
     { name = "osmnx", specifier = ">=2,<3" },
     { name = "pydantic", specifier = ">=2.8,<3" },
     { name = "pyproj", specifier = ">=3.6,<4" },

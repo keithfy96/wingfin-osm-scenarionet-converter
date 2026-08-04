@@ -9,17 +9,12 @@ import typer
 from osm_scenario.acquisition import AcquisitionError, acquire_osm
 from osm_scenario.config import ConverterConfig, load_config
 from osm_scenario.inspection import InspectionError, generate_inspection
-from osm_scenario.lanelet_generation import LaneletGenerationError, generate_preliminary_lanelet2
-from osm_scenario.lanelet_validation import (
-    LaneletValidationError,
-    validate_lanelet2_workspace,
-)
 from osm_scenario.logging import configure_logging
 from osm_scenario.normalization import NormalizationError, normalize_workspace
 
 app = typer.Typer(
     name="osm-scenario",
-    help="Build editable Lanelet2 maps and standalone scenario datasets from OSM.",
+    help="Acquire, normalize, audit, and inspect OpenStreetMap road data.",
     no_args_is_help=True,
 )
 
@@ -34,22 +29,12 @@ class InspectView(str, Enum):
     normalized = "normalized"
     audit = "audit"
     stage_1 = "stage-1"
-    lanelet2 = "lanelet2"
-
-
-class InspectCheckpoint(str, Enum):
-    preliminary = "preliminary"
 
 
 Workspace = Annotated[
     Path,
     typer.Option("--workspace", "-w", help="Map workspace directory.", file_okay=False),
 ]
-
-
-def _stage_pending(stage: int) -> None:
-    typer.echo(f"This command is reserved for Stage {stage} and is not implemented yet.", err=True)
-    raise typer.Exit(code=2)
 
 
 @app.callback()
@@ -110,28 +95,6 @@ def fetch(
     typer.echo(f"Stage 1 complete: {report_path}")
 
 
-@app.command("generate-lanelet2")
-def generate_lanelet2(
-    workspace: Workspace,
-    config_path: Annotated[
-        Path | None,
-        typer.Option("--config", exists=True, dir_okay=False, help="Versioned YAML config."),
-    ] = None,
-) -> None:
-    """Generate a preliminary Lanelet2 map in WORKSPACE."""
-    try:
-        config = (
-            load_config(config_path)
-            if config_path is not None
-            else ConverterConfig(config_version=1)
-        )
-        output_path = generate_preliminary_lanelet2(workspace=workspace, config=config)
-    except (LaneletGenerationError, ValueError, KeyError) as error:
-        typer.echo(f"Stage 2 failed: {error}", err=True)
-        raise typer.Exit(code=1) from error
-    typer.echo(f"Stage 2 preliminary Lanelet2 created: {output_path}")
-
-
 @app.command()
 def inspect(
     workspace: Workspace,
@@ -139,53 +102,17 @@ def inspect(
         InspectView,
         typer.Option(
             "--view",
-            help="Checkpoint to render: source, normalized, audit, stage-1, or lanelet2.",
+            help="Stage 1 view to render: source, normalized, audit, or stage-1.",
         ),
     ] = InspectView.stage_1,
-    checkpoint: Annotated[
-        InspectCheckpoint | None,
-        typer.Option(
-            "--checkpoint",
-            help="Lanelet2 checkpoint to render. Stage 3A supports: preliminary.",
-        ),
-    ] = None,
 ) -> None:
     """Generate a browser-based visual checkpoint for WORKSPACE."""
     try:
-        output_path = generate_inspection(
-            workspace=workspace,
-            view=view.value,
-            checkpoint=checkpoint.value if checkpoint is not None else None,
-        )
+        output_path = generate_inspection(workspace=workspace, view=view.value)
     except (InspectionError, ValueError, KeyError) as error:
         typer.echo(f"Inspection failed: {error}", err=True)
         raise typer.Exit(code=1) from error
     typer.echo(f"Inspection created: {output_path}")
-
-
-@app.command("validate-lanelet2")
-def validate_lanelet2(workspace: Workspace) -> None:
-    """Validate the reviewed Lanelet2 map in WORKSPACE."""
-    try:
-        report_path = validate_lanelet2_workspace(workspace)
-    except (LaneletValidationError, ValueError, KeyError) as error:
-        typer.echo(f"Stage 4 failed: {error}", err=True)
-        raise typer.Exit(code=1) from error
-    typer.echo(f"Stage 4 Lanelet2 validation passed: {report_path}")
-
-
-@app.command()
-def convert(workspace: Workspace) -> None:
-    """Convert validated Lanelet2 into a standalone scenario dataset."""
-    del workspace
-    _stage_pending(5)
-
-
-@app.command("validate-scenario")
-def validate_scenario(workspace: Workspace) -> None:
-    """Validate and read back the standalone dataset in WORKSPACE."""
-    del workspace
-    _stage_pending(5)
 
 
 if __name__ == "__main__":

@@ -16,15 +16,15 @@ def test_top_level_help_lists_commands() -> None:
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
+    for command in ("fetch", "inspect"):
+        assert command in result.stdout
     for command in (
-        "fetch",
         "generate-lanelet2",
-        "inspect",
         "validate-lanelet2",
         "convert",
         "validate-scenario",
     ):
-        assert command in result.stdout
+        assert command not in result.stdout
 
 
 def test_fetch_requires_exactly_one_source() -> None:
@@ -102,15 +102,20 @@ def test_fetch_local_file_generates_reloadable_stage_1a_workspace(tmp_path: Path
     assert '<relation id="20">' in source.read_text(encoding="utf-8")
 
 
-def test_workspace_commands_require_workspace() -> None:
+def test_inspect_requires_workspace() -> None:
+    result = runner.invoke(app, ["inspect"])
+    assert result.exit_code != 0
+    assert "workspace" in result.output.lower()
+    assert "Traceback" not in result.output
+
+
+def test_removed_downstream_commands_are_unknown() -> None:
     for command in (
         "generate-lanelet2",
-        "inspect",
         "validate-lanelet2",
         "convert",
         "validate-scenario",
     ):
         result = runner.invoke(app, [command])
         assert result.exit_code != 0
-        assert "workspace" in result.output.lower()
-        assert "Traceback" not in result.output
+        assert "No such command" in result.output

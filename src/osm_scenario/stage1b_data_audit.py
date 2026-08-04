@@ -248,13 +248,12 @@ def _markdown_report(report: dict[str, Any]) -> str:
         "- Detection matches normalized tag keys or values exactly equal to `stop_line`; "
         "bus stops and transit relation roles are excluded.",
         "",
-        "## Downstream Conversion Risks",
+        "## Readiness Risks",
         "",
         "- Missing lane counts require an explicit inference or source correction "
         "before lanes are generated.",
-        "- Disconnected components can be represented in Lanelet2 but routes cannot "
-        "cross between them.",
-        "- This report does not generate or validate Lanelet2 geometry.",
+        "- Disconnected components prevent routes from crossing between them.",
+        "- This report audits source evidence; it does not generate lane geometry.",
         "",
     ]
     return "\n".join(lines)
@@ -279,7 +278,7 @@ def generate_stage1b_data_audit(
     acquisition_report: dict[str, Any],
     config: ConverterConfig,
 ) -> tuple[Path, Path]:
-    """Write JSON and Markdown facts needed before Lanelet2 generation."""
+    """Write Stage 1B source-evidence facts and readiness findings."""
     workspace = workspace.resolve()
     source_path = workspace / "source" / "map.osm"
     if not source_path.is_file():

@@ -26,13 +26,6 @@ class TagInferenceConfig(BaseModel):
     infer_missing_lane_count: bool = True
 
 
-class ScenarioRouteConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    start_lanelet_id: int | None = None
-    goal_lanelet_id: int | None = None
-
-
 class ConverterConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -42,8 +35,6 @@ class ConverterConfig(BaseModel):
     coordinate_round_trip_tolerance_degrees: float = Field(default=1e-9, gt=0)
     lane_width_defaults: LaneWidthDefaults = Field(default_factory=LaneWidthDefaults)
     tag_inference: TagInferenceConfig = Field(default_factory=TagInferenceConfig)
-    scenario_route: ScenarioRouteConfig = Field(default_factory=ScenarioRouteConfig)
-    output_duration_seconds: float = Field(default=20.0, gt=0)
 
 
 def load_config(path: Path) -> ConverterConfig:
