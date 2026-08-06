@@ -2,7 +2,7 @@
 
 `stage-2-generation-v1` documents how Stage 2 turns the immutable Stage 1 OSM
 snapshot and projected directed graph into the preliminary lane model. The
-current executable implementation is `direct-osm-stage2-v7` in
+current executable implementation is `direct-osm-stage2-v9` in
 [`generation.py`](../../src/osm_scenario/generation.py), with topology and
 restriction helpers in [`topology.py`](../../src/osm_scenario/topology.py).
 
@@ -60,6 +60,16 @@ but is also excluded from active lane links.
   two. Odd totals are low-confidence; absent lane counts default to one lane.
 - Explicit total width is divided across the applicable lanes. Otherwise the
   configured width for the road type is used and a finding is emitted.
+- Lanes are offset laterally from the OSM way centreline. A two-way way splits
+  its lanes between two directed edges, so each edge lays its block wholly on its
+  own side and the two together straddle the centreline. A way that carries its
+  whole carriageway on one directed edge — `oneway` or `junction=roundabout` —
+  has no opposite block to balance against, so its lane block is centred on the
+  centreline instead. Without this a one-way carriageway is drawn half its total
+  width off the road, and a single-lane ramp can come to rest exactly on top of
+  a neighbouring lane and read as a continuation into it.
+- Centring changes position only. Lane index 0 remains the lane against the road
+  centre, the offside lane, and index `count - 1` remains the kerbside one.
 - Explicit parseable `maxspeed` is preferred. Otherwise the configured
   road-class/default speed is used and a finding is emitted.
 - Lane IDs and all other generated IDs use `ids.deterministic_id()` and remain
@@ -114,9 +124,13 @@ side's lane of the approach, as described under lane-to-lane mapping below.
   kerb, the **nearside** lane. With left-hand traffic the nearside lane is the
   leftmost from the driver's seat; with right-hand traffic it is the rightmost.
   This is the driver's frame, not screen orientation.
-- A movement that leaves toward the kerb enters the target group's nearside lane;
-  one that leaves toward the centreline enters its offside lane. A straight-ahead
-  movement carries no side.
+- The side rule governs **turns**, not continuations. A movement that leaves toward
+  the kerb enters the target group's nearside lane; one that leaves toward the
+  centreline enters its offside lane. A straight-ahead movement carries no side.
+- A continuation never carries a side, whatever its angle. A carriageway that bends
+  past the side threshold at an ordinary shape node or way split is still the same
+  road, so its lanes keep their order; snapping them to the kerb would shuffle the
+  whole block sideways.
 - The same side governs which lane a movement may be emitted **from**. A nearside
   movement is generated only from the approach's nearside lane and an offside
   movement only from its offside lane, so an exit is not duplicated out of every
@@ -125,7 +139,10 @@ side's lane of the approach, as described under lane-to-lane mapping below.
   is explicit evidence; and a candidate a node-via restriction forbids, which is
   kept so the restriction still has something to act on and stays visible for
   audit. If the filter would leave an approach lane with no movement at all, its
-  straightest candidate is kept rather than stranding the lane.
+  straightest candidate is kept rather than stranding the lane — but a lane that
+  carries straight on is not stranded, so a direct continuation disables that
+  fallback. Otherwise every lane of an approach feeds the exit, which is exactly
+  what the side rule exists to prevent.
 - Source filtering runs before the ambiguity pass, so a movement left alone in its
   family after filtering is active rather than `review_required`.
 - Which side a movement takes is decided by `movement_side()` in
@@ -144,6 +161,34 @@ side's lane of the approach, as described under lane-to-lane mapping below.
 - Explicit `turn:lanes` permissions then remove incompatible movement
   candidates.
 
+## Junction geometry
+
+An OSM way ends on the centreline of the road it joins, because two ways must
+share a node to be connected. A lane must not be drawn stopping there: it would
+end in the middle of the opposing carriageway, pointing at through traffic,
+instead of reaching the lane it enters.
+
+- Where an **active** connector carries a `through` movement — a merge or a
+  diverge — and the two lanes are further apart than
+  `lane_geometry.merge_taper_min_gap_m`, the lane on the side with fewer lanes is
+  bent so its end meets its counterpart. The displacement is blended in over
+  `lane_geometry.merge_taper_length_m`, clamped to the lane's own length, so the
+  lane bends rather than steps sideways.
+- The through carriageway is never bent: only the minor side yields. An even split
+  is left alone, because there is nothing to choose between the two, and a real
+  turn is left alone because it ends at a stop line and its connector curve is
+  already the right shape.
+- Where several lanes merge into one, that lane can only begin in one place. The
+  remaining approaches keep their gap and their connectors span it.
+- A taper is geometry only. Movement classification, side selection and connector
+  status are all decided from the untapered OSM geometry first: letting a taper
+  change an angle would let it change the classification that selected it. The
+  generation report records `merge_tapers` so the adjustment is auditable.
+- A connector between two lanes that already meet has no gap to span and is drawn
+  as a short marker of fixed length back along the incoming lane, not to that
+  lane's previous vertex — a straight lane has only two, so the marker would
+  otherwise retrace the whole lane.
+
 ## Movement geometry and ambiguity
 
 Movement type is classified from the signed heading change:
@@ -157,6 +202,16 @@ Non-reverse candidates become `review_required` when multiple candidates from
 the same source lane belong to the same movement family, or when the angle is
 in the 30-to-40-degree through/turn boundary band. Restrictions can override
 that status to `forbidden`.
+
+A non-reverse candidate also becomes `review_required` when it turns at least
+`lane_selection.sharp_movement_review_degrees`, 130 degrees by default, and the
+source lane's `turn:lanes` names no permission matching its direction. A
+movement that sharp sends a driver back the way they came and deserves the same
+positive evidence the U-turn policy demands, but `reverse` starts only at 145
+degrees, so a turn a few degrees short of that would otherwise be asserted
+outright. The classification is untouched: the movement is still reported as
+`left` or `right`, and only its status moves. An explicit matching `turn:lanes`
+permission settles it and keeps the movement active.
 
 ## U-turn policy
 
@@ -225,7 +280,11 @@ recreates:
   artifact. It draws generated lanes, connector statuses, restrictions, and
   inferred stop lines on an OSM basemap, marks each lane with a chevron pointing
   along its direction of travel, and underlays the source OSM ways and nodes the
-  generation came from. A searchable, filterable finding queue focuses each
+  generation came from. Each connector is drawn as a lane-width band as well as a
+  centreline, so a movement stays legible where two lane polygons abut. A lane's
+  popup lists every link it has with the movement and status of each, so a
+  `review_required` candidate cannot be mistaken for an asserted connection.
+  A searchable, filterable finding queue focuses each
   finding on both the generated geometry it affects and the source way or node it
   was raised against; a finding sourced to a relation resolves to its member ways
   and nodes. Pasting a bare ID into the search box resolves it against the way,
@@ -239,7 +298,7 @@ application and does not export `review.json`.
 
 ## Current mosque interpretation
 
-With `direct-osm-stage2-v7`, the current mosque output intentionally contains
+With `direct-osm-stage2-v9`, the current mosque output intentionally contains
 review-required U-turn candidates at genuine decision nodes where OSM provides
 neither permission nor prohibition. Those findings are not generation errors;
 they expose legal uncertainty for Stage 3. An unexpectedly large number of

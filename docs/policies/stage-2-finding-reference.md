@@ -9,18 +9,18 @@ It is not, by itself, proof that the source or generated map is wrong.
 
 ## Snapshot
 
-- Generator: `direct-osm-stage2-v7`
+- Generator: `direct-osm-stage2-v9`
 - Generation fingerprint:
-  `319bdf74a97ea0d2d0bc36ce989d9ecb079e8fe2ffa32907eca131f3a46edc24`
+  `0794f9ac9f2f9847b5a44103de8ee1928cc1c7a7a5678dc1f77f6b1fa0417b07`
 - Source: [`preliminary.json`](../../workspaces/mosque/lane-model/preliminary.json)
-- Total findings: **3,164**
+- Total findings: **3,166**
 
 | Finding | Count | Share | Severity |
 | --- | ---: | ---: | --- |
 | `lane_width_default` | 1,117 | 35.3% | Warning |
 | `speed_default` | 974 | 30.8% | Warning |
 | `lane_count_inference` | 620 | 19.6% | 550 blockers; 70 warnings |
-| `ambiguous_connector` | 290 | 9.2% | Blocker |
+| `ambiguous_connector` | 292 | 9.2% | Blocker |
 | `lane_transition_count_mismatch` | 141 | 4.5% | Warning |
 | `inferred_stop_line` | 19 | 0.6% | Warning |
 | `signal_lane_association` | 2 | 0.1% | Blocker |
@@ -157,14 +157,15 @@ neighbors, `source_edge`, and `source_way_ids`.
 
 **Meaning and current scale.** This finding represents one generated
 intersection **connector** whose movement remains `review_required`. There are
-**290 findings (9.2%)**. Movement totals are 257 reverse, 23 through, and 10
+**292 findings (9.2%)**. Movement totals are 257 reverse, 23 through, and 12
 left/right/slight-turn connectors. The exact causes overlap: 257 are untagged
 reverse/U-turn candidates, 35 have multiple targets in the same movement
-family, and eight lie in the inclusive 30°–40° through/turn boundary band.
-Because a connector can satisfy more than one condition, these totals do not sum
-to 290. The mutually exclusive combinations are 251 reverse-only, 25
-duplicate-family-only, six reverse-plus-duplicate, four borderline-only, and
-four duplicate-plus-borderline.
+family, eight lie in the inclusive 30°–40° through/turn boundary band, and
+three double back past 130° without a `turn:lanes` permission. Because a
+connector can satisfy more than one condition, these totals do not sum to 292.
+The mutually exclusive combinations are 251 reverse-only, 24
+duplicate-family-only, six reverse-plus-duplicate, four borderline-only, four
+duplicate-plus-borderline, two sharp-only, and one duplicate-plus-sharp.
 
 Duplicate-family findings fell sharply once side-aware source filtering landed:
 a nearside exit is no longer emitted from the median lane as well as the
@@ -177,7 +178,12 @@ left movements share a `left` family, slight and ordinary right movements share
 a `right` family, while through and reverse retain their own families. A
 candidate is ambiguous when any of these is true: it is reverse and lane
 turn-tag evidence neither permits nor excludes a U-turn; its source lane has
-more than one target in the same family; or its absolute angle is 30°–40°.
+more than one target in the same family; its absolute angle is 30°–40°; or it
+is not reverse yet turns at least `lane_selection.sharp_movement_review_degrees`
+(130° by default) with no `turn:lanes` permission naming its direction. That
+last rule exists because `classify_movement` only calls a movement reverse past
+145°, so a turn a few degrees short of that doubles a driver back the way they
+came while escaping the U-turn evidence requirement entirely.
 Explicit `turn:lanes` evidence is applied before geometric fallback: matching
 evidence can activate a movement and other explicit turn evidence can exclude
 an unlisted reverse movement. OSM turn restrictions have final authority and
@@ -187,7 +193,7 @@ can make a connector forbidden.
 connectivity nor legal permission, and similar angles do not prove that two
 targets are duplicates. All are blockers because Stage 3 must decide whether
 the proposed movement exists and is allowed. “Ambiguous” is not synonymous
-with “U-turn”: 70 findings are non-reverse, and reverse is only one overlapping
+with “U-turn”: 35 findings are non-reverse, and reverse is only one overlapping
 cause. Nor is a reverse candidate automatically an illegal or erroneous
 U-turn.
 

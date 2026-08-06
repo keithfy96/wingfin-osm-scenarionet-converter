@@ -4,6 +4,7 @@ import pytest
 from shapely.geometry import LineString
 
 from osm_scenario.topology import (
+    COLLINEAR_STUB_METRES,
     MovementCandidate,
     classify_movement,
     connector_curve,
@@ -138,6 +139,22 @@ def test_angle_and_connector_curve_are_geometry_based() -> None:
     curve = connector_curve(incoming, outgoing, (0, 0))
     assert len(curve.coords) >= 2
     assert curve.coords[-1] == (0.0, 0.0)
+
+
+def test_collinear_connector_is_a_stub_not_a_second_copy_of_the_lane() -> None:
+    # Two lanes that already meet leave no gap to span, so the connector is only a
+    # marker. Measuring it back to the previous vertex made it retrace the whole lane:
+    # a straight lane has two vertices, so the one before the end is the far end.
+    incoming = LineString([(0, 0), (400, 0)])
+    outgoing = LineString([(400, 0), (800, 0)])
+    curve = connector_curve(incoming, outgoing, (400, 0))
+    assert curve.length == pytest.approx(COLLINEAR_STUB_METRES)
+    assert curve.coords[-1] == (400.0, 0.0)
+
+    # A lane shorter than the stub is not overshot.
+    short = connector_curve(LineString([(0, 0), (1, 0)]), LineString([(1, 0), (5, 0)]), (1, 0))
+    assert short.length == pytest.approx(1.0)
+    assert short.coords[0] == (0.0, 0.0)
 
 
 def test_node_no_restriction_forbids_exact_transition() -> None:

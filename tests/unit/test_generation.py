@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -11,16 +12,26 @@ from osm_scenario.acquisition import acquire_osm
 from osm_scenario.config import ConverterConfig
 from osm_scenario.generation import (
     GenerationError,
+    _carries_whole_carriageway,
     _direction_arrow,
     _directional_lane_count,
     _is_decision_node,
+    _lane_offset,
     _mapped_lane_index,
+    _merge_taper_plan,
     _side_filtered_candidates,
     _speed_kph,
+    _tapered_line,
     _turn_permissions,
+    _unproven_sharp_movement,
     generate_lane_model,
 )
-from osm_scenario.lane_model import LaneFeature, Point2D, PreliminaryLaneModel
+from osm_scenario.lane_model import (
+    ConnectorFeature,
+    LaneFeature,
+    Point2D,
+    PreliminaryLaneModel,
+)
 from osm_scenario.normalization import normalize_workspace
 from osm_scenario.topology import MovementCandidate
 
@@ -180,13 +191,19 @@ def _approach(
     )
 
 
-def _filter(source: LaneFeature, candidates: list[MovementCandidate]) -> list[str]:
+def _filter(
+    source: LaneFeature,
+    candidates: list[MovementCandidate],
+    *,
+    has_continuation: bool = False,
+) -> list[str]:
     kept = _side_filtered_candidates(
         candidates,
         source=source,
         driving_side="left",
         min_degrees=10.0,
         node_restrictions=[],
+        has_continuation=has_continuation,
     )
     return [item.to_lane_id for item in kept]
 
@@ -222,6 +239,147 @@ def test_side_filter_respects_turn_tags_and_never_strands_a_lane() -> None:
     # Reverse candidates are left to the U-turn policy.
     reverse = _candidate("back", "reverse", 180.0)
     assert _filter(_approach(0, 2), [reverse, exit_]) == ["back"]
+
+    # A lane that carries straight on is not stranded, so the fallback stays off and
+    # the wrong-side exit is dropped. Otherwise every lane of an approach feeds the
+    # exit, which is exactly what the side rule exists to prevent.
+    assert _filter(_approach(0, 2), [exit_], has_continuation=True) == []
+    assert _filter(_approach(1, 2), [exit_], has_continuation=True) == ["exit"]
+
+
+def test_a_taper_bends_one_end_onto_its_target_and_leaves_the_rest_alone() -> None:
+    lane = LineString([(0.0, 0.0), (100.0, 0.0)])
+    tapered = _tapered_line(lane, at_end=True, target=(100.0, 3.5), taper_length=30.0)
+
+    # The moved end lands exactly on its target and the far end has not shifted.
+    assert tapered.coords[-1] == pytest.approx((100.0, 3.5))
+    assert tapered.coords[0] == pytest.approx((0.0, 0.0))
+
+    # A straight lane has only two vertices, so without a hinge the blend would spread
+    # over the whole 100 m instead of the last 30.
+    assert any(point[0] == pytest.approx(70.0) and point[1] == pytest.approx(0.0)
+               for point in tapered.coords)
+    assert all(y == pytest.approx(0.0) for x, y in tapered.coords if x <= 70.0)
+
+    # Displacement grows linearly across the taper, so the lane bends without kinking.
+    detailed = _tapered_line(
+        LineString([(0.0, 0.0), (85.0, 0.0), (100.0, 0.0)]),
+        at_end=True,
+        target=(100.0, 3.5),
+        taper_length=30.0,
+    )
+    assert next(y for x, y in detailed.coords if x == pytest.approx(85.0)) == pytest.approx(1.75)
+
+    # Tapering the upstream end is the mirror image.
+    upstream = _tapered_line(lane, at_end=False, target=(0.0, -3.5), taper_length=30.0)
+    assert upstream.coords[0] == pytest.approx((0.0, -3.5))
+    assert upstream.coords[-1] == pytest.approx((100.0, 0.0))
+
+    # A taper longer than the lane is clamped to it rather than overshooting.
+    short = _tapered_line(
+        LineString([(0.0, 0.0), (10.0, 0.0)]), at_end=True, target=(10.0, 3.5), taper_length=30.0
+    )
+    assert short.coords[0] == pytest.approx((0.0, 0.0))
+    assert short.coords[-1] == pytest.approx((10.0, 3.5))
+
+
+def test_only_the_minor_side_of_a_shallow_merge_yields() -> None:
+    def connector(identifier: str, source: str, target: str, movement: str) -> ConnectorFeature:
+        return ConnectorFeature(
+            identifier=identifier,
+            junction_node_id="1",
+            from_lane_id=source,
+            to_lane_id=target,
+            from_way_id="10",
+            to_way_id="20",
+            movement=movement,
+            turn_angle_degrees=0.0,
+            status="active",
+            centerline=[Point2D(x=0.0, y=0.0), Point2D(x=1.0, y=0.0)],
+            polygon=[Point2D(x=0.0, y=0.0), Point2D(x=1.0, y=0.0), Point2D(x=0.0, y=0.0)],
+        )
+
+    def lane(identifier: str, lane_count: int, start: float, end: float) -> LaneFeature:
+        feature = _approach(0, lane_count)
+        return feature.model_copy(
+            update={
+                "identifier": identifier,
+                "centerline": [Point2D(x=start, y=0.0), Point2D(x=end, y=0.0)],
+            }
+        )
+
+    ramp = lane("ramp", 1, -20.0, 0.0)
+    road = lane("road", 3, 5.25, 100.0)
+    lookup = {"ramp": ramp, "road": road}
+
+    # The side with fewer lanes yields, so the through carriageway is never bent.
+    plan = _merge_taper_plan([connector("c", "ramp", "road", "through")], lookup, min_gap=0.5)
+    assert plan == {("ramp", "end"): (5.25, 0.0)}
+
+    # A real turn ends at a stop line; its connector curve is already the right shape.
+    assert _merge_taper_plan([connector("c", "ramp", "road", "left")], lookup, min_gap=0.5) == {}
+
+    # An even split has no minor side to choose, and a gap below the threshold is the
+    # ordinary half-lane offset between two blocks.
+    even = {"ramp": lane("ramp", 3, -20.0, 0.0), "road": road}
+    assert _merge_taper_plan([connector("c", "ramp", "road", "through")], even, min_gap=0.5) == {}
+    assert _merge_taper_plan([connector("c", "ramp", "road", "through")], lookup, min_gap=9.0) == {}
+
+
+def test_a_way_carrying_its_whole_carriageway_is_recognised() -> None:
+    assert _carries_whole_carriageway({"oneway": "yes"})
+    assert _carries_whole_carriageway({"junction": "roundabout"})
+    assert not _carries_whole_carriageway({"lanes": "4"})
+    assert not _carries_whole_carriageway({"oneway": "no"})
+
+
+def test_one_way_carriageways_are_centred_on_the_osm_centreline() -> None:
+    def offsets(lane_count: int, *, centred: bool) -> list[float]:
+        return [
+            _lane_offset(index, lane_count=lane_count, width=3.5, side_sign=1.0, centred=centred)
+            for index in range(lane_count)
+        ]
+
+    # A two-way way keeps its directional block on one side; the opposite direction
+    # mirrors it, so the two together straddle the centreline.
+    assert offsets(2, centred=False) == [1.75, 5.25]
+
+    # A one-way carriageway has no opposite block, so it balances about the line. An
+    # odd count leaves one lane exactly on it; a single lane is the line itself.
+    assert offsets(1, centred=True) == [0.0]
+    assert offsets(2, centred=True) == [-1.75, 1.75]
+    assert offsets(4, centred=True) == [-5.25, -1.75, 1.75, 5.25]
+    assert sum(offsets(3, centred=True)) == 0.0
+
+    # Whichever layout applies, index 0 stays offside and the last lane kerbside.
+    for centred in (True, False):
+        assert offsets(4, centred=centred) == sorted(offsets(4, centred=centred))
+        mirrored = [
+            _lane_offset(index, lane_count=4, width=3.5, side_sign=-1.0, centred=centred)
+            for index in range(4)
+        ]
+        assert mirrored == [-value for value in offsets(4, centred=centred)]
+
+
+def test_sharp_movements_need_the_evidence_a_uturn_needs() -> None:
+    def unproven(movement: str, angle: float, permissions: list[str] | None = None) -> bool:
+        return _unproven_sharp_movement(
+            _candidate("target", movement, angle),
+            source=_approach(0, 1, permissions),
+            min_degrees=130.0,
+        )
+
+    # The Kenanga ramp nose: 138 degrees is short of the 145 degree `reverse` band, so
+    # nothing else would ever question it.
+    assert unproven("right", -138.457)
+    assert not unproven("right", -129.999)
+
+    # An explicit turn:lanes permission for the movement settles it.
+    assert not unproven("right", -138.457, ["right"])
+    assert unproven("right", -138.457, ["left"])
+
+    # Reverse candidates belong to the U-turn policy, not this rule.
+    assert not unproven("reverse", 180.0)
 
 
 def test_only_real_branch_control_or_explicit_uturn_is_a_decision_node() -> None:
@@ -292,6 +450,47 @@ def test_generate_lane_model_writes_deterministic_stage_2_artifacts(tmp_path: Pa
     assert all(connector.from_lane_id != connector.to_lane_id for connector in first.connectors)
     assert all(connector.from_way_id != connector.to_way_id for connector in first.connectors)
     assert all(stop_line.source == "inferred" for stop_line in first.stop_lines)
+    # Way 11 is a one-way motorway meeting the two-way way 10 at node 4. The two-way
+    # lanes sit half a width either side of the shared node, so their midpoint is the
+    # node itself, and the one-way lane must land on it rather than beside it.
+    def _ends(way_id: str) -> list[Point2D]:
+        return [
+            end
+            for lane in first.lanes
+            if lane.source_way_ids == [way_id]
+            for end in (lane.centerline[0], lane.centerline[-1])
+        ]
+
+    def _distance(left: Point2D, right: Point2D) -> float:
+        return math.dist((left.x, left.y), (right.x, right.y))
+
+    # A continuation carries no side, so a carriageway that merely bends must not
+    # shuffle its lanes onto the kerb. Every same-count continuation keeps its index.
+    by_id = {lane.identifier: lane for lane in first.lanes}
+    continuations = [
+        (lane, by_id[exit_id])
+        for lane in first.lanes
+        for exit_id in lane.exit_lanes
+        if exit_id in by_id
+    ]
+    assert continuations
+    assert all(
+        source.lane_index == target.lane_index
+        for source, target in continuations
+        if source.lane_count == target.lane_count
+    )
+    # And no connector is drawn as a second copy of its lane.
+    assert all(
+        LineString((point.x, point.y) for point in connector.centerline).length < 12.0
+        for connector in first.connectors
+    )
+
+    shared = min(_ends("11"), key=lambda p: min(_distance(p, q) for q in _ends("10")))
+    near, far = sorted(_ends("10"), key=lambda q: _distance(q, shared))[:2]
+    assert _distance(near, far) == pytest.approx(3.5)
+    assert (near.x + far.x) / 2 == pytest.approx(shared.x)
+    assert (near.y + far.y) / 2 == pytest.approx(shared.y)
+
     assert (workspace / "inspection" / "stage-2-review-audit.html").is_file()
     # The audit page is the only Stage 2 inspection artifact; it used to be written
     # a second time under this name, producing two byte-identical files.
@@ -313,6 +512,11 @@ def test_generate_lane_model_writes_deterministic_stage_2_artifacts(tmp_path: Pa
     assert "Incoming lane" in html
     assert "Outgoing lane" in html
     assert "Entered from" in html and "Leaves to" in html
+    # A lane's links carry their status, so a review-required candidate cannot be
+    # mistaken for an asserted connection, and each is drawn as a lane-width band.
+    assert "function laneLinks" in html and "function linkTable" in html
+    assert "connector_polygon" in html
+    assert "Connector bands" in html
     assert "'way:'+q" in html and "'node:'+q" in html
     assert "OpenStreetMap contributors" in html
 

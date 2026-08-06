@@ -44,7 +44,7 @@ from osm_scenario.topology import (
     via_way_resolution,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v7"
+GENERATOR_VERSION = "direct-osm-stage2-v9"
 LANE_MODEL_SCHEMA_VERSION = 2
 
 OPPOSITE_DIRECTION = {"forward": "backward", "backward": "forward"}
@@ -128,12 +128,126 @@ def _edge_direction(way: Any, u: str, v: str) -> str:
     return "forward" if (u, v) in pairs else "backward"
 
 
+def _carries_whole_carriageway(tags: dict[str, str]) -> bool:
+    """True when one directed edge holds every lane the way has.
+
+    A two-way way splits its lanes between two directed edges that offset to
+    opposite sides of the OSM centreline. A one-way way has only one edge, so
+    its centreline is the centre of the carriageway itself.
+    """
+    return tags.get("oneway") in ONEWAY_VALUES or tags.get("junction") == "roundabout"
+
+
+def _lane_offset(
+    lane_index: int, *, lane_count: int, width: float, side_sign: float, centred: bool
+) -> float:
+    """Lateral offset of a generated lane from the OSM way centreline.
+
+    A two-way way puts each direction's block wholly on its own side, so the two
+    blocks straddle the centreline. A one-way carriageway has no opposite block to
+    balance against and is centred on the line instead. `side_sign` keeps lane index 0
+    offside and index `lane_count - 1` kerbside in both cases.
+    """
+    return side_sign * (lane_index + 0.5 - (0.5 * lane_count if centred else 0.0)) * width
+
+
+def _lane_surface(center: LineString, width: float) -> tuple[Polygon, LineString, LineString]:
+    """Derive a lane's drawn extent from its centreline."""
+    return (
+        center.buffer(width / 2, cap_style="flat", join_style="mitre"),
+        center.offset_curve(width / 2, join_style="mitre"),
+        center.offset_curve(-width / 2, join_style="mitre"),
+    )
+
+
+def _tapered_line(
+    line: LineString, *, at_end: bool, target: tuple[float, float], taper_length: float
+) -> LineString:
+    """Blend one end of a centreline onto `target` without kinking the rest of it.
+
+    Displacement grows linearly from nothing at the hinge to the full offset at the
+    end being moved, so the lane bends across the taper instead of stepping sideways.
+    """
+    coords = [(x, y) for x, y in line.coords]
+    stations = [0.0]
+    for before, after in zip(coords, coords[1:], strict=False):
+        stations.append(stations[-1] + math.dist(before, after))
+    length = stations[-1]
+    if length <= 0:
+        return line
+    span = min(taper_length, length)
+    anchor = length - span if at_end else span
+    # A straight lane has only two vertices, so without a hinge the blend would spread
+    # over its whole length instead of the taper distance.
+    if 0.0 < anchor < length and all(abs(station - anchor) > 1e-9 for station in stations):
+        index = next(i for i, station in enumerate(stations) if station > anchor)
+        before, after = coords[index - 1], coords[index]
+        ratio = (anchor - stations[index - 1]) / (stations[index] - stations[index - 1])
+        coords.insert(
+            index,
+            (
+                before[0] + (after[0] - before[0]) * ratio,
+                before[1] + (after[1] - before[1]) * ratio,
+            ),
+        )
+        stations.insert(index, anchor)
+    origin = coords[-1] if at_end else coords[0]
+    shift_x, shift_y = target[0] - origin[0], target[1] - origin[1]
+    moved = []
+    for (x, y), station in zip(coords, stations, strict=True):
+        weight = (station - anchor) / span if at_end else (anchor - station) / span
+        weight = min(1.0, max(0.0, weight))
+        moved.append((x + shift_x * weight, y + shift_y * weight))
+    return LineString(moved)
+
+
+def _merge_taper_plan(
+    connectors: list[ConnectorFeature],
+    lane_lookup: dict[str, LaneFeature],
+    *,
+    min_gap: float,
+) -> dict[tuple[str, str], tuple[float, float]]:
+    """Decide which lane ends should be pulled onto the lane they merge into.
+
+    A lane must not stop on another road's centreline, where OSM ends its way; it has
+    to reach the lane it enters or it points at through traffic. Only a shallow
+    `through` movement is a merge or diverge — a real turn ends at a stop line and its
+    connector curve is already the right shape. The side with fewer lanes yields, so
+    the through carriageway is never bent, and an even split is left alone because
+    there is nothing to choose between the two.
+    """
+    candidates: list[tuple[tuple[str, str], tuple[str, str], tuple[float, float]]] = []
+    for connector in sorted(connectors, key=lambda item: item.identifier):
+        if connector.status != "active" or connector.movement != "through":
+            continue
+        source = lane_lookup[connector.from_lane_id]
+        target = lane_lookup[connector.to_lane_id]
+        leaves, enters = source.centerline[-1], target.centerline[0]
+        if math.dist((leaves.x, leaves.y), (enters.x, enters.y)) <= min_gap:
+            continue
+        if source.lane_count < target.lane_count:
+            candidates.append(
+                ((source.identifier, "end"), (target.identifier, "start"), (enters.x, enters.y))
+            )
+        elif target.lane_count < source.lane_count:
+            candidates.append(
+                ((target.identifier, "start"), (source.identifier, "end"), (leaves.x, leaves.y))
+            )
+    moving = {subject for subject, _, _ in candidates}
+    plan: dict[tuple[str, str], tuple[float, float]] = {}
+    for subject, anchor, destination in candidates:
+        # Chasing an endpoint that is itself moving would reopen the gap it closed.
+        if anchor not in moving:
+            plan.setdefault(subject, destination)
+    return plan
+
+
 def _directional_lane_count(tags: dict[str, str], direction: str) -> tuple[int, str, str]:
     explicit = _positive_int(tags.get(f"lanes:{direction}"))
     if explicit is not None:
         return explicit, "explicit_directional", "high"
     total = _positive_int(tags.get("lanes"))
-    oneway = tags.get("oneway") in ONEWAY_VALUES or tags.get("junction") == "roundabout"
+    oneway = _carries_whole_carriageway(tags)
     if oneway and total is not None:
         return total, "explicit_total_oneway", "high"
     opposite = _positive_int(tags.get(f"lanes:{OPPOSITE_DIRECTION[direction]}"))
@@ -194,6 +308,7 @@ def _side_filtered_candidates(
     driving_side: str,
     min_degrees: float,
     node_restrictions: list[OsmRelation],
+    has_continuation: bool,
 ) -> list[MovementCandidate]:
     """Keep only the movements this source lane is on the correct side of the road for.
 
@@ -201,7 +316,10 @@ def _side_filtered_candidates(
     `turn:lanes` direction keeps what its tags allow, and a candidate a node-via
     restriction forbids is kept so the restriction still has something to act on and
     stays visible for audit. If the filter would leave the lane with nowhere to go,
-    the straightest movement is kept instead of stranding it.
+    the straightest movement is kept instead of stranding it — but a lane that
+    carries straight on is not stranded, so a continuation disables that fallback.
+    Without this every lane of an approach feeds the exit, which is what the
+    side rule exists to prevent.
     """
     tagged = any(permission in {"left", "right"} for permission in source.turn_permissions)
     kept: list[MovementCandidate] = []
@@ -226,9 +344,28 @@ def _side_filtered_candidates(
             removed.append(candidate)
         else:
             kept.append(candidate)
-    if kept or not removed:
+    if kept or not removed or has_continuation:
         return kept
     return [min(removed, key=lambda item: (abs(item.angle_degrees), item.to_lane_id))]
+
+
+def _unproven_sharp_movement(
+    candidate: MovementCandidate, *, source: LaneFeature, min_degrees: float
+) -> bool:
+    """True when a movement doubles back far enough to need the evidence a U-turn needs.
+
+    `classify_movement` only calls a movement `reverse` past 145 degrees, so a turn a
+    few degrees short of that escapes the U-turn policy and is asserted outright. The
+    ramp nose at Kenanga is the case in point: the on-ramp doubles straight back down
+    the off-ramp at 138 degrees. An explicit `turn:lanes` permission for the movement
+    is positive evidence and settles it.
+    """
+    if candidate.movement == "reverse" or abs(candidate.angle_degrees) < min_degrees:
+        return False
+    return not any(
+        movement_matches(permission, candidate.movement)
+        for permission in source.turn_permissions
+    )
 
 
 def _is_decision_node(
@@ -386,25 +523,38 @@ def _render_review_html(model: PreliminaryLaneModel, snapshot: OsmSnapshot) -> s
                 }
             )
     for connector in model.connectors:
-        features.append(
-            {
-                "type": "Feature",
-                "geometry": {
-                    "type": "LineString",
-                    "coordinates": coordinates(connector.centerline),
+        properties = {
+            "id": connector.identifier,
+            "kind": "connector",
+            "status": connector.status,
+            "movement": connector.movement,
+            "source": f"{connector.from_way_id} -> {connector.to_way_id}",
+            "from_lane_id": connector.from_lane_id,
+            "to_lane_id": connector.to_lane_id,
+            "junction_node_id": connector.junction_node_id,
+            "turn_angle_degrees": connector.turn_angle_degrees,
+        }
+        features.extend(
+            [
+                # The band is what makes a link readable where lane polygons abut; the
+                # centreline alone is a hairline lost among them.
+                {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [coordinates(connector.polygon)],
+                    },
+                    "properties": {**properties, "kind": "connector_polygon"},
                 },
-                "properties": {
-                    "id": connector.identifier,
-                    "kind": "connector",
-                    "status": connector.status,
-                    "movement": connector.movement,
-                    "source": f"{connector.from_way_id} -> {connector.to_way_id}",
-                    "from_lane_id": connector.from_lane_id,
-                    "to_lane_id": connector.to_lane_id,
-                    "junction_node_id": connector.junction_node_id,
-                    "turn_angle_degrees": connector.turn_angle_degrees,
+                {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": coordinates(connector.centerline),
+                    },
+                    "properties": properties,
                 },
-            }
+            ]
         )
     for stop_line in model.stop_lines:
         features.append(
@@ -548,37 +698,50 @@ def _render_review_html(model: PreliminaryLaneModel, snapshot: OsmSnapshot) -> s
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Stage 2 Review Audit</title><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
-*{box-sizing:border-box}html,body{height:100%;margin:0;font:14px system-ui,sans-serif;color:#202428}body{display:grid;grid-template-columns:minmax(330px,420px) 1fr;background:#f4f5f6}aside{padding:14px;overflow:auto;border-right:1px solid #c8cdd1;background:#fff}h1{font-size:20px;margin:0 0 5px}h2{font-size:14px;margin:14px 0 7px}.muted{color:#687078;font-size:12px}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin:10px 0}.metric{padding:7px;background:#f1f3f5;border-radius:5px;text-align:center}.metric b{display:block;font-size:16px}.filters{display:grid;gap:7px}.filters input,.filters select{width:100%;padding:7px;border:1px solid #adb5bd;border-radius:4px;background:#fff}.queue{display:grid;gap:6px;margin-top:8px}.finding{border:1px solid #d6dadd;border-left:5px solid #e67700;border-radius:5px;padding:8px;background:#fff;cursor:pointer;text-align:left}.finding.blocker{border-left-color:#c92a2a}.finding:hover,.finding.active{background:#fff3bf}.finding strong{display:block}.finding small{display:block;color:#687078;margin-top:3px}.detail{padding:9px;background:#f8f9fa;border:1px solid #dee2e6;border-radius:5px;overflow-wrap:anywhere}.detail table,.popup-table{border-collapse:collapse;width:100%}.detail td,.popup-table td{border-bottom:1px solid #e5e7e9;padding:4px;vertical-align:top;font-size:12px}.legend{display:grid;grid-template-columns:18px 1fr;gap:6px 8px;align-items:center}.swatch{height:5px}.lane{background:#277da1}.lane-direction{background:#0b4f7a}.active-connector{background:#2b8a3e}.review-connector{background:#f08c00}.forbidden-connector{background:#c92a2a}.stop-line{background:#7048e8}.source-geometry{background:#868e96}.highlight{background:#ffd43b}.chip{display:inline-block;font:inherit;font-size:12px;padding:2px 7px;margin:1px 0;border:1px solid #b38600;border-radius:10px;background:#fff9db;color:#7a5c00;cursor:pointer}.chip:hover{background:#ffd43b;color:#202428}.muted-chip{border-color:#ced4da;background:#f1f3f5;color:#687078;cursor:default}.queue-note{font-size:12px;color:#687078;margin:7px 0}#map{height:100%;min-height:520px}.leaflet-popup-content{max-height:300px;overflow:auto}@media(max-width:780px){body{grid-template-columns:1fr;grid-template-rows:minmax(360px,45vh) 1fr}aside{border-right:0;border-bottom:1px solid #c8cdd1}#map{min-height:55vh}}
-</style></head><body><aside><h1>Stage 2 Review Audit</h1><div class="muted">Read-only visual explanation of preliminary generation findings. Decisions are recorded later in Stage 3.</div><div class="summary" id="summary"></div><h2>Review filters</h2><div class="filters"><input id="search" placeholder="Search rule or reason; paste an OSM way/node or feature ID to focus it"><select id="rule"><option value="">All rules</option></select><select id="severity"><option value="">All severities</option><option value="blocker">Blocker</option><option value="warning">Warning</option></select></div><div class="queue-note" id="queue-note"></div><div class="queue" id="queue"></div><h2>Selected finding</h2><div class="detail" id="detail">Select a review item to focus its affected geometry.</div><h2>Legend</h2><div class="legend"><span class="swatch lane"></span><span>Lane centreline</span><span class="swatch lane-direction"></span><span>Direction of travel (arrow points downstream)</span><span class="swatch active-connector"></span><span>Active connector</span><span class="swatch review-connector"></span><span>Review-required connector</span><span class="swatch forbidden-connector"></span><span>Forbidden connector</span><span class="swatch stop-line"></span><span>Inferred stop line</span><span class="swatch source-geometry"></span><span>Source OSM way or node (dashed)</span><span class="swatch highlight"></span><span>Selected or searched geometry</span></div></aside><main id="map"></main>
+*{box-sizing:border-box}html,body{height:100%;margin:0;font:14px system-ui,sans-serif;color:#202428}body{display:grid;grid-template-columns:minmax(330px,420px) 1fr;background:#f4f5f6}aside{padding:14px;overflow:auto;border-right:1px solid #c8cdd1;background:#fff}h1{font-size:20px;margin:0 0 5px}h2{font-size:14px;margin:14px 0 7px}.muted{color:#687078;font-size:12px}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin:10px 0}.metric{padding:7px;background:#f1f3f5;border-radius:5px;text-align:center}.metric b{display:block;font-size:16px}.filters{display:grid;gap:7px}.filters input,.filters select{width:100%;padding:7px;border:1px solid #adb5bd;border-radius:4px;background:#fff}.queue{display:grid;gap:6px;margin-top:8px}.finding{border:1px solid #d6dadd;border-left:5px solid #e67700;border-radius:5px;padding:8px;background:#fff;cursor:pointer;text-align:left}.finding.blocker{border-left-color:#c92a2a}.finding:hover,.finding.active{background:#fff3bf}.finding strong{display:block}.finding small{display:block;color:#687078;margin-top:3px}.detail{padding:9px;background:#f8f9fa;border:1px solid #dee2e6;border-radius:5px;overflow-wrap:anywhere}.detail table,.popup-table{border-collapse:collapse;width:100%}.detail td,.popup-table td{border-bottom:1px solid #e5e7e9;padding:4px;vertical-align:top;font-size:12px}.legend{display:grid;grid-template-columns:18px 1fr;gap:6px 8px;align-items:center}.swatch{height:5px}.lane{background:#277da1}.lane-direction{background:#0b4f7a}.connector-band{background:#8ce99a;height:9px}.active-connector{background:#2b8a3e}.review-connector{background:#f08c00}.forbidden-connector{background:#c92a2a}.stop-line{background:#7048e8}.source-geometry{background:#868e96}.highlight{background:#ffd43b}.chip{display:inline-block;font:inherit;font-size:12px;padding:2px 7px;margin:1px 0;border:1px solid #b38600;border-radius:10px;background:#fff9db;color:#7a5c00;cursor:pointer}.chip:hover{background:#ffd43b;color:#202428}.muted-chip{border-color:#ced4da;background:#f1f3f5;color:#687078;cursor:default}.link-table{border-collapse:collapse}.link-table td{border:0;padding:1px 7px 1px 0;font-size:12px;vertical-align:middle;white-space:nowrap}.pill{font-size:11px;padding:1px 7px;border-radius:9px;border:1px solid}.pill.active{border-color:#2b8a3e;color:#2b8a3e;background:#ebfbee}.pill.review_required{border-color:#f08c00;color:#a35c00;background:#fff4e6}.pill.forbidden{border-color:#c92a2a;color:#c92a2a;background:#fff5f5}.queue-note{font-size:12px;color:#687078;margin:7px 0}#map{height:100%;min-height:520px}.leaflet-popup-content{max-height:300px;overflow:auto}@media(max-width:780px){body{grid-template-columns:1fr;grid-template-rows:minmax(360px,45vh) 1fr}aside{border-right:0;border-bottom:1px solid #c8cdd1}#map{min-height:55vh}}
+</style></head><body><aside><h1>Stage 2 Review Audit</h1><div class="muted">Read-only visual explanation of preliminary generation findings. Decisions are recorded later in Stage 3.</div><div class="summary" id="summary"></div><h2>Review filters</h2><div class="filters"><input id="search" placeholder="Search rule or reason; paste an OSM way/node or feature ID to focus it"><select id="rule"><option value="">All rules</option></select><select id="severity"><option value="">All severities</option><option value="blocker">Blocker</option><option value="warning">Warning</option></select></div><div class="queue-note" id="queue-note"></div><div class="queue" id="queue"></div><h2>Selected finding</h2><div class="detail" id="detail">Select a review item to focus its affected geometry.</div><h2>Legend</h2><div class="legend"><span class="swatch lane"></span><span>Lane centreline</span><span class="swatch lane-direction"></span><span>Direction of travel (arrow points downstream)</span><span class="swatch connector-band"></span><span>Connector band (the lane-width path a movement takes)</span><span class="swatch active-connector"></span><span>Active connector</span><span class="swatch review-connector"></span><span>Review-required connector</span><span class="swatch forbidden-connector"></span><span>Forbidden connector</span><span class="swatch stop-line"></span><span>Inferred stop line</span><span class="swatch source-geometry"></span><span>Source OSM way or node (dashed)</span><span class="swatch highlight"></span><span>Selected or searched geometry</span></div></aside><main id="map"></main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
 const payload=__PAYLOAD__;const reviewPriority={ambiguous_connector:0,restriction_effect_review:1,signal_lane_association:2,lane_transition_count_mismatch:3,inferred_stop_line:4,lane_count_inference:5,lane_width_default:6,speed_default:7};payload.findings.sort((a,b)=>(reviewPriority[a.rule]??99)-(reviewPriority[b.rule]??99)||a.rule.localeCompare(b.rule)||a.identifier.localeCompare(b.identifier));const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const map=L.map('map',{preferCanvas:true});L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:20,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
-const groups={source_way:L.layerGroup(),source_node:L.layerGroup(),lane_polygon:L.layerGroup(),lane_centerline:L.layerGroup(),lane_direction:L.layerGroup(),active:L.layerGroup(),review_required:L.layerGroup(),forbidden:L.layerGroup(),stop_line:L.layerGroup()};const byId=new Map(),propsById=new Map(),allLayers=[];let selected=[],lastFocused=null;
-function styleFor(p){if(p.kind==='source_way')return{color:'#868e96',weight:1.5,opacity:.55,dashArray:'2 4'};if(p.kind==='source_node')return{color:'#868e96',weight:1,radius:4,fillColor:'#adb5bd',fillOpacity:.8,opacity:.8};if(p.kind==='lane_polygon')return{color:'#74c0fc',weight:1,fillColor:'#74c0fc',fillOpacity:.08};if(p.kind==='lane_centerline')return{color:'#277da1',weight:2,opacity:.75};if(p.kind==='lane_direction')return{color:'#0b4f7a',weight:3,opacity:.95,lineCap:'butt',lineJoin:'miter'};if(p.kind==='stop_line')return{color:'#7048e8',weight:6};return{color:p.status==='forbidden'?'#c92a2a':p.status==='review_required'?'#f08c00':'#2b8a3e',weight:p.status==='review_required'?5:3,dashArray:p.status==='review_required'?'7 5':null,opacity:.9}}
+const groups={source_way:L.layerGroup(),source_node:L.layerGroup(),lane_polygon:L.layerGroup(),lane_centerline:L.layerGroup(),lane_direction:L.layerGroup(),connector_polygon:L.layerGroup(),active:L.layerGroup(),review_required:L.layerGroup(),forbidden:L.layerGroup(),stop_line:L.layerGroup()};const byId=new Map(),propsById=new Map(),allLayers=[];let selected=[],lastFocused=null;
+const statusColor=s=>s==='forbidden'?'#c92a2a':s==='review_required'?'#f08c00':'#2b8a3e';
+function styleFor(p){if(p.kind==='source_way')return{color:'#868e96',weight:1.5,opacity:.55,dashArray:'2 4'};if(p.kind==='source_node')return{color:'#868e96',weight:1,radius:4,fillColor:'#adb5bd',fillOpacity:.8,opacity:.8};if(p.kind==='lane_polygon')return{color:'#74c0fc',weight:1,fillColor:'#74c0fc',fillOpacity:.08};if(p.kind==='lane_centerline')return{color:'#277da1',weight:2,opacity:.75};if(p.kind==='lane_direction')return{color:'#0b4f7a',weight:3,opacity:.95,lineCap:'butt',lineJoin:'miter'};if(p.kind==='connector_polygon')return{color:statusColor(p.status),weight:1,fillColor:statusColor(p.status),fillOpacity:.22,opacity:.5};if(p.kind==='stop_line')return{color:'#7048e8',weight:6};return{color:statusColor(p.status),weight:p.status==='review_required'?5:3,dashArray:p.status==='review_required'?'7 5':null,opacity:.9}}
 // A lane, connector or source id, described the way a reviewer reads it off the map.
 // The generated lane id is what a reviewer searches by, so it leads every reference.
 function laneLabel(id){const p=propsById.get(id);return p&&p.lane_count?`${id} · lane ${p.lane_index+1}/${p.lane_count}`:String(id)}
 function laneChip(id){return byId.has(id)?`<button class="chip" onclick="focusSource('${esc(id)}')">${esc(laneLabel(id))}</button>`:`<span class="chip muted-chip">${esc(laneLabel(id))}</span>`}
-function laneChips(ids){const list=[...new Set((ids||[]).filter(x=>(propsById.get(x)||{}).lane_count))];
-  return list.length?list.map(x=>`<button class="chip" onclick="focusSource('${esc(x)}')">${esc(x)}</button>`).join(' '):'<span class="muted">none</span>'}
+function idChip(id){return byId.has(id)?`<button class="chip" onclick="focusSource('${esc(id)}')">${esc(id)}</button>`:`<span class="chip muted-chip">${esc(id)}</span>`}
+// Every link this lane has, in one row each. Status matters as much as the id: a
+// review-required U-turn candidate must not read like an asserted connection.
+function laneLinks(p,incoming){
+  const own=incoming?'to_lane_id':'from_lane_id',far=incoming?'from_lane_id':'to_lane_id';
+  const rows=(payload.features.features||[]).filter(f=>f.properties.kind==='connector'&&f.properties[own]===p.id)
+    .map(f=>({id:f.properties[far],movement:f.properties.movement,status:f.properties.status}));
+  // A direct continuation has no connector, so it is named in entry_lanes/exit_lanes.
+  for(const id of ((incoming?p.entry_lanes:p.exit_lanes)||[]).filter(x=>(propsById.get(x)||{}).lane_count))
+    rows.push({id,movement:'continuation',status:'active'});
+  const seen=new Set();
+  return rows.filter(r=>!seen.has(r.id)&&seen.add(r.id))
+    .sort((a,b)=>a.movement.localeCompare(b.movement)||a.id.localeCompare(b.id))}
+function linkTable(rows){
+  if(!rows.length)return '<span class="muted">none</span>';
+  return '<table class="link-table">'+rows.map(r=>`<tr><td>${idChip(r.id)}</td>`
+    +`<td class="muted">${esc(r.movement)}</td>`
+    +`<td><span class="pill ${esc(r.status)}">${esc(r.status==='review_required'?'review':r.status)}</span></td></tr>`).join('')+'</table>'}
 function popup(p){
   let head='';
-  if(p.kind==='connector'){
+  if(p.kind==='connector'||p.kind==='connector_polygon'){
     // The whole point of the popup: which lane this movement leaves and which it enters.
     head=`<table class="popup-table"><tr><td><strong>Incoming lane</strong></td><td>${laneChip(p.from_lane_id)}</td></tr>`
         +`<tr><td><strong>Outgoing lane</strong></td><td>${laneChip(p.to_lane_id)}</td></tr></table>`;
   }else if(p.kind&&p.kind.startsWith('lane_')){
-    const feeds=[...new Set((payload.features.features||[]).filter(f=>f.properties.kind==='connector'&&f.properties.to_lane_id===p.id).map(f=>f.properties.from_lane_id))];
-    const goes=[...new Set((payload.features.features||[]).filter(f=>f.properties.kind==='connector'&&f.properties.from_lane_id===p.id).map(f=>f.properties.to_lane_id))];
-    const cont=(p.exit_lanes||[]).filter(x=>propsById.get(x)&&propsById.get(x).kind!=='connector');
-    const back=(p.entry_lanes||[]).filter(x=>propsById.get(x)&&propsById.get(x).kind!=='connector');
     head=`<p class="muted">${esc(laneLabel(p.id))}</p><table class="popup-table">`
-        +`<tr><td><strong>Entered from</strong></td><td>${laneChips(feeds.concat(back))}</td></tr>`
-        +`<tr><td><strong>Leaves to</strong></td><td>${laneChips(goes.concat(cont))}</td></tr></table>`;
+        +`<tr><td><strong>Entered from</strong></td><td>${linkTable(laneLinks(p,true))}</td></tr>`
+        +`<tr><td><strong>Leaves to</strong></td><td>${linkTable(laneLinks(p,false))}</td></tr></table>`;
   }
   return `<strong>${esc(p.kind)}</strong>${head}<table class="popup-table">${Object.entries(p).map(([k,v])=>`<tr><td>${esc(k)}</td><td>${esc(Array.isArray(v)?v.join(', '):v)}</td></tr>`).join('')}</table>`}
 for(const feature of payload.features.features){const p=feature.properties;const layer=L.geoJSON(feature,{style:()=>styleFor(p),pointToLayer:(_f,latlng)=>L.circleMarker(latlng,styleFor(p)),onEachFeature:(_f,l)=>l.bindPopup(()=>popup(p))});propsById.set(p.id,p);layer.eachLayer(l=>{l._baseStyle=styleFor(p);allLayers.push(l);if(!byId.has(p.id))byId.set(p.id,[]);byId.get(p.id).push(l)});const key=p.kind==='connector'?p.status:p.kind;groups[key].addLayer(layer)}
-groups.source_way.addTo(map);groups.source_node.addTo(map);groups.lane_centerline.addTo(map);groups.lane_direction.addTo(map);groups.active.addTo(map);groups.review_required.addTo(map);groups.forbidden.addTo(map);groups.stop_line.addTo(map);L.control.layers(null,{'Source OSM ways':groups.source_way,'Source OSM nodes':groups.source_node,'Lane polygons':groups.lane_polygon,'Lane centrelines':groups.lane_centerline,'Lane direction arrows':groups.lane_direction,'Active connectors':groups.active,'Review-required connectors':groups.review_required,'Forbidden connectors':groups.forbidden,'Stop lines':groups.stop_line},{collapsed:false}).addTo(map);
+groups.source_way.addTo(map);groups.source_node.addTo(map);groups.lane_centerline.addTo(map);groups.lane_direction.addTo(map);groups.connector_polygon.addTo(map);groups.active.addTo(map);groups.review_required.addTo(map);groups.forbidden.addTo(map);groups.stop_line.addTo(map);L.control.layers(null,{'Source OSM ways':groups.source_way,'Source OSM nodes':groups.source_node,'Lane polygons':groups.lane_polygon,'Lane centrelines':groups.lane_centerline,'Lane direction arrows':groups.lane_direction,'Connector bands':groups.connector_polygon,'Active connectors':groups.active,'Review-required connectors':groups.review_required,'Forbidden connectors':groups.forbidden,'Stop lines':groups.stop_line},{collapsed:false}).addTo(map);
 const allGeometry=L.featureGroup(allLayers);if(allGeometry.getBounds().isValid())map.fitBounds(allGeometry.getBounds().pad(.04));
 document.getElementById('summary').innerHTML=Object.entries(payload.summary).map(([k,v])=>`<div class="metric"><b>${v}</b>${esc(k.replaceAll('_',' '))}</div>`).join('');const rules=[...new Set(payload.findings.map(f=>f.rule))].sort();document.getElementById('rule').innerHTML+=[...rules].map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
 function clearSelection(){for(const l of selected)if(l.setStyle)l.setStyle(l._baseStyle);selected=[];document.querySelectorAll('.finding.active').forEach(x=>x.classList.remove('active'))}
@@ -663,14 +826,15 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
         base = _edge_geometry(graph, u, v, data)
         created: list[str] = []
         side_sign = 1.0 if manifest["driving_side"] == "left" else -1.0
+        centred = _carries_whole_carriageway(way.tags)
         for lane_index in range(count):
-            offset = side_sign * (lane_index + 0.5) * width
+            offset = _lane_offset(
+                lane_index, lane_count=count, width=width, side_sign=side_sign, centred=centred
+            )
             center = base.offset_curve(offset, join_style="mitre")
             if not isinstance(center, LineString) or center.is_empty:
                 center = base
-            polygon = center.buffer(width / 2, cap_style="flat", join_style="mitre")
-            left = center.offset_curve(width / 2, join_style="mitre")
-            right = center.offset_curve(-width / 2, join_style="mitre")
+            polygon, left, right = _lane_surface(center, width)
             lane_id = deterministic_id("lane", *way_ids, str(u), str(v), str(key), str(lane_index))
             lane = LaneFeature(
                 identifier=lane_id,
@@ -797,6 +961,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
             source = lane_lookup[from_id]
             source_line = LineString((point.x, point.y) for point in source.centerline)
             candidates_for_lane: list[MovementCandidate] = []
+            carries_straight_on = False
             outgoing_groups: dict[tuple[str, tuple[str, ...]], list[LaneFeature]] = {}
             for to_id in outgoing:
                 target = lane_lookup[to_id]
@@ -820,20 +985,29 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                 exact_reverse = _is_exact_reverse(source, targets[0])
                 if exact_reverse and not decision_node:
                     continue
+                # Every lane in a group is a parallel offset of one edge, so the group's
+                # first lane answers both questions below for the whole group.
+                is_continuation = not exact_reverse and (
+                    source.source_way_ids[0] == targets[0].source_way_ids[0]
+                    or not decision_node
+                )
                 # The side has to be known before the target is picked, so classify the
-                # movement against the group's first lane. Lanes in a group are parallel
-                # offsets of one edge, so any of them yields the same side.
-                group_angle = signed_turn_angle(
-                    source_line,
-                    LineString((point.x, point.y) for point in targets[0].centerline),
-                )
-                side = movement_side(
-                    movement=classify_movement(group_angle),
-                    angle=group_angle,
-                    driving_side=manifest["driving_side"],
-                    turn_permissions=source.turn_permissions,
-                    min_degrees=config.lane_selection.side_movement_min_degrees,
-                )
+                # movement against the group. A continuation carries no side: a
+                # carriageway that merely bends past the side threshold is not a turn,
+                # and snapping its lanes to the kerb would shuffle the whole block.
+                side = None
+                if not is_continuation:
+                    group_angle = signed_turn_angle(
+                        source_line,
+                        LineString((point.x, point.y) for point in targets[0].centerline),
+                    )
+                    side = movement_side(
+                        movement=classify_movement(group_angle),
+                        angle=group_angle,
+                        driving_side=manifest["driving_side"],
+                        turn_permissions=source.turn_permissions,
+                        min_degrees=config.lane_selection.side_movement_min_degrees,
+                    )
                 target_index = _mapped_lane_index(source, len(targets), side)
                 target = targets[target_index]
                 if source.lane_count != len(targets):
@@ -861,12 +1035,11 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                                 reason="proportional lane-order mapping crosses a lane-count change",
                             )
                         )
-                if not exact_reverse and (
-                    source.source_way_ids[0] == target.source_way_ids[0] or not decision_node
-                ):
+                if is_continuation:
                     source.exit_lanes.append(target.identifier)
                     target.entry_lanes.append(source.identifier)
                     direct_continuations += 1
+                    carries_straight_on = True
                     continue
                 target_line = LineString((point.x, point.y) for point in target.centerline)
                 angle = signed_turn_angle(source_line, target_line)
@@ -911,6 +1084,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                 driving_side=manifest["driving_side"],
                 min_degrees=config.lane_selection.side_movement_min_degrees,
                 node_restrictions=node_restrictions,
+                has_continuation=carries_straight_on,
             )
             family_counts: dict[str, int] = {}
             for candidate in candidates_for_lane:
@@ -926,7 +1100,14 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                                 and uturn_status == "review_required"
                             )
                             or family_counts[movement_family(candidate.movement)] > 1
-                            or 30 <= abs(candidate.angle_degrees) <= 40,
+                            or 30 <= abs(candidate.angle_degrees) <= 40
+                            or _unproven_sharp_movement(
+                                candidate,
+                                source=source,
+                                min_degrees=(
+                                    config.lane_selection.sharp_movement_review_degrees
+                                ),
+                            ),
                         }
                     )
                 )
@@ -1007,8 +1188,77 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                         "to_lane_id": candidate.to_lane_id,
                     },
                     confidence="low",
-                    reason="movement has multiple or borderline geometric interpretations",
+                    reason=(
+                        "movement doubles back beyond "
+                        f"{config.lane_selection.sharp_movement_review_degrees:g}"
+                        " degrees without an explicit turn:lanes permission"
+                        if _unproven_sharp_movement(
+                            candidate,
+                            source=lane_lookup[candidate.from_lane_id],
+                            min_degrees=(
+                                config.lane_selection.sharp_movement_review_degrees
+                            ),
+                        )
+                        else "movement has multiple or borderline geometric interpretations"
+                    ),
                 )
+            )
+
+    # Geometry only. Every movement, angle and status above was decided from the
+    # untapered OSM geometry and stays as it is: letting a taper change an angle would
+    # let it change the classification that selected it.
+    taper_plan = _merge_taper_plan(
+        connectors, lane_lookup, min_gap=config.lane_geometry.merge_taper_min_gap_m
+    )
+    for (lane_id, moved_end), destination in sorted(taper_plan.items()):
+        lane = lane_lookup[lane_id]
+        tapered = _tapered_line(
+            LineString((point.x, point.y) for point in lane.centerline),
+            at_end=moved_end == "end",
+            target=destination,
+            taper_length=config.lane_geometry.merge_taper_length_m,
+        )
+        polygon, left, right = _lane_surface(tapered, lane.width_m)
+        lane.centerline = _points(tapered)
+        lane.polygon = _polygon_points(polygon)
+        lane.boundaries = [
+            LaneBoundary(
+                identifier=deterministic_id("boundary", lane_id, "left"),
+                side="left",
+                points=_points(left),
+            ),
+            LaneBoundary(
+                identifier=deterministic_id("boundary", lane_id, "right"),
+                side="right",
+                points=_points(right),
+            ),
+        ]
+    if taper_plan:
+        tapered_lanes = {lane_id for lane_id, _ in taper_plan}
+        node_xy = {
+            str(node): (float(data["x"]), float(data["y"]))
+            for node, data in graph.nodes(data=True)
+        }
+        for connector in connectors:
+            if not tapered_lanes & {connector.from_lane_id, connector.to_lane_id}:
+                continue
+            curve = connector_curve(
+                LineString(
+                    (point.x, point.y)
+                    for point in lane_lookup[connector.from_lane_id].centerline
+                ),
+                LineString(
+                    (point.x, point.y) for point in lane_lookup[connector.to_lane_id].centerline
+                ),
+                node_xy[connector.junction_node_id],
+            )
+            width = min(
+                lane_lookup[connector.from_lane_id].width_m,
+                lane_lookup[connector.to_lane_id].width_m,
+            )
+            connector.centerline = _points(curve)
+            connector.polygon = _polygon_points(
+                curve.buffer(width / 2, cap_style="flat", join_style="mitre")
             )
 
     signals: list[SignalAssociation] = []
@@ -1163,6 +1413,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
             "lanes": len(lanes),
             "connectors": len(connectors),
             "direct_continuations": direct_continuations,
+            "merge_tapers": len(taper_plan),
             "signals": len(signals),
             "stop_lines": len(stop_lines),
             "restrictions": len(restrictions),

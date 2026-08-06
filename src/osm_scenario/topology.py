@@ -8,6 +8,11 @@ from typing import Any
 
 from shapely.geometry import LineString
 
+# How far back along the incoming lane a connector marker reaches when the two lanes
+# already meet. Matched to the length the Bezier form produces at a real junction, so
+# collinear and turning connectors read at the same scale.
+COLLINEAR_STUB_METRES = 3.0
+
 
 @dataclass(frozen=True)
 class MovementCandidate:
@@ -121,7 +126,13 @@ def connector_curve(
     """Create the legacy-compatible five-point quadratic Bezier connector."""
     start, end = incoming.coords[-1], outgoing.coords[0]
     if math.dist(start, end) < 0.05:
-        approach = incoming.coords[-2]
+        # The two lanes already meet, so there is no gap to span and the connector is
+        # only a marker. Measure the stub back along the incoming line rather than to
+        # its previous vertex: a straight lane has just two, so the vertex before the
+        # end is the far end, and the marker would retrace the entire lane.
+        approach = incoming.interpolate(
+            incoming.length - min(COLLINEAR_STUB_METRES, incoming.length)
+        ).coords[0]
         midpoint = ((approach[0] + start[0]) / 2, (approach[1] + start[1]) / 2)
         return LineString([approach, midpoint, start])
     points = []

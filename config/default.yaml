@@ -15,3 +15,7 @@ tag_inference:
   infer_missing_lane_count: true
 lane_selection:
   side_movement_min_degrees: 10.0
+  sharp_movement_review_degrees: 130.0
+lane_geometry:
+  merge_taper_length_m: 30.0
+  merge_taper_min_gap_m: 0.5

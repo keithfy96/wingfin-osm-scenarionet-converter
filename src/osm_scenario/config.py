@@ -34,6 +34,26 @@ class LaneSelectionConfig(BaseModel):
     # or no movement classified `through` could ever be treated as a turn.
     side_movement_min_degrees: float = Field(default=10.0, gt=0, lt=35)
 
+    # Turn angle at which a non-reverse movement stops being self-evident. Beyond this
+    # the movement sends a driver back the way they came, so it needs the same positive
+    # `turn:lanes` evidence a U-turn does. Must stay below the 145 degree `reverse` band,
+    # which the U-turn policy already governs.
+    sharp_movement_review_degrees: float = Field(default=130.0, gt=70, lt=145)
+
+
+class LaneGeometryConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # A merging or diverging lane is drawn reaching the lane it joins rather than
+    # stopping on the other road's centreline, where OSM ends its way. This is the
+    # distance over which that lateral correction is blended in, so the lane bends
+    # instead of kinking. It is clamped to the lane's own length.
+    merge_taper_length_m: float = Field(default=30.0, gt=0)
+
+    # Gaps below this are the ordinary half-lane offset between two blocks and are
+    # left to the connector; only a real merge is worth bending a lane for.
+    merge_taper_min_gap_m: float = Field(default=0.5, gt=0)
+
 
 class ConverterConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -55,6 +75,7 @@ class ConverterConfig(BaseModel):
     )
     tag_inference: TagInferenceConfig = Field(default_factory=TagInferenceConfig)
     lane_selection: LaneSelectionConfig = Field(default_factory=LaneSelectionConfig)
+    lane_geometry: LaneGeometryConfig = Field(default_factory=LaneGeometryConfig)
 
 
 def load_config(path: Path) -> ConverterConfig:
