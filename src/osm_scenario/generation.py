@@ -42,8 +42,10 @@ from osm_scenario.topology import (
     via_way_resolution,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v4"
+GENERATOR_VERSION = "direct-osm-stage2-v5"
 LANE_MODEL_SCHEMA_VERSION = 2
+
+OPPOSITE_DIRECTION = {"forward": "backward", "backward": "forward"}
 
 
 class GenerationError(RuntimeError):
@@ -132,6 +134,11 @@ def _directional_lane_count(tags: dict[str, str], direction: str) -> tuple[int, 
     oneway = tags.get("oneway") in ONEWAY_VALUES or tags.get("junction") == "roundabout"
     if oneway and total is not None:
         return total, "explicit_total_oneway", "high"
+    opposite = _positive_int(tags.get(f"lanes:{OPPOSITE_DIRECTION[direction]}"))
+    if total is not None and opposite is not None:
+        if total > opposite:
+            return total - opposite, "complementary_directional", "high"
+        return 1, "contradictory_directional_total", "low"
     if total is not None:
         count = max(1, total // 2)
         confidence = "medium" if total % 2 == 0 else "low"
@@ -479,7 +486,11 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                 lane_lookup_right = created[lane_index + 1] if lane_index + 1 < count else None
             lanes[-count + lane_index].left_neighbor = lane_lookup_left
             lanes[-count + lane_index].right_neighbor = lane_lookup_right
-        if count_reason not in {"explicit_directional", "explicit_total_oneway"}:
+        if count_reason not in {
+            "explicit_directional",
+            "explicit_total_oneway",
+            "complementary_directional",
+        }:
             findings.append(
                 _finding(
                     rule="lane_count_inference",

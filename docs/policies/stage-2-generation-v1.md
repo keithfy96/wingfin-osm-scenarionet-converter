@@ -2,7 +2,7 @@
 
 `stage-2-generation-v1` documents how Stage 2 turns the immutable Stage 1 OSM
 snapshot and projected directed graph into the preliminary lane model. The
-current executable implementation is `direct-osm-stage2-v4` in
+current executable implementation is `direct-osm-stage2-v5` in
 [`generation.py`](../../src/osm_scenario/generation.py), with topology and
 restriction helpers in [`topology.py`](../../src/osm_scenario/topology.py).
 
@@ -51,6 +51,11 @@ but is also excluded from active lane links.
 - Each directed Stage 1 graph edge produces directional lanes.
 - Directional `lanes:forward` or `lanes:backward` is preferred.
 - On a one-way road, `lanes=*` is the directional count.
+- When `lanes=*` and the opposite direction's count are both present, the
+  directional count is the remainder, `lanes` minus the opposite count. This is
+  exact evidence rather than an inference, so it emits no finding. A total at or
+  below the opposite count is contradictory tagging: Stage 2 generates one lane
+  and emits a blocker.
 - On a two-way road without directional counts, Stage 2 divides `lanes=*` by
   two. Odd totals are low-confidence; absent lane counts default to one lane.
 - Explicit total width is divided across the applicable lanes. Otherwise the
@@ -196,7 +201,7 @@ audit makes textual findings spatially understandable, but it is not the Stage
 
 ## Current mosque interpretation
 
-With `direct-osm-stage2-v4`, the current mosque output intentionally contains
+With `direct-osm-stage2-v5`, the current mosque output intentionally contains
 review-required U-turn candidates at genuine decision nodes where OSM provides
 neither permission nor prohibition. Those findings are not generation errors;
 they expose legal uncertainty for Stage 3. An unexpectedly large number of

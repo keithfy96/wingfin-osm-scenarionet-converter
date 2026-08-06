@@ -44,6 +44,33 @@ def test_directional_lane_count_precedence_and_fallbacks() -> None:
     assert _directional_lane_count({}, "backward") == (1, "default_single_lane", "low")
 
 
+def test_directional_lane_count_uses_total_minus_opposite_direction() -> None:
+    # OSM way 334662874: lanes=4 with lanes:backward=1 leaves 3 forward lanes.
+    # Halving the total would silently drop the fourth lane.
+    tags = {"lanes": "4", "lanes:backward": "1"}
+    assert _directional_lane_count(tags, "forward") == (3, "complementary_directional", "high")
+    assert _directional_lane_count(tags, "backward") == (1, "explicit_directional", "high")
+
+    # An odd total is exact once one direction is known, so it is no longer a blocker.
+    assert _directional_lane_count({"lanes": "3", "lanes:backward": "2"}, "forward") == (
+        1,
+        "complementary_directional",
+        "high",
+    )
+
+    # A one-way total still wins over the opposite-direction tag.
+    assert _directional_lane_count(
+        {"lanes": "2", "lanes:backward": "1", "oneway": "yes"}, "forward"
+    ) == (2, "explicit_total_oneway", "high")
+
+    # Contradictory tagging cannot yield a zero or negative count.
+    assert _directional_lane_count({"lanes": "2", "lanes:backward": "2"}, "forward") == (
+        1,
+        "contradictory_directional_total",
+        "low",
+    )
+
+
 def test_speed_parser_preserves_kph_and_converts_mph() -> None:
     assert _speed_kph("50 km/h") == 50
     assert _speed_kph("30 mph") == pytest.approx(48.28032)

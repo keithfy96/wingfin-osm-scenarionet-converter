@@ -163,7 +163,7 @@ In the current
 
 - 1,117 directed edges emit `lane_width_default` findings;
 - those edges trace to 227 unique source ways;
-- the affected-feature union contains all 1,857 generated lanes; and
+- the affected-feature union contains all 1,863 generated lanes; and
 - every affected lane has `width_m: 3.5`.
 
 The road-class breakdown is 541 residential, 193 secondary, 152 tertiary, 109

@@ -9,18 +9,18 @@ It is not, by itself, proof that the source or generated map is wrong.
 
 ## Snapshot
 
-- Generator: `direct-osm-stage2-v4`
+- Generator: `direct-osm-stage2-v5`
 - Generation fingerprint:
-  `021f4cefcdb6266f7a7f1c89fc33b75245cc040a9137ae5f464dbbe00b41a640`
+  `7efd9681ee919e49de8693ed78819a39b7fc18ad6c5b97b4e0ee87e6fa216df0`
 - Source: [`preliminary.json`](../../workspaces/mosque/lane-model/preliminary.json)
-- Total findings: **3,219**
+- Total findings: **3,203**
 
 | Finding | Count | Share | Severity |
 | --- | ---: | ---: | --- |
-| `lane_width_default` | 1,117 | 34.7% | Warning |
-| `speed_default` | 974 | 30.3% | Warning |
-| `lane_count_inference` | 638 | 19.8% | 554 blockers; 84 warnings |
-| `ambiguous_connector` | 327 | 10.2% | Blocker |
+| `lane_width_default` | 1,117 | 34.9% | Warning |
+| `speed_default` | 974 | 30.4% | Warning |
+| `lane_count_inference` | 620 | 19.4% | 550 blockers; 70 warnings |
+| `ambiguous_connector` | 329 | 10.3% | Blocker |
 | `lane_transition_count_mismatch` | 141 | 4.4% | Warning |
 | `inferred_stop_line` | 19 | 0.6% | Warning |
 | `signal_lane_association` | 2 | 0.1% | Blocker |
@@ -38,11 +38,11 @@ and a traced edge example, see the
 
 **Meaning and current scale.** Stage 2 emits this finding when a directed graph
 edge's source way has no usable explicit OSM `width`. The snapshot has **1,117
-findings (34.7%) across 227 unique source ways**. These are edge-level findings,
+findings (34.9%) across 227 unique source ways**. These are edge-level findings,
 not 1,117 distinct roads: a source way split into several directed graph edges
 can appear several times. Their road classes are 541 residential, 193
 secondary, 152 tertiary, 109 motorway, 74 secondary-link, 25 motorway-link,
-and 23 unclassified. The affected-feature union is all **1,857 generated
+and 23 unclassified. The affected-feature union is all **1,863 generated
 lanes**, and every lane received the configured **3.5 m** fallback.
 
 **Trigger, precedence, and unit.** A `width` is usable only when it parses as a
@@ -111,26 +111,32 @@ for the plain-language precedence table, examples, and review workflow.
 
 **Meaning and current scale.** This finding records a directional lane count
 that was inferred rather than read from high-confidence directional or one-way
-evidence. There are **638 findings (19.8%) across 117 unique source ways**:
+evidence. There are **620 findings (19.4%) across 111 unique source ways**:
 
 - 550 missing-count cases defaulted to one lane: low-confidence blockers.
-- 78 even-total cases inferred one directional lane: medium-confidence warnings.
-- Six even-total cases inferred two directional lanes: medium-confidence warnings.
-- Four odd or uncertain total cases inferred one directional lane:
-  low-confidence blockers.
+- 70 even-total cases inferred one directional lane: medium-confidence warnings.
 
-That gives **554 blockers and 84 warnings**.
+That gives **550 blockers and 70 warnings**.
 
 **Trigger and precedence.** For each direction, Stage 2 first uses the positive
 integer `lanes:forward` or `lanes:backward`. If the way is one-way (including a
-roundabout), it uses a positive total `lanes` unchanged. For a two-way way with
-a positive total, it uses `max(1, total // 2)`: an even total is medium
+roundabout), it uses a positive total `lanes` unchanged. If a positive total and
+the **opposite** direction's count are both present, the directional count is
+the remainder, `total - opposite`; this is exact arithmetic on stated evidence,
+so it is high confidence and emits no finding. Only if neither direction is
+stated does it fall back to `max(1, total // 2)`: an even total is medium
 confidence, while an odd total is low confidence because division cannot
 explain a shared, reversible, or asymmetrically allocated lane. With no usable
 count it falls back to one lane at low confidence. A finding is emitted only
-for the inferred-total or single-lane-fallback paths. One finding represents a
-generated **edge/direction of a way**, with its created lane or lanes in
-`affected_feature_ids`.
+for the inferred-total, single-lane-fallback, or contradictory-tagging paths.
+One finding represents a generated **edge/direction of a way**, with its created
+lane or lanes in `affected_feature_ids`.
+
+The remainder rule is why the current snapshot has no odd-total blockers. OSM
+mappers commonly tag only the minority direction, as on way `334662874`
+(`lanes=4`, `lanes:backward=1`, Persiaran Kenanga): halving would generate three
+lanes on a four-lane road, whereas subtraction yields the correct three forward
+plus one backward with no finding at all.
 
 **Why review remains necessary.** Arithmetic cannot prove directional
 allocation, reversible or shared lanes, turn pockets, or the correctness of
@@ -140,9 +146,10 @@ it is a plausible deterministic allocation. Inspect directional totals,
 reversible/shared lanes, turn pockets, one-way status, and agreement with lane
 markings. Accepting approves `proposed_value.direction` and
 `proposed_value.lane_count`; rejecting requires corrected source evidence or a
-Stage 3 decision. Do not equate a finding with a wrong lane count, or 638
-findings with 638 roads. Relevant finding fields include `reason`
-(`default_single_lane` or `inferred_from_total`) and the proposed direction and
+Stage 3 decision. Do not equate a finding with a wrong lane count, or 620
+findings with 620 roads. Relevant finding fields include `reason`
+(`default_single_lane`, `inferred_from_total`, or
+`contradictory_directional_total`) and the proposed direction and
 count; affected lanes expose `direction`, `lane_count`, `lane_index`,
 neighbors, `source_edge`, and `source_way_ids`.
 
@@ -150,12 +157,12 @@ neighbors, `source_edge`, and `source_way_ids`.
 
 **Meaning and current scale.** This finding represents one generated
 intersection **connector** whose movement remains `review_required`. There are
-**327 findings (10.2%)**. Movement totals are 257 reverse, 56 through, and 14
+**329 findings (10.3%)**. Movement totals are 257 reverse, 58 through, and 14
 left/right/slight-turn connectors. The exact causes overlap: 257 are untagged
-reverse/U-turn candidates, 71 have multiple targets in the same movement
+reverse/U-turn candidates, 73 have multiple targets in the same movement
 family, and 13 lie in the inclusive 30°–40° through/turn boundary band. Because
 a connector can satisfy more than one condition, these totals do not sum to
-327. The mutually exclusive combinations are 251 reverse-only, 57
+329. The mutually exclusive combinations are 251 reverse-only, 59
 duplicate-family-only, eight duplicate-plus-borderline, six
 reverse-plus-duplicate, and five borderline-only.
 
@@ -194,8 +201,8 @@ the node in `source_ids`, connector in `affected_feature_ids`, and proposed
 **Meaning and current scale.** This warning records a directional continuation
 where incoming and outgoing lane counts differ. The snapshot contains **141
 findings (4.4%) across 78 nodes**. One node can yield multiple findings for
-different source-way/target-way directions. Unordered count pairs are 53
-between one and two lanes, 54 between one and three, 25 between two and three,
+different source-way/target-way directions. Unordered count pairs are 44
+between one and two lanes, 63 between one and three, 25 between two and three,
 and nine involving four lanes.
 
 **Trigger, mapping, and unit.** At a direct continuation, Stage 2 maps lane
