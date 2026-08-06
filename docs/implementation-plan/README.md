@@ -79,12 +79,11 @@ show completed increments beneath it.
       review findings.
     - `reports/lane-model-generation.json` - generation status, versions,
       checksums, fingerprint, and feature counts.
-    - `inspection/stage-2-map-review.html` - read-only lane, connector,
-      restriction-status, and stop-line preview; Stage 3 will provide
-      authoritative decision capture.
-    - `inspection/stage-2-review-audit.html` - searchable and filterable
-      finding-to-geometry audit on an OSM basemap; clicking a finding focuses
-      and highlights its affected generated features.
+    - `inspection/stage-2-review-audit.html` - the single read-only inspection
+      artifact: lane, connector, restriction-status, and stop-line preview on an
+      OSM basemap, plus a searchable and filterable finding-to-geometry audit
+      where clicking a finding focuses and highlights its affected generated
+      features. Stage 3 will provide authoritative decision capture.
     - `source/manifest.json` updated with the `stage_2` generation record and
       output checksums.
   - Verify:
@@ -96,7 +95,7 @@ show completed increments beneath it.
     3. Confirm the report fingerprint matches
        `lane-model/preliminary.json.metadata.generation_fingerprint` and
        `source/manifest.json.stage_2.generation_fingerprint`.
-    4. Open `inspection/stage-2-map-review.html` and visually check lane
+    4. Open `inspection/stage-2-review-audit.html` and visually check lane
        centerlines, polygons, connector colors/statuses, and stop lines. This
        preview does not record decisions; manual decisions start in Stage 3.
     5. Run `uv run pytest -q tests/unit/test_generation.py
@@ -109,7 +108,7 @@ show completed increments beneath it.
 
 - [ ] **Stage 3 - Record manual review decisions**
   - Outputs:
-    - `inspection/stage-2-map-review.html` regenerated as the stateful review
+    - `inspection/stage-3-review.html` generated as the stateful review
       application through `inspect --view review`.
     - Browser-local autosave draft keyed by source checksum and generation
       fingerprint; this is recoverable working state, not authoritative output.
@@ -220,7 +219,7 @@ automatic regeneration.
 - Write:
   - `lane-model/preliminary.json`
   - `reports/lane-model-generation.json`
-  - `inspection/stage-2-map-review.html`
+  - `inspection/stage-2-review-audit.html`
 - Keep traffic signals as static lane associations only. Do not generate
   timing, actors, or traffic-light state sequences.
 

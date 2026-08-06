@@ -880,14 +880,11 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
         directory.mkdir(parents=True, exist_ok=True)
     model_path = lane_model_dir / "preliminary.json"
     report_path = reports_dir / "lane-model-generation.json"
-    inspection_path = inspection_dir / "stage-2-map-review.html"
     review_audit_path = inspection_dir / "stage-2-review-audit.html"
     model_path.write_text(
         json.dumps(model.model_dump(mode="json"), indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    review_html = _render_review_html(model)
-    inspection_path.write_text(review_html, encoding="utf-8")
-    review_audit_path.write_text(review_html, encoding="utf-8")
+    review_audit_path.write_text(_render_review_html(model), encoding="utf-8")
     report = {
         "report_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -920,7 +917,6 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
     for name, path in (
         ("preliminary_lane_model", model_path),
         ("generation_report", report_path),
-        ("review_html", inspection_path),
         ("review_audit_html", review_audit_path),
     ):
         artifacts[name] = {

@@ -164,16 +164,17 @@ def test_generate_lane_model_writes_deterministic_stage_2_artifacts(tmp_path: Pa
     assert all(connector.from_lane_id != connector.to_lane_id for connector in first.connectors)
     assert all(connector.from_way_id != connector.to_way_id for connector in first.connectors)
     assert all(stop_line.source == "inferred" for stop_line in first.stop_lines)
-    assert (workspace / "inspection" / "stage-2-map-review.html").is_file()
     assert (workspace / "inspection" / "stage-2-review-audit.html").is_file()
-    html = (workspace / "inspection" / "stage-2-map-review.html").read_text()
+    # The audit page is the only Stage 2 inspection artifact; it used to be written
+    # a second time under this name, producing two byte-identical files.
+    assert not (workspace / "inspection" / "stage-2-map-review.html").exists()
+    html = (workspace / "inspection" / "stage-2-review-audit.html").read_text()
     assert "Stage 2 Review Audit" in html
     assert "Review filters" in html
     assert "Selected finding" in html
     assert "review_required" in html
     assert "geometry_ids" in html
     assert "OpenStreetMap contributors" in html
-    assert (workspace / "inspection" / "stage-2-review-audit.html").read_text() == html
     report = json.loads(report_path.read_text())
     assert report["feature_counts"]["connectors"] == len(first.connectors)
     assert report["feature_counts"]["stop_lines"] == len(first.stop_lines)
@@ -181,6 +182,7 @@ def test_generate_lane_model_writes_deterministic_stage_2_artifacts(tmp_path: Pa
         first.metadata.generation_fingerprint
     )
     assert "review_audit_html" in first_manifest["stage_2"]["artifacts"]
+    assert "review_html" not in first_manifest["stage_2"]["artifacts"]
 
     generate_lane_model(workspace=workspace, config=config)
     assert (workspace / "lane-model" / "preliminary.json").read_bytes() == first_model_bytes

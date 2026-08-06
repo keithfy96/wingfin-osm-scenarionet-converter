@@ -189,15 +189,16 @@ recreates:
 - `lane-model/preliminary.json` — generated lane model and statuses.
 - `reports/lane-model-generation.json` — counts, checksums, and generator
   metadata.
-- `inspection/stage-2-map-review.html` — read-only visual inspection map.
-- `inspection/stage-2-review-audit.html` — searchable, filterable review audit
-  that focuses each finding and its affected generated geometry on an OSM
-  basemap.
+- `inspection/stage-2-review-audit.html` — the single read-only inspection
+  artifact. It draws generated lanes, connector statuses, restrictions, and
+  inferred stop lines on an OSM basemap, and pairs them with a searchable,
+  filterable finding queue that focuses each finding on its affected generated
+  geometry.
 - The Stage 2 record in `source/manifest.json`.
 
-Both HTML files are read-only checks of what Stage 2 generated. The review
-audit makes textual findings spatially understandable, but it is not the Stage
-3 decision application and does not export `review.json`.
+The audit is a read-only check of what Stage 2 generated. It makes textual
+findings spatially understandable, but it is not the Stage 3 decision
+application and does not export `review.json`.
 
 ## Current mosque interpretation
 
