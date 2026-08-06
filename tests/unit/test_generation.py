@@ -10,6 +10,7 @@ from osm_scenario.acquisition import acquire_osm
 from osm_scenario.config import ConverterConfig
 from osm_scenario.generation import (
     GenerationError,
+    _direction_arrow,
     _directional_lane_count,
     _is_decision_node,
     _mapped_lane_index,
@@ -17,7 +18,7 @@ from osm_scenario.generation import (
     _turn_permissions,
     generate_lane_model,
 )
-from osm_scenario.lane_model import PreliminaryLaneModel
+from osm_scenario.lane_model import Point2D, PreliminaryLaneModel
 from osm_scenario.normalization import normalize_workspace
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "osm" / "tiny.osm"
@@ -28,6 +29,28 @@ def _workspace(tmp_path: Path) -> Path:
     acquire_osm(workspace=workspace, driving_side="left", osm_file=FIXTURE)
     normalize_workspace(workspace=workspace, config=ConverterConfig(config_version=1))
     return workspace
+
+
+def test_direction_arrow_points_downstream_from_the_centreline_midpoint() -> None:
+    line = [Point2D(x=0.0, y=0.0), Point2D(x=20.0, y=0.0)]
+    back_left, tip, back_right = _direction_arrow(line, 3.5)
+
+    # The tip sits ahead of the midpoint, both barbs behind it, and the barbs
+    # straddle the centreline symmetrically.
+    assert tip.x > 10.0 > back_left.x
+    assert back_left.x == back_right.x
+    assert back_left.y == pytest.approx(-back_right.y)
+    assert back_left.y != 0.0
+    assert tip.y == back_left.y + back_right.y == 0.0
+
+    # Reversing the lane reverses the arrow rather than mirroring it.
+    reversed_tip = _direction_arrow([Point2D(x=20.0, y=0.0), Point2D(x=0.0, y=0.0)], 3.5)[1]
+    assert reversed_tip.x < 10.0
+
+    # The arrow never outgrows a very short lane, and a degenerate one has none.
+    short = _direction_arrow([Point2D(x=0.0, y=0.0), Point2D(x=1.0, y=0.0)], 3.5)
+    assert short[0].x >= 0.0 and short[2].x <= 1.0
+    assert _direction_arrow([Point2D(x=5.0, y=5.0), Point2D(x=5.0, y=5.0)], 3.5) is None
 
 
 def test_directional_lane_count_precedence_and_fallbacks() -> None:
@@ -174,6 +197,8 @@ def test_generate_lane_model_writes_deterministic_stage_2_artifacts(tmp_path: Pa
     assert "Selected finding" in html
     assert "review_required" in html
     assert "geometry_ids" in html
+    assert "lane_direction" in html
+    assert "Lane direction arrows" in html
     assert "OpenStreetMap contributors" in html
     report = json.loads(report_path.read_text())
     assert report["feature_counts"]["connectors"] == len(first.connectors)
