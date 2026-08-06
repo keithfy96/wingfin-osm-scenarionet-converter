@@ -21,6 +21,7 @@ from osm_scenario.generation import (
     _merge_taper_plan,
     _side_filtered_candidates,
     _speed_kph,
+    _stranded_permission_fallback,
     _tapered_line,
     _turn_permissions,
     _unproven_sharp_movement,
@@ -245,6 +246,44 @@ def test_side_filter_respects_turn_tags_and_never_strands_a_lane() -> None:
     # exit, which is exactly what the side rule exists to prevent.
     assert _filter(_approach(0, 2), [exit_], has_continuation=True) == []
     assert _filter(_approach(1, 2), [exit_], has_continuation=True) == ["exit"]
+
+
+def _fallback(
+    kept: list[MovementCandidate],
+    removed: list[MovementCandidate],
+    *,
+    has_continuation: bool = False,
+) -> str | None:
+    restored = _stranded_permission_fallback(kept, removed, has_continuation=has_continuation)
+    return None if restored is None else restored.to_lane_id
+
+
+def test_turn_tags_never_strand_a_lane_when_they_match_no_available_movement() -> None:
+    # Kenanga way 1530245742: tagged `right`, but its only continuation leaves at
+    # -19.36 degrees, which `classify_movement` bins as `through`. Dropping it on that
+    # mismatch cut the lane off from way 776370584 entirely.
+    shallow = _candidate("ahead", "through", -19.36)
+    assert _fallback([], [shallow]) == "ahead"
+
+    # The straightest rejected movement wins, and ties break on the lane id so the
+    # choice is deterministic across runs.
+    steeper = _candidate("steeper", "left", 80.0)
+    assert _fallback([], [shallow, steeper]) == "ahead"
+    tie_a = _candidate("aaa", "through", -19.36)
+    tie_b = _candidate("bbb", "through", 19.36)
+    assert _fallback([], [tie_b, tie_a]) == "aaa"
+
+
+def test_permission_fallback_stays_off_when_the_lane_is_not_stranded() -> None:
+    shallow = _candidate("ahead", "through", -19.36)
+    permitted = _candidate("right", "right", -90.0)
+
+    # Anything the tag allows means there is no disagreement to resolve.
+    assert _fallback([permitted], [shallow]) is None
+    # A lane that carries straight on already has somewhere to go.
+    assert _fallback([], [shallow], has_continuation=True) is None
+    # Nothing was rejected, so nothing is restored.
+    assert _fallback([], []) is None
 
 
 def test_a_taper_bends_one_end_onto_its_target_and_leaves_the_rest_alone() -> None:

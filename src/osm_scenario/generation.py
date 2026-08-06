@@ -349,6 +349,26 @@ def _side_filtered_candidates(
     return [min(removed, key=lambda item: (abs(item.angle_degrees), item.to_lane_id))]
 
 
+def _stranded_permission_fallback(
+    candidates: list[MovementCandidate],
+    removed: list[MovementCandidate],
+    *,
+    has_continuation: bool,
+) -> MovementCandidate | None:
+    """Return the movement to restore when `turn:lanes` rejected every candidate.
+
+    `turn:lanes` is surveyed evidence for which movements are *allowed*; the movement
+    class is inferred by binning a turn angle. A tag that matches nothing on offer is a
+    disagreement between the two, and resolving it by dropping every candidate cuts the
+    drivable network on the strength of a threshold constant. The straightest rejected
+    movement is restored instead, on the same no-stranding rule the side filter uses.
+    A lane that carries straight on has somewhere to go already, so it is not stranded.
+    """
+    if candidates or not removed or has_continuation:
+        return None
+    return min(removed, key=lambda item: (abs(item.angle_degrees), item.to_lane_id))
+
+
 def _unproven_sharp_movement(
     candidate: MovementCandidate, *, source: LaneFeature, min_degrees: float
 ) -> bool:
@@ -701,7 +721,7 @@ def _render_review_html(model: PreliminaryLaneModel, snapshot: OsmSnapshot) -> s
 *{box-sizing:border-box}html,body{height:100%;margin:0;font:14px system-ui,sans-serif;color:#202428}body{display:grid;grid-template-columns:minmax(330px,420px) 1fr;background:#f4f5f6}aside{padding:14px;overflow:auto;border-right:1px solid #c8cdd1;background:#fff}h1{font-size:20px;margin:0 0 5px}h2{font-size:14px;margin:14px 0 7px}.muted{color:#687078;font-size:12px}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin:10px 0}.metric{padding:7px;background:#f1f3f5;border-radius:5px;text-align:center}.metric b{display:block;font-size:16px}.filters{display:grid;gap:7px}.filters input,.filters select{width:100%;padding:7px;border:1px solid #adb5bd;border-radius:4px;background:#fff}.queue{display:grid;gap:6px;margin-top:8px}.finding{border:1px solid #d6dadd;border-left:5px solid #e67700;border-radius:5px;padding:8px;background:#fff;cursor:pointer;text-align:left}.finding.blocker{border-left-color:#c92a2a}.finding:hover,.finding.active{background:#fff3bf}.finding strong{display:block}.finding small{display:block;color:#687078;margin-top:3px}.detail{padding:9px;background:#f8f9fa;border:1px solid #dee2e6;border-radius:5px;overflow-wrap:anywhere}.detail table,.popup-table{border-collapse:collapse;width:100%}.detail td,.popup-table td{border-bottom:1px solid #e5e7e9;padding:4px;vertical-align:top;font-size:12px}.legend{display:grid;grid-template-columns:18px 1fr;gap:6px 8px;align-items:center}.swatch{height:5px}.lane{background:#277da1}.lane-direction{background:#0b4f7a}.connector-band{background:#8ce99a;height:9px}.active-connector{background:#2b8a3e}.review-connector{background:#f08c00}.forbidden-connector{background:#c92a2a}.stop-line{background:#7048e8}.source-geometry{background:#868e96}.highlight{background:#ffd43b}.chip{display:inline-block;font:inherit;font-size:12px;padding:2px 7px;margin:1px 0;border:1px solid #b38600;border-radius:10px;background:#fff9db;color:#7a5c00;cursor:pointer}.chip:hover{background:#ffd43b;color:#202428}.muted-chip{border-color:#ced4da;background:#f1f3f5;color:#687078;cursor:default}.link-table{border-collapse:collapse}.link-table td{border:0;padding:1px 7px 1px 0;font-size:12px;vertical-align:middle;white-space:nowrap}.pill{font-size:11px;padding:1px 7px;border-radius:9px;border:1px solid}.pill.active{border-color:#2b8a3e;color:#2b8a3e;background:#ebfbee}.pill.review_required{border-color:#f08c00;color:#a35c00;background:#fff4e6}.pill.forbidden{border-color:#c92a2a;color:#c92a2a;background:#fff5f5}.queue-note{font-size:12px;color:#687078;margin:7px 0}#map{height:100%;min-height:520px}.leaflet-popup-content{max-height:300px;overflow:auto}@media(max-width:780px){body{grid-template-columns:1fr;grid-template-rows:minmax(360px,45vh) 1fr}aside{border-right:0;border-bottom:1px solid #c8cdd1}#map{min-height:55vh}}
 </style></head><body><aside><h1>Stage 2 Review Audit</h1><div class="muted">Read-only visual explanation of preliminary generation findings. Decisions are recorded later in Stage 3.</div><div class="summary" id="summary"></div><h2>Review filters</h2><div class="filters"><input id="search" placeholder="Search rule or reason; paste an OSM way/node or feature ID to focus it"><select id="rule"><option value="">All rules</option></select><select id="severity"><option value="">All severities</option><option value="blocker">Blocker</option><option value="warning">Warning</option></select></div><div class="queue-note" id="queue-note"></div><div class="queue" id="queue"></div><h2>Selected finding</h2><div class="detail" id="detail">Select a review item to focus its affected geometry.</div><h2>Legend</h2><div class="legend"><span class="swatch lane"></span><span>Lane centreline</span><span class="swatch lane-direction"></span><span>Direction of travel (arrow points downstream)</span><span class="swatch connector-band"></span><span>Connector band (the lane-width path a movement takes)</span><span class="swatch active-connector"></span><span>Active connector</span><span class="swatch review-connector"></span><span>Review-required connector</span><span class="swatch forbidden-connector"></span><span>Forbidden connector</span><span class="swatch stop-line"></span><span>Inferred stop line</span><span class="swatch source-geometry"></span><span>Source OSM way or node (dashed)</span><span class="swatch highlight"></span><span>Selected or searched geometry</span></div></aside><main id="map"></main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
-const payload=__PAYLOAD__;const reviewPriority={ambiguous_connector:0,restriction_effect_review:1,signal_lane_association:2,lane_transition_count_mismatch:3,inferred_stop_line:4,lane_count_inference:5,lane_width_default:6,speed_default:7};payload.findings.sort((a,b)=>(reviewPriority[a.rule]??99)-(reviewPriority[b.rule]??99)||a.rule.localeCompare(b.rule)||a.identifier.localeCompare(b.identifier));const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const payload=__PAYLOAD__;const reviewPriority={turn_permission_geometry_conflict:0,ambiguous_connector:1,restriction_effect_review:2,signal_lane_association:3,lane_transition_count_mismatch:4,inferred_stop_line:5,lane_count_inference:6,lane_width_default:7,speed_default:8};payload.findings.sort((a,b)=>(reviewPriority[a.rule]??99)-(reviewPriority[b.rule]??99)||a.rule.localeCompare(b.rule)||a.identifier.localeCompare(b.identifier));const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const map=L.map('map',{preferCanvas:true});L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:20,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
 const groups={source_way:L.layerGroup(),source_node:L.layerGroup(),lane_polygon:L.layerGroup(),lane_centerline:L.layerGroup(),lane_direction:L.layerGroup(),connector_polygon:L.layerGroup(),active:L.layerGroup(),review_required:L.layerGroup(),forbidden:L.layerGroup(),stop_line:L.layerGroup()};const byId=new Map(),propsById=new Map(),allLayers=[];let selected=[],lastFocused=null;
 const statusColor=s=>s==='forbidden'?'#c92a2a':s==='review_required'?'#f08c00':'#2b8a3e';
@@ -961,6 +981,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
             source = lane_lookup[from_id]
             source_line = LineString((point.x, point.y) for point in source.centerline)
             candidates_for_lane: list[MovementCandidate] = []
+            permission_removed: list[MovementCandidate] = []
             carries_straight_on = False
             outgoing_groups: dict[tuple[str, tuple[str, ...]], list[LaneFeature]] = {}
             for to_id in outgoing:
@@ -1049,10 +1070,16 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                         continue
                     if source.lane_index != 0 and not explicit_reverse:
                         continue
-                elif source.turn_permissions and not any(
-                    movement_matches(permission, movement) for permission in source.turn_permissions
-                ):
-                    continue
+                    permitted = True
+                else:
+                    # A `turn:lanes` value is surveyed evidence; the movement class is
+                    # inferred from an angle threshold. Where the two disagree the tag
+                    # must not be the reason a lane loses its only exit, so park the
+                    # mismatch here and restore it below if nothing else survives.
+                    permitted = not source.turn_permissions or any(
+                        movement_matches(permission, movement)
+                        for permission in source.turn_permissions
+                    )
                 curve = connector_curve(
                     source_line,
                     target_line,
@@ -1061,17 +1088,51 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                         float(graph.nodes[graph_node_id]["y"]),
                     ),
                 )
-                candidates_for_lane.append(
-                    MovementCandidate(
-                        junction_node_id=node_id,
-                        from_lane_id=from_id,
-                        to_lane_id=target.identifier,
-                        from_way_id=source.source_way_ids[0],
-                        to_way_id=target.source_way_ids[0],
-                        movement=movement,
-                        angle_degrees=angle,
-                        centerline=curve,
-                        ambiguous=False,
+                candidate = MovementCandidate(
+                    junction_node_id=node_id,
+                    from_lane_id=from_id,
+                    to_lane_id=target.identifier,
+                    from_way_id=source.source_way_ids[0],
+                    to_way_id=target.source_way_ids[0],
+                    movement=movement,
+                    angle_degrees=angle,
+                    centerline=curve,
+                    ambiguous=False,
+                )
+                if permitted:
+                    candidates_for_lane.append(candidate)
+                else:
+                    permission_removed.append(candidate)
+            # `turn:lanes` says which movements are allowed, not which movements exist,
+            # so it must never be the reason a lane loses its only exit. Restore the
+            # straightest rejected movement and record the disagreement for review.
+            restored = _stranded_permission_fallback(
+                candidates_for_lane,
+                permission_removed,
+                has_continuation=carries_straight_on,
+            )
+            if restored is not None:
+                candidates_for_lane = [restored]
+                findings.append(
+                    _finding(
+                        rule="turn_permission_geometry_conflict",
+                        severity="blocker",
+                        source_type="node",
+                        source_ids=[node_id],
+                        affected_feature_ids=[source.identifier, restored.to_lane_id],
+                        proposed_value={
+                            "turn_permissions": sorted(source.turn_permissions),
+                            "restored_movement": restored.movement,
+                            "restored_angle_degrees": round(restored.angle_degrees, 2),
+                            "rejected_movements": sorted(
+                                {item.movement for item in permission_removed}
+                            ),
+                        },
+                        confidence="low",
+                        reason=(
+                            "turn:lanes permits no movement the geometry offers; "
+                            "kept the straightest rather than stranding the lane"
+                        ),
                     )
                 )
             # A movement that leaves toward one side of the road belongs to that side's
