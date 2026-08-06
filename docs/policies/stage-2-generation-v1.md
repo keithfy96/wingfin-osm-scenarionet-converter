@@ -202,3 +202,7 @@ neither permission nor prohibition. Those findings are not generation errors;
 they expose legal uncertainty for Stage 3. An unexpectedly large number of
 ordinary continuation connectors, active reverse connectors without explicit
 evidence, or reverse candidates at shape nodes would violate this policy.
+
+See the [Stage 2 finding reference](stage-2-finding-reference.md) for the
+current mosque snapshot, exact trigger conditions, and visual-review guidance
+for every finding category.

@@ -15,6 +15,15 @@ receive a new policy version rather than silently changing an existing version.
 | [`public-driving-v1`](public-driving-v1.md) | Active | Select public motor-vehicle roads from an OSM snapshot | [`osm_source.py`](../../src/osm_scenario/osm_source.py) |
 | [`stage-2-generation-v1`](stage-2-generation-v1.md) | Active | Generate preliminary lane geometry, connectivity, restrictions, signals, and review findings | [`generation.py`](../../src/osm_scenario/generation.py), [`topology.py`](../../src/osm_scenario/topology.py) |
 
+Supporting reference:
+
+- [Stage 2 finding reference](stage-2-finding-reference.md) — exact finding
+  triggers, current mosque counts, and Stage 3 visual-review implications.
+- [Stage 2 lane-width algorithm](stage-2-lane-width-algorithm.md) — width
+  parsing, fallback precedence, generated geometry, and review traceability.
+- [Stage 2 lane-count inference](stage-2-lane-count-inference.md) — directional
+  lane-count precedence, confidence, findings, and review handling.
+
 ## Source Of Truth
 
 The policy pages explain behavior for operators and reviewers. The executable
