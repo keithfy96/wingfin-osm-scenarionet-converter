@@ -192,9 +192,13 @@ recreates:
 - `inspection/stage-2-review-audit.html` — the single read-only inspection
   artifact. It draws generated lanes, connector statuses, restrictions, and
   inferred stop lines on an OSM basemap, marks each lane with a chevron pointing
-  along its direction of travel, and pairs them with a searchable,
-  filterable finding queue that focuses each finding on its affected generated
-  geometry.
+  along its direction of travel, and underlays the source OSM ways and nodes the
+  generation came from. A searchable, filterable finding queue focuses each
+  finding on both the generated geometry it affects and the source way or node it
+  was raised against; a finding sourced to a relation resolves to its member ways
+  and nodes. Pasting a bare ID into the search box resolves it against the way,
+  node, and generated-feature namespaces in that order, then highlights and zooms
+  to whatever it matched, so an ID can be located without going through a finding.
 - The Stage 2 record in `source/manifest.json`.
 
 The audit is a read-only check of what Stage 2 generated. It makes textual

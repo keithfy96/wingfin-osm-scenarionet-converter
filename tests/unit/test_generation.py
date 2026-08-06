@@ -199,7 +199,28 @@ def test_generate_lane_model_writes_deterministic_stage_2_artifacts(tmp_path: Pa
     assert "geometry_ids" in html
     assert "lane_direction" in html
     assert "Lane direction arrows" in html
+    assert "source_way" in html
+    assert "source_node" in html
+    assert "Source OSM ways" in html
+    # Typing a bare OSM ID must resolve into the way/node namespaces, not just filter text.
+    assert "function resolveId" in html
+    assert "'way:'+q" in html and "'node:'+q" in html
     assert "OpenStreetMap contributors" in html
+
+    # Source OSM geometry must actually reach the payload, not just the template,
+    # so a finding can be located on the map by the way or node it came from.
+    payload = json.loads(html.split("const payload=", 1)[1].split(";const reviewPriority", 1)[0])
+    kinds = {feature["properties"]["kind"] for feature in payload["features"]["features"]}
+    assert {"source_way", "source_node"} <= kinds
+    source_keys = {
+        feature["properties"]["id"]
+        for feature in payload["features"]["features"]
+        if feature["properties"]["kind"] in {"source_way", "source_node"}
+    }
+    assert all(key.startswith(("way:", "node:")) for key in source_keys)
+    mapped = [f for f in payload["findings"] if f["source_geometry_ids"]]
+    assert mapped
+    assert all(key in source_keys for f in mapped for key in f["source_geometry_ids"])
     report = json.loads(report_path.read_text())
     assert report["feature_counts"]["connectors"] == len(first.connectors)
     assert report["feature_counts"]["stop_lines"] == len(first.stop_lines)

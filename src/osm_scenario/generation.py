@@ -28,7 +28,7 @@ from osm_scenario.lane_model import (
     SignalAssociation,
     StopLine,
 )
-from osm_scenario.osm_source import ONEWAY_VALUES, read_osm_snapshot
+from osm_scenario.osm_source import ONEWAY_VALUES, OsmSnapshot, read_osm_snapshot
 from osm_scenario.topology import (
     MovementCandidate,
     classify_movement,
@@ -280,7 +280,7 @@ def _direction_arrow(centerline: list[Point2D], width: float) -> list[Point2D] |
     ]
 
 
-def _render_review_html(model: PreliminaryLaneModel) -> str:
+def _render_review_html(model: PreliminaryLaneModel, snapshot: OsmSnapshot) -> str:
     transformer = Transformer.from_crs(
         model.metadata.coordinate_system_wkt, "EPSG:4326", always_xy=True
     )
@@ -372,6 +372,84 @@ def _render_review_html(model: PreliminaryLaneModel) -> str:
         for way_id in lane.source_way_ids:
             lanes_by_way.setdefault(way_id, []).append(lane.identifier)
     restrictions = {item.identifier: item for item in model.restrictions}
+
+    # Source OSM geometry, so a finding's `source_ids` can be located on the map and
+    # not merely matched by the queue's text search. Relations carry no geometry of
+    # their own, so they contribute their member ways and nodes instead.
+    def source_refs(finding: ReviewFinding) -> tuple[set[str], set[str]]:
+        ways: set[str] = set()
+        nodes: set[str] = set()
+        for identifier in finding.source_ids:
+            if finding.source_type == "way":
+                ways.add(identifier)
+            elif finding.source_type == "node":
+                nodes.add(identifier)
+            else:
+                relation = snapshot.relations.get(identifier)
+                for member in relation.members if relation else ():
+                    if member.member_type == "way":
+                        ways.add(member.reference)
+                    elif member.member_type == "node":
+                        nodes.add(member.reference)
+        return ways, nodes
+
+    source_way_ids = set(lanes_by_way)
+    source_node_ids = {connector.junction_node_id for connector in model.connectors}
+    source_node_ids.update(stop_line.source_node_id for stop_line in model.stop_lines)
+    source_node_ids.update(signal.source_node_id for signal in model.signals)
+    for finding in model.findings:
+        ways, nodes = source_refs(finding)
+        source_way_ids.update(ways)
+        source_node_ids.update(nodes)
+
+    def node_position(node_id: str) -> list[float] | None:
+        node = snapshot.nodes.get(node_id)
+        return None if node is None else [node.longitude, node.latitude]
+
+    source_ids: set[str] = set()
+    for way_id in sorted(source_way_ids):
+        way = snapshot.ways.get(way_id)
+        if way is None:
+            continue
+        line = [point for point in map(node_position, way.node_ids) if point is not None]
+        if len(line) < 2:
+            continue
+        key = f"way:{way_id}"
+        source_ids.add(key)
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "LineString", "coordinates": line},
+                "properties": {
+                    "id": key,
+                    "kind": "source_way",
+                    "osm_way_id": way_id,
+                    "generated_lane_ids": sorted(lanes_by_way.get(way_id, [])),
+                    **way.tags,
+                },
+            }
+        )
+    junction_nodes = {connector.junction_node_id for connector in model.connectors}
+    for node_id in sorted(source_node_ids):
+        position = node_position(node_id)
+        if position is None:
+            continue
+        key = f"node:{node_id}"
+        source_ids.add(key)
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": position},
+                "properties": {
+                    "id": key,
+                    "kind": "source_node",
+                    "osm_node_id": node_id,
+                    "junction_node": node_id in junction_nodes,
+                    **snapshot.nodes[node_id].tags,
+                },
+            }
+        )
+
     findings = []
     for finding in model.findings:
         finding_data = finding.model_dump(mode="json")
@@ -386,6 +464,12 @@ def _render_review_html(model: PreliminaryLaneModel) -> str:
             for way_id in restriction.from_way_ids + restriction.to_way_ids:
                 geometry_ids.update(lanes_by_way.get(way_id, []))
         finding_data["geometry_ids"] = sorted(geometry_ids)
+        ways, nodes = source_refs(finding)
+        finding_data["source_geometry_ids"] = sorted(
+            key
+            for key in [f"way:{item}" for item in ways] + [f"node:{item}" for item in nodes]
+            if key in source_ids
+        )
         findings.append(finding_data)
 
     payload = json.dumps(
@@ -407,21 +491,34 @@ def _render_review_html(model: PreliminaryLaneModel) -> str:
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Stage 2 Review Audit</title><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
-*{box-sizing:border-box}html,body{height:100%;margin:0;font:14px system-ui,sans-serif;color:#202428}body{display:grid;grid-template-columns:minmax(330px,420px) 1fr;background:#f4f5f6}aside{padding:14px;overflow:auto;border-right:1px solid #c8cdd1;background:#fff}h1{font-size:20px;margin:0 0 5px}h2{font-size:14px;margin:14px 0 7px}.muted{color:#687078;font-size:12px}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin:10px 0}.metric{padding:7px;background:#f1f3f5;border-radius:5px;text-align:center}.metric b{display:block;font-size:16px}.filters{display:grid;gap:7px}.filters input,.filters select{width:100%;padding:7px;border:1px solid #adb5bd;border-radius:4px;background:#fff}.queue{display:grid;gap:6px;margin-top:8px}.finding{border:1px solid #d6dadd;border-left:5px solid #e67700;border-radius:5px;padding:8px;background:#fff;cursor:pointer;text-align:left}.finding.blocker{border-left-color:#c92a2a}.finding:hover,.finding.active{background:#fff3bf}.finding strong{display:block}.finding small{display:block;color:#687078;margin-top:3px}.detail{padding:9px;background:#f8f9fa;border:1px solid #dee2e6;border-radius:5px;overflow-wrap:anywhere}.detail table,.popup-table{border-collapse:collapse;width:100%}.detail td,.popup-table td{border-bottom:1px solid #e5e7e9;padding:4px;vertical-align:top;font-size:12px}.legend{display:grid;grid-template-columns:18px 1fr;gap:6px 8px;align-items:center}.swatch{height:5px}.lane{background:#277da1}.lane-direction{background:#0b4f7a}.active-connector{background:#2b8a3e}.review-connector{background:#f08c00}.forbidden-connector{background:#c92a2a}.stop-line{background:#7048e8}.highlight{background:#ffec99}.queue-note{font-size:12px;color:#687078;margin:7px 0}#map{height:100%;min-height:520px}.leaflet-popup-content{max-height:300px;overflow:auto}@media(max-width:780px){body{grid-template-columns:1fr;grid-template-rows:minmax(360px,45vh) 1fr}aside{border-right:0;border-bottom:1px solid #c8cdd1}#map{min-height:55vh}}
-</style></head><body><aside><h1>Stage 2 Review Audit</h1><div class="muted">Read-only visual explanation of preliminary generation findings. Decisions are recorded later in Stage 3.</div><div class="summary" id="summary"></div><h2>Review filters</h2><div class="filters"><input id="search" placeholder="Search rule, reason, source ID, or feature ID"><select id="rule"><option value="">All rules</option></select><select id="severity"><option value="">All severities</option><option value="blocker">Blocker</option><option value="warning">Warning</option></select></div><div class="queue-note" id="queue-note"></div><div class="queue" id="queue"></div><h2>Selected finding</h2><div class="detail" id="detail">Select a review item to focus its affected geometry.</div><h2>Legend</h2><div class="legend"><span class="swatch lane"></span><span>Lane centreline</span><span class="swatch lane-direction"></span><span>Direction of travel (arrow points downstream)</span><span class="swatch active-connector"></span><span>Active connector</span><span class="swatch review-connector"></span><span>Review-required connector</span><span class="swatch forbidden-connector"></span><span>Forbidden connector</span><span class="swatch stop-line"></span><span>Inferred stop line</span><span class="swatch highlight"></span><span>Selected finding geometry</span></div></aside><main id="map"></main>
+*{box-sizing:border-box}html,body{height:100%;margin:0;font:14px system-ui,sans-serif;color:#202428}body{display:grid;grid-template-columns:minmax(330px,420px) 1fr;background:#f4f5f6}aside{padding:14px;overflow:auto;border-right:1px solid #c8cdd1;background:#fff}h1{font-size:20px;margin:0 0 5px}h2{font-size:14px;margin:14px 0 7px}.muted{color:#687078;font-size:12px}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin:10px 0}.metric{padding:7px;background:#f1f3f5;border-radius:5px;text-align:center}.metric b{display:block;font-size:16px}.filters{display:grid;gap:7px}.filters input,.filters select{width:100%;padding:7px;border:1px solid #adb5bd;border-radius:4px;background:#fff}.queue{display:grid;gap:6px;margin-top:8px}.finding{border:1px solid #d6dadd;border-left:5px solid #e67700;border-radius:5px;padding:8px;background:#fff;cursor:pointer;text-align:left}.finding.blocker{border-left-color:#c92a2a}.finding:hover,.finding.active{background:#fff3bf}.finding strong{display:block}.finding small{display:block;color:#687078;margin-top:3px}.detail{padding:9px;background:#f8f9fa;border:1px solid #dee2e6;border-radius:5px;overflow-wrap:anywhere}.detail table,.popup-table{border-collapse:collapse;width:100%}.detail td,.popup-table td{border-bottom:1px solid #e5e7e9;padding:4px;vertical-align:top;font-size:12px}.legend{display:grid;grid-template-columns:18px 1fr;gap:6px 8px;align-items:center}.swatch{height:5px}.lane{background:#277da1}.lane-direction{background:#0b4f7a}.active-connector{background:#2b8a3e}.review-connector{background:#f08c00}.forbidden-connector{background:#c92a2a}.stop-line{background:#7048e8}.source-geometry{background:#868e96}.highlight{background:#ffd43b}.chip{display:inline-block;font:inherit;font-size:12px;padding:2px 7px;margin:1px 0;border:1px solid #b38600;border-radius:10px;background:#fff9db;color:#7a5c00;cursor:pointer}.chip:hover{background:#ffd43b;color:#202428}.muted-chip{border-color:#ced4da;background:#f1f3f5;color:#687078;cursor:default}.queue-note{font-size:12px;color:#687078;margin:7px 0}#map{height:100%;min-height:520px}.leaflet-popup-content{max-height:300px;overflow:auto}@media(max-width:780px){body{grid-template-columns:1fr;grid-template-rows:minmax(360px,45vh) 1fr}aside{border-right:0;border-bottom:1px solid #c8cdd1}#map{min-height:55vh}}
+</style></head><body><aside><h1>Stage 2 Review Audit</h1><div class="muted">Read-only visual explanation of preliminary generation findings. Decisions are recorded later in Stage 3.</div><div class="summary" id="summary"></div><h2>Review filters</h2><div class="filters"><input id="search" placeholder="Search rule or reason; paste an OSM way/node or feature ID to focus it"><select id="rule"><option value="">All rules</option></select><select id="severity"><option value="">All severities</option><option value="blocker">Blocker</option><option value="warning">Warning</option></select></div><div class="queue-note" id="queue-note"></div><div class="queue" id="queue"></div><h2>Selected finding</h2><div class="detail" id="detail">Select a review item to focus its affected geometry.</div><h2>Legend</h2><div class="legend"><span class="swatch lane"></span><span>Lane centreline</span><span class="swatch lane-direction"></span><span>Direction of travel (arrow points downstream)</span><span class="swatch active-connector"></span><span>Active connector</span><span class="swatch review-connector"></span><span>Review-required connector</span><span class="swatch forbidden-connector"></span><span>Forbidden connector</span><span class="swatch stop-line"></span><span>Inferred stop line</span><span class="swatch source-geometry"></span><span>Source OSM way or node (dashed)</span><span class="swatch highlight"></span><span>Selected or searched geometry</span></div></aside><main id="map"></main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
 const payload=__PAYLOAD__;const reviewPriority={ambiguous_connector:0,restriction_effect_review:1,signal_lane_association:2,lane_transition_count_mismatch:3,inferred_stop_line:4,lane_count_inference:5,lane_width_default:6,speed_default:7};payload.findings.sort((a,b)=>(reviewPriority[a.rule]??99)-(reviewPriority[b.rule]??99)||a.rule.localeCompare(b.rule)||a.identifier.localeCompare(b.identifier));const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const map=L.map('map',{preferCanvas:true});L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:20,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
-const groups={lane_polygon:L.layerGroup(),lane_centerline:L.layerGroup(),lane_direction:L.layerGroup(),active:L.layerGroup(),review_required:L.layerGroup(),forbidden:L.layerGroup(),stop_line:L.layerGroup()};const byId=new Map(),allLayers=[];let selected=[];
-function styleFor(p){if(p.kind==='lane_polygon')return{color:'#74c0fc',weight:1,fillColor:'#74c0fc',fillOpacity:.08};if(p.kind==='lane_centerline')return{color:'#277da1',weight:2,opacity:.75};if(p.kind==='lane_direction')return{color:'#0b4f7a',weight:3,opacity:.95,lineCap:'butt',lineJoin:'miter'};if(p.kind==='stop_line')return{color:'#7048e8',weight:6};return{color:p.status==='forbidden'?'#c92a2a':p.status==='review_required'?'#f08c00':'#2b8a3e',weight:p.status==='review_required'?5:3,dashArray:p.status==='review_required'?'7 5':null,opacity:.9}}
+const groups={source_way:L.layerGroup(),source_node:L.layerGroup(),lane_polygon:L.layerGroup(),lane_centerline:L.layerGroup(),lane_direction:L.layerGroup(),active:L.layerGroup(),review_required:L.layerGroup(),forbidden:L.layerGroup(),stop_line:L.layerGroup()};const byId=new Map(),propsById=new Map(),allLayers=[];let selected=[],lastFocused=null;
+function styleFor(p){if(p.kind==='source_way')return{color:'#868e96',weight:1.5,opacity:.55,dashArray:'2 4'};if(p.kind==='source_node')return{color:'#868e96',weight:1,radius:4,fillColor:'#adb5bd',fillOpacity:.8,opacity:.8};if(p.kind==='lane_polygon')return{color:'#74c0fc',weight:1,fillColor:'#74c0fc',fillOpacity:.08};if(p.kind==='lane_centerline')return{color:'#277da1',weight:2,opacity:.75};if(p.kind==='lane_direction')return{color:'#0b4f7a',weight:3,opacity:.95,lineCap:'butt',lineJoin:'miter'};if(p.kind==='stop_line')return{color:'#7048e8',weight:6};return{color:p.status==='forbidden'?'#c92a2a':p.status==='review_required'?'#f08c00':'#2b8a3e',weight:p.status==='review_required'?5:3,dashArray:p.status==='review_required'?'7 5':null,opacity:.9}}
 function popup(p){return `<strong>${esc(p.kind)}</strong><table class="popup-table">${Object.entries(p).map(([k,v])=>`<tr><td>${esc(k)}</td><td>${esc(Array.isArray(v)?v.join(', '):v)}</td></tr>`).join('')}</table>`}
-for(const feature of payload.features.features){const p=feature.properties;const layer=L.geoJSON(feature,{style:()=>styleFor(p),onEachFeature:(_f,l)=>l.bindPopup(popup(p))});layer.eachLayer(l=>{l._baseStyle=styleFor(p);allLayers.push(l);if(!byId.has(p.id))byId.set(p.id,[]);byId.get(p.id).push(l)});const key=p.kind==='connector'?p.status:p.kind;groups[key].addLayer(layer)}
-groups.lane_centerline.addTo(map);groups.lane_direction.addTo(map);groups.active.addTo(map);groups.review_required.addTo(map);groups.forbidden.addTo(map);groups.stop_line.addTo(map);L.control.layers(null,{'Lane polygons':groups.lane_polygon,'Lane centrelines':groups.lane_centerline,'Lane direction arrows':groups.lane_direction,'Active connectors':groups.active,'Review-required connectors':groups.review_required,'Forbidden connectors':groups.forbidden,'Stop lines':groups.stop_line},{collapsed:false}).addTo(map);
+for(const feature of payload.features.features){const p=feature.properties;const layer=L.geoJSON(feature,{style:()=>styleFor(p),pointToLayer:(_f,latlng)=>L.circleMarker(latlng,styleFor(p)),onEachFeature:(_f,l)=>l.bindPopup(popup(p))});propsById.set(p.id,p);layer.eachLayer(l=>{l._baseStyle=styleFor(p);allLayers.push(l);if(!byId.has(p.id))byId.set(p.id,[]);byId.get(p.id).push(l)});const key=p.kind==='connector'?p.status:p.kind;groups[key].addLayer(layer)}
+groups.source_way.addTo(map);groups.source_node.addTo(map);groups.lane_centerline.addTo(map);groups.lane_direction.addTo(map);groups.active.addTo(map);groups.review_required.addTo(map);groups.forbidden.addTo(map);groups.stop_line.addTo(map);L.control.layers(null,{'Source OSM ways':groups.source_way,'Source OSM nodes':groups.source_node,'Lane polygons':groups.lane_polygon,'Lane centrelines':groups.lane_centerline,'Lane direction arrows':groups.lane_direction,'Active connectors':groups.active,'Review-required connectors':groups.review_required,'Forbidden connectors':groups.forbidden,'Stop lines':groups.stop_line},{collapsed:false}).addTo(map);
 const allGeometry=L.featureGroup(allLayers);if(allGeometry.getBounds().isValid())map.fitBounds(allGeometry.getBounds().pad(.04));
 document.getElementById('summary').innerHTML=Object.entries(payload.summary).map(([k,v])=>`<div class="metric"><b>${v}</b>${esc(k.replaceAll('_',' '))}</div>`).join('');const rules=[...new Set(payload.findings.map(f=>f.rule))].sort();document.getElementById('rule').innerHTML+=[...rules].map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
 function clearSelection(){for(const l of selected)if(l.setStyle)l.setStyle(l._baseStyle);selected=[];document.querySelectorAll('.finding.active').forEach(x=>x.classList.remove('active'))}
-function showFinding(id,button){clearSelection();const f=payload.findings.find(x=>x.identifier===id);button?.classList.add('active');const layers=f.geometry_ids.flatMap(x=>byId.get(x)||[]);for(const l of layers){if(l.setStyle)l.setStyle({color:'#ffd43b',weight:8,fillOpacity:.4,opacity:1});selected.push(l)}const bounds=L.featureGroup(layers).getBounds();if(bounds.isValid())map.fitBounds(bounds.pad(.35),{maxZoom:19});const rows=[['Rule',f.rule],['Severity',f.severity],['Confidence',f.confidence],['Reason',f.reason],['Source',`${f.source_type}: ${f.source_ids.join(', ')}`],['Affected IDs',f.affected_feature_ids.join(', ')||'none'],['Mapped geometry',f.geometry_ids.length],['Proposed value',JSON.stringify(f.proposed_value)],['Finding ID',f.identifier]];document.getElementById('detail').innerHTML=`<table>${rows.map(([k,v])=>`<tr><td><strong>${esc(k)}</strong></td><td>${esc(v)}</td></tr>`).join('')}</table>`+(layers.length?'':'<p class="muted">No generated geometry could be mapped for this finding.</p>')}
-function renderQueue(){const q=document.getElementById('search').value.trim().toLowerCase(),rule=document.getElementById('rule').value,severity=document.getElementById('severity').value;const matches=payload.findings.filter(f=>(!rule||f.rule===rule)&&(!severity||f.severity===severity)&&(!q||JSON.stringify(f).toLowerCase().includes(q)));const shown=matches.slice(0,250);document.getElementById('queue-note').textContent=`${matches.length} matching findings${matches.length>shown.length?`; showing first ${shown.length}`:''}`;const queue=document.getElementById('queue');queue.innerHTML='';for(const f of shown){const b=document.createElement('button');b.className=`finding ${f.severity}`;b.innerHTML=`<strong>${esc(f.rule)}</strong><span>${esc(f.reason)}</span><small>${esc(f.source_type)} ${esc(f.source_ids.join(', '))} · ${f.geometry_ids.length} mapped feature(s)</small>`;b.onclick=()=>showFinding(f.identifier,b);queue.appendChild(b)}}
+const GENERATED_HIGHLIGHT={color:'#ffd43b',weight:8,fillOpacity:.4,opacity:1},SOURCE_HIGHLIGHT={color:'#ffd43b',weight:7,fillColor:'#ffd43b',fillOpacity:.9,opacity:1,radius:9};
+function highlight(ids,style){const layers=ids.flatMap(x=>byId.get(x)||[]);for(const l of layers){if(l.setStyle)l.setStyle(style);selected.push(l)}return layers}
+function fitTo(layers){const bounds=L.featureGroup(layers).getBounds();if(bounds.isValid())map.fitBounds(bounds.pad(.35),{maxZoom:19});return layers.length}
+// Resolve a raw ID the reviewer typed or clicked. A bare OSM ID is ambiguous between
+// a way and a node, so try both namespaces before falling back to a generated ID.
+function resolveId(raw){const q=String(raw).trim();if(!q)return null;for(const key of [q,'way:'+q,'node:'+q])if(byId.has(key))return key;return null}
+// A lane contributes a polygon, a centreline and a direction arrow under one ID, so
+// report the lane itself rather than whichever of the three was indexed last.
+function kindLabel(p){const kind=String(p.kind||'feature');return kind.startsWith('lane_')?'lane':kind.replaceAll('_',' ')}
+function describeMatch(key){const p=propsById.get(key)||{};if(p.kind==='source_way')return`OSM way ${p.osm_way_id}`;if(p.kind==='source_node')return`OSM node ${p.osm_node_id}`;return`Generated ${kindLabel(p)} ${p.id}`}
+function describeId(key){const p=propsById.get(key)||{};return `<p class="muted">Focused ${esc(describeMatch(key))}</p>`+`<table class="popup-table">${Object.entries(p).filter(([k])=>k!=='id'&&k!=='kind').map(([k,v])=>`<tr><td>${esc(k)}</td><td>${esc(Array.isArray(v)?v.join(', '):v)}</td></tr>`).join('')}</table>`}
+function focusSource(key){clearSelection();fitTo(highlight([key],SOURCE_HIGHLIGHT));document.getElementById('detail').innerHTML=describeId(key)}
+function sourceChips(f){return f.source_ids.map(s=>{const key=resolveId(s);return key?`<button class="chip" onclick="focusSource('${esc(key)}')">${esc(s)}</button>`:`<span class="chip muted-chip">${esc(s)}</span>`}).join(' ')}
+function showFinding(id,button){clearSelection();const f=payload.findings.find(x=>x.identifier===id);button?.classList.add('active');const layers=highlight(f.geometry_ids,GENERATED_HIGHLIGHT);const sources=highlight(f.source_geometry_ids,SOURCE_HIGHLIGHT);fitTo([...layers,...sources]);const rows=[['Rule',f.rule],['Severity',f.severity],['Confidence',f.confidence],['Reason',f.reason],['Source',`${esc(f.source_type)}: ${sourceChips(f)}`,true],['Affected IDs',f.affected_feature_ids.join(', ')||'none'],['Mapped geometry',`${f.geometry_ids.length} generated, ${f.source_geometry_ids.length} source`],['Proposed value',JSON.stringify(f.proposed_value)],['Finding ID',f.identifier]];document.getElementById('detail').innerHTML=`<table>${rows.map(([k,v,isHtml])=>`<tr><td><strong>${esc(k)}</strong></td><td>${isHtml?v:esc(v)}</td></tr>`).join('')}</table>`+(layers.length?'':'<p class="muted">No generated geometry could be mapped for this finding.</p>')}
+function renderQueue(){const q=document.getElementById('search').value.trim().toLowerCase(),rule=document.getElementById('rule').value,severity=document.getElementById('severity').value;const matches=payload.findings.filter(f=>(!rule||f.rule===rule)&&(!severity||f.severity===severity)&&(!q||JSON.stringify(f).toLowerCase().includes(q)));const shown=matches.slice(0,250);const hit=resolveId(document.getElementById('search').value);if(hit&&hit!==lastFocused){lastFocused=hit;focusSource(hit)}else if(!hit)lastFocused=null;const note=document.getElementById('queue-note');note.innerHTML=(hit?`<strong>${esc(describeMatch(hit))}</strong> focused on the map. `:'')+`${matches.length} matching findings${matches.length>shown.length?`; showing first ${shown.length}`:''}`;const queue=document.getElementById('queue');queue.innerHTML='';for(const f of shown){const b=document.createElement('button');b.className=`finding ${f.severity}`;b.innerHTML=`<strong>${esc(f.rule)}</strong><span>${esc(f.reason)}</span><small>${esc(f.source_type)} ${esc(f.source_ids.join(', '))} · ${f.geometry_ids.length} mapped feature(s)</small>`;b.onclick=()=>showFinding(f.identifier,b);queue.appendChild(b)}}
 for(const id of ['search','rule','severity'])document.getElementById(id).addEventListener(id==='search'?'input':'change',renderQueue);renderQueue();
 </script></body></html>"""
     return template.replace("__PAYLOAD__", payload)
@@ -940,7 +1037,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
     model_path.write_text(
         json.dumps(model.model_dump(mode="json"), indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    review_audit_path.write_text(_render_review_html(model), encoding="utf-8")
+    review_audit_path.write_text(_render_review_html(model, snapshot), encoding="utf-8")
     report = {
         "report_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(),
