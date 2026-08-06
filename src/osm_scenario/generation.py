@@ -28,7 +28,7 @@ from osm_scenario.lane_model import (
     SignalAssociation,
     StopLine,
 )
-from osm_scenario.osm_source import ONEWAY_VALUES, OsmSnapshot, read_osm_snapshot
+from osm_scenario.osm_source import ONEWAY_VALUES, OsmRelation, OsmSnapshot, read_osm_snapshot
 from osm_scenario.topology import (
     MovementCandidate,
     classify_movement,
@@ -36,13 +36,15 @@ from osm_scenario.topology import (
     forbidden_by_node_restriction,
     movement_family,
     movement_matches,
+    movement_side,
     restriction_roles,
+    side_lane_index,
     signed_turn_angle,
     uturn_evidence_status,
     via_way_resolution,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v5"
+GENERATOR_VERSION = "direct-osm-stage2-v7"
 LANE_MODEL_SCHEMA_VERSION = 2
 
 OPPOSITE_DIRECTION = {"forward": "backward", "backward": "forward"}
@@ -170,10 +172,63 @@ def _is_exact_reverse(source: LaneFeature, target: LaneFeature) -> bool:
     )
 
 
-def _mapped_lane_index(source: LaneFeature, target_count: int) -> int:
+def _mapped_lane_index(source: LaneFeature, target_count: int, side: str | None = None) -> int:
+    """Choose which lane of the outgoing group a movement lands in.
+
+    Indices run centre-out, so index 0 is the lane against the centreline (the offside
+    lane) and `target_count - 1` is the kerbside one. A movement that leaves toward the
+    kerb therefore enters the last index and one toward the centre enters index 0;
+    without a side, lane order is preserved proportionally.
+    """
+    if side in {"nearside", "offside"}:
+        return side_lane_index(side, target_count)
     if source.lane_count > 1 and target_count > 1:
         return round(source.lane_index * (target_count - 1) / (source.lane_count - 1))
     return min(source.lane_index, target_count - 1)
+
+
+def _side_filtered_candidates(
+    candidates: list[MovementCandidate],
+    *,
+    source: LaneFeature,
+    driving_side: str,
+    min_degrees: float,
+    node_restrictions: list[OsmRelation],
+) -> list[MovementCandidate]:
+    """Keep only the movements this source lane is on the correct side of the road for.
+
+    A reverse candidate is left to the U-turn policy, a lane with an explicit
+    `turn:lanes` direction keeps what its tags allow, and a candidate a node-via
+    restriction forbids is kept so the restriction still has something to act on and
+    stays visible for audit. If the filter would leave the lane with nowhere to go,
+    the straightest movement is kept instead of stranding it.
+    """
+    tagged = any(permission in {"left", "right"} for permission in source.turn_permissions)
+    kept: list[MovementCandidate] = []
+    removed: list[MovementCandidate] = []
+    for candidate in candidates:
+        side = movement_side(
+            movement=candidate.movement,
+            angle=candidate.angle_degrees,
+            driving_side=driving_side,
+            turn_permissions=source.turn_permissions,
+            min_degrees=min_degrees,
+        )
+        wrong_side = (
+            side is not None
+            and not tagged
+            and candidate.movement != "reverse"
+            and source.lane_index != side_lane_index(side, source.lane_count)
+        )
+        if wrong_side and not any(
+            forbidden_by_node_restriction(candidate, relation) for relation in node_restrictions
+        ):
+            removed.append(candidate)
+        else:
+            kept.append(candidate)
+    if kept or not removed:
+        return kept
+    return [min(removed, key=lambda item: (abs(item.angle_degrees), item.to_lane_id))]
 
 
 def _is_decision_node(
@@ -298,6 +353,8 @@ def _render_review_html(model: PreliminaryLaneModel, snapshot: OsmSnapshot) -> s
             "lane_count": lane.lane_count,
             "direction": lane.direction,
             "turn_permissions": lane.turn_permissions,
+            "entry_lanes": lane.entry_lanes,
+            "exit_lanes": lane.exit_lanes,
         }
         features.extend(
             [
@@ -498,8 +555,29 @@ const payload=__PAYLOAD__;const reviewPriority={ambiguous_connector:0,restrictio
 const map=L.map('map',{preferCanvas:true});L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:20,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
 const groups={source_way:L.layerGroup(),source_node:L.layerGroup(),lane_polygon:L.layerGroup(),lane_centerline:L.layerGroup(),lane_direction:L.layerGroup(),active:L.layerGroup(),review_required:L.layerGroup(),forbidden:L.layerGroup(),stop_line:L.layerGroup()};const byId=new Map(),propsById=new Map(),allLayers=[];let selected=[],lastFocused=null;
 function styleFor(p){if(p.kind==='source_way')return{color:'#868e96',weight:1.5,opacity:.55,dashArray:'2 4'};if(p.kind==='source_node')return{color:'#868e96',weight:1,radius:4,fillColor:'#adb5bd',fillOpacity:.8,opacity:.8};if(p.kind==='lane_polygon')return{color:'#74c0fc',weight:1,fillColor:'#74c0fc',fillOpacity:.08};if(p.kind==='lane_centerline')return{color:'#277da1',weight:2,opacity:.75};if(p.kind==='lane_direction')return{color:'#0b4f7a',weight:3,opacity:.95,lineCap:'butt',lineJoin:'miter'};if(p.kind==='stop_line')return{color:'#7048e8',weight:6};return{color:p.status==='forbidden'?'#c92a2a':p.status==='review_required'?'#f08c00':'#2b8a3e',weight:p.status==='review_required'?5:3,dashArray:p.status==='review_required'?'7 5':null,opacity:.9}}
-function popup(p){return `<strong>${esc(p.kind)}</strong><table class="popup-table">${Object.entries(p).map(([k,v])=>`<tr><td>${esc(k)}</td><td>${esc(Array.isArray(v)?v.join(', '):v)}</td></tr>`).join('')}</table>`}
-for(const feature of payload.features.features){const p=feature.properties;const layer=L.geoJSON(feature,{style:()=>styleFor(p),pointToLayer:(_f,latlng)=>L.circleMarker(latlng,styleFor(p)),onEachFeature:(_f,l)=>l.bindPopup(popup(p))});propsById.set(p.id,p);layer.eachLayer(l=>{l._baseStyle=styleFor(p);allLayers.push(l);if(!byId.has(p.id))byId.set(p.id,[]);byId.get(p.id).push(l)});const key=p.kind==='connector'?p.status:p.kind;groups[key].addLayer(layer)}
+// A lane, connector or source id, described the way a reviewer reads it off the map.
+// The generated lane id is what a reviewer searches by, so it leads every reference.
+function laneLabel(id){const p=propsById.get(id);return p&&p.lane_count?`${id} · lane ${p.lane_index+1}/${p.lane_count}`:String(id)}
+function laneChip(id){return byId.has(id)?`<button class="chip" onclick="focusSource('${esc(id)}')">${esc(laneLabel(id))}</button>`:`<span class="chip muted-chip">${esc(laneLabel(id))}</span>`}
+function laneChips(ids){const list=[...new Set((ids||[]).filter(x=>(propsById.get(x)||{}).lane_count))];
+  return list.length?list.map(x=>`<button class="chip" onclick="focusSource('${esc(x)}')">${esc(x)}</button>`).join(' '):'<span class="muted">none</span>'}
+function popup(p){
+  let head='';
+  if(p.kind==='connector'){
+    // The whole point of the popup: which lane this movement leaves and which it enters.
+    head=`<table class="popup-table"><tr><td><strong>Incoming lane</strong></td><td>${laneChip(p.from_lane_id)}</td></tr>`
+        +`<tr><td><strong>Outgoing lane</strong></td><td>${laneChip(p.to_lane_id)}</td></tr></table>`;
+  }else if(p.kind&&p.kind.startsWith('lane_')){
+    const feeds=[...new Set((payload.features.features||[]).filter(f=>f.properties.kind==='connector'&&f.properties.to_lane_id===p.id).map(f=>f.properties.from_lane_id))];
+    const goes=[...new Set((payload.features.features||[]).filter(f=>f.properties.kind==='connector'&&f.properties.from_lane_id===p.id).map(f=>f.properties.to_lane_id))];
+    const cont=(p.exit_lanes||[]).filter(x=>propsById.get(x)&&propsById.get(x).kind!=='connector');
+    const back=(p.entry_lanes||[]).filter(x=>propsById.get(x)&&propsById.get(x).kind!=='connector');
+    head=`<p class="muted">${esc(laneLabel(p.id))}</p><table class="popup-table">`
+        +`<tr><td><strong>Entered from</strong></td><td>${laneChips(feeds.concat(back))}</td></tr>`
+        +`<tr><td><strong>Leaves to</strong></td><td>${laneChips(goes.concat(cont))}</td></tr></table>`;
+  }
+  return `<strong>${esc(p.kind)}</strong>${head}<table class="popup-table">${Object.entries(p).map(([k,v])=>`<tr><td>${esc(k)}</td><td>${esc(Array.isArray(v)?v.join(', '):v)}</td></tr>`).join('')}</table>`}
+for(const feature of payload.features.features){const p=feature.properties;const layer=L.geoJSON(feature,{style:()=>styleFor(p),pointToLayer:(_f,latlng)=>L.circleMarker(latlng,styleFor(p)),onEachFeature:(_f,l)=>l.bindPopup(()=>popup(p))});propsById.set(p.id,p);layer.eachLayer(l=>{l._baseStyle=styleFor(p);allLayers.push(l);if(!byId.has(p.id))byId.set(p.id,[]);byId.get(p.id).push(l)});const key=p.kind==='connector'?p.status:p.kind;groups[key].addLayer(layer)}
 groups.source_way.addTo(map);groups.source_node.addTo(map);groups.lane_centerline.addTo(map);groups.lane_direction.addTo(map);groups.active.addTo(map);groups.review_required.addTo(map);groups.forbidden.addTo(map);groups.stop_line.addTo(map);L.control.layers(null,{'Source OSM ways':groups.source_way,'Source OSM nodes':groups.source_node,'Lane polygons':groups.lane_polygon,'Lane centrelines':groups.lane_centerline,'Lane direction arrows':groups.lane_direction,'Active connectors':groups.active,'Review-required connectors':groups.review_required,'Forbidden connectors':groups.forbidden,'Stop lines':groups.stop_line},{collapsed:false}).addTo(map);
 const allGeometry=L.featureGroup(allLayers);if(allGeometry.getBounds().isValid())map.fitBounds(allGeometry.getBounds().pad(.04));
 document.getElementById('summary').innerHTML=Object.entries(payload.summary).map(([k,v])=>`<div class="metric"><b>${v}</b>${esc(k.replaceAll('_',' '))}</div>`).join('');const rules=[...new Set(payload.findings.map(f=>f.rule))].sort();document.getElementById('rule').innerHTML+=[...rules].map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
@@ -694,6 +772,12 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
         for kind, value in restriction_roles(relation)["via"]
         if kind == "node"
     }
+    node_restrictions = [
+        relation
+        for relation in sorted(snapshot.relations.values(), key=lambda item: item.identifier)
+        if relation.tags.get("type") == "restriction"
+        and not any(kind == "way" for kind, _ in restriction_roles(relation)["via"])
+    ]
     for node_id in sorted(set(lanes_by_start) | set(lanes_by_end)):
         incoming = sorted(lanes_by_end.get(node_id, []))
         outgoing = sorted(lanes_by_start.get(node_id, []))
@@ -736,7 +820,21 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                 exact_reverse = _is_exact_reverse(source, targets[0])
                 if exact_reverse and not decision_node:
                     continue
-                target_index = _mapped_lane_index(source, len(targets))
+                # The side has to be known before the target is picked, so classify the
+                # movement against the group's first lane. Lanes in a group are parallel
+                # offsets of one edge, so any of them yields the same side.
+                group_angle = signed_turn_angle(
+                    source_line,
+                    LineString((point.x, point.y) for point in targets[0].centerline),
+                )
+                side = movement_side(
+                    movement=classify_movement(group_angle),
+                    angle=group_angle,
+                    driving_side=manifest["driving_side"],
+                    turn_permissions=source.turn_permissions,
+                    min_degrees=config.lane_selection.side_movement_min_degrees,
+                )
+                target_index = _mapped_lane_index(source, len(targets), side)
                 target = targets[target_index]
                 if source.lane_count != len(targets):
                     mismatch_key = (
@@ -803,6 +901,17 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                         ambiguous=False,
                     )
                 )
+            # A movement that leaves toward one side of the road belongs to that side's
+            # lane, so drop it from any other lane of the approach. This runs before the
+            # ambiguity pass below: with the duplicate gone the surviving candidate is
+            # alone in its movement family and no longer needs review.
+            candidates_for_lane = _side_filtered_candidates(
+                candidates_for_lane,
+                source=source,
+                driving_side=manifest["driving_side"],
+                min_degrees=config.lane_selection.side_movement_min_degrees,
+                node_restrictions=node_restrictions,
+            )
             family_counts: dict[str, int] = {}
             for candidate in candidates_for_lane:
                 family = movement_family(candidate.movement)

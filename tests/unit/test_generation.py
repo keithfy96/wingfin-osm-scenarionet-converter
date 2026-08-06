@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from shapely.geometry import LineString
 
 from osm_scenario.acquisition import acquire_osm
 from osm_scenario.config import ConverterConfig
@@ -14,12 +15,14 @@ from osm_scenario.generation import (
     _directional_lane_count,
     _is_decision_node,
     _mapped_lane_index,
+    _side_filtered_candidates,
     _speed_kph,
     _turn_permissions,
     generate_lane_model,
 )
-from osm_scenario.lane_model import Point2D, PreliminaryLaneModel
+from osm_scenario.lane_model import LaneFeature, Point2D, PreliminaryLaneModel
 from osm_scenario.normalization import normalize_workspace
+from osm_scenario.topology import MovementCandidate
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "osm" / "tiny.osm"
 
@@ -117,6 +120,108 @@ def test_lane_order_mapping_is_deterministic_across_lane_count_changes() -> None
             self.lane_index = lane_index
 
     assert [_mapped_lane_index(SourceLane(index), 2) for index in range(3)] == [0, 0, 1]
+    # Without a side the proportional mapping is unchanged by the new parameter.
+    assert [_mapped_lane_index(SourceLane(index), 2, None) for index in range(3)] == [0, 0, 1]
+
+
+def test_side_movements_select_the_kerbside_or_median_lane_of_the_target() -> None:
+    class SourceLane:
+        def __init__(self, lane_index: int, lane_count: int = 3) -> None:
+            self.lane_index = lane_index
+            self.lane_count = lane_count
+
+    # Indices run centre-out, so the kerbside lane is the last one and the median is 0.
+    assert _mapped_lane_index(SourceLane(0), 3, "nearside") == 2
+    assert _mapped_lane_index(SourceLane(2), 3, "offside") == 0
+    # The side wins regardless of where the movement started.
+    assert {_mapped_lane_index(SourceLane(index), 3, "nearside") for index in range(3)} == {2}
+
+    # A one-lane ramp merging onto a two-lane carriageway from the kerb side must not
+    # land in the median lane, which is what min(lane_index, target_count - 1) gave.
+    ramp = SourceLane(0, lane_count=1)
+    assert _mapped_lane_index(ramp, 2) == 0
+    assert _mapped_lane_index(ramp, 2, "nearside") == 1
+    assert _mapped_lane_index(ramp, 3, "nearside") == 2
+    # A single-lane target leaves nothing to choose.
+    assert _mapped_lane_index(ramp, 1, "nearside") == 0
+
+
+def _candidate(to_lane_id: str, movement: str, angle: float) -> MovementCandidate:
+    return MovementCandidate(
+        junction_node_id="1",
+        from_lane_id="src",
+        to_lane_id=to_lane_id,
+        from_way_id="10",
+        to_way_id="20",
+        movement=movement,
+        angle_degrees=angle,
+        centerline=LineString([(0.0, 0.0), (1.0, 1.0)]),
+        ambiguous=False,
+    )
+
+
+def _approach(
+    lane_index: int, lane_count: int, permissions: list[str] | None = None
+) -> LaneFeature:
+    return LaneFeature(
+        identifier="src",
+        source_way_ids=["10"],
+        source_edge=["1", "2", "0"],
+        lane_index=lane_index,
+        lane_count=lane_count,
+        direction="forward",
+        road_class="tertiary",
+        width_m=3.5,
+        speed_limit_kph=50.0,
+        centerline=[Point2D(x=0.0, y=0.0), Point2D(x=0.0, y=10.0)],
+        polygon=[Point2D(x=0.0, y=0.0), Point2D(x=1.0, y=0.0), Point2D(x=0.0, y=0.0)],
+        boundaries=[],
+        turn_permissions=permissions or [],
+    )
+
+
+def _filter(source: LaneFeature, candidates: list[MovementCandidate]) -> list[str]:
+    kept = _side_filtered_candidates(
+        candidates,
+        source=source,
+        driving_side="left",
+        min_degrees=10.0,
+        node_restrictions=[],
+    )
+    return [item.to_lane_id for item in kept]
+
+
+def test_side_movements_are_only_emitted_from_that_side_of_the_approach() -> None:
+    # A slip road leaving at 22 degrees is `through` by classification but plainly a
+    # nearside departure, so only the kerbside lane of a two-lane approach may take it.
+    exit_ = _candidate("exit", "through", 22.289)
+    ahead = _candidate("ahead", "through", 0.469)
+    assert _filter(_approach(0, 2), [exit_, ahead]) == ["ahead"]
+    assert _filter(_approach(1, 2), [exit_, ahead]) == ["exit", "ahead"]
+
+    # Driving on the left, a right turn is offside and belongs to lane 0.
+    right = _candidate("right", "right", -90.0)
+    assert _filter(_approach(0, 2), [right, ahead]) == ["right", "ahead"]
+    assert _filter(_approach(1, 2), [right, ahead]) == ["ahead"]
+
+    # Straight-ahead movements stay available from every lane.
+    assert _filter(_approach(0, 3), [ahead]) == ["ahead"]
+    assert _filter(_approach(2, 3), [ahead]) == ["ahead"]
+
+
+def test_side_filter_respects_turn_tags_and_never_strands_a_lane() -> None:
+    exit_ = _candidate("exit", "through", 22.289)
+    # An explicit turn:lanes direction is positive evidence and outranks the geometry.
+    assert _filter(_approach(0, 2, ["left"]), [exit_]) == ["exit"]
+
+    # A lane whose only movement is wrong-side keeps it rather than going nowhere.
+    assert _filter(_approach(0, 2), [exit_]) == ["exit"]
+    steeper = _candidate("steeper", "left", 80.0)
+    assert _filter(_approach(0, 2), [exit_, steeper]) == ["exit"]
+
+    # Reverse candidates are left to the U-turn policy.
+    reverse = _candidate("back", "reverse", 180.0)
+    assert _filter(_approach(0, 2), [reverse, exit_]) == ["back"]
 
 
 def test_only_real_branch_control_or_explicit_uturn_is_a_decision_node() -> None:
@@ -204,6 +309,10 @@ def test_generate_lane_model_writes_deterministic_stage_2_artifacts(tmp_path: Pa
     assert "Source OSM ways" in html
     # Typing a bare OSM ID must resolve into the way/node namespaces, not just filter text.
     assert "function resolveId" in html
+    # A connector popup must name both lanes it joins, not just their hashes.
+    assert "Incoming lane" in html
+    assert "Outgoing lane" in html
+    assert "Entered from" in html and "Leaves to" in html
     assert "'way:'+q" in html and "'node:'+q" in html
     assert "OpenStreetMap contributors" in html
 

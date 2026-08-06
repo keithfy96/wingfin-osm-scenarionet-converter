@@ -9,6 +9,8 @@ from osm_scenario.topology import (
     connector_curve,
     forbidden_by_node_restriction,
     movement_family,
+    movement_side,
+    side_lane_index,
     signed_turn_angle,
     uturn_evidence_status,
     via_way_resolution,
@@ -70,6 +72,48 @@ def test_groups_slight_turns_with_their_movement_family() -> None:
     assert movement_family("slight_left") == "left"
     assert movement_family("slight_right") == "right"
     assert movement_family("through") == "through"
+
+
+def test_side_lane_index_is_centre_out() -> None:
+    assert side_lane_index("offside", 3) == 0
+    assert side_lane_index("nearside", 3) == 2
+    assert side_lane_index("offside", 1) == side_lane_index("nearside", 1) == 0
+
+
+def test_movement_side_is_relative_to_the_driving_side() -> None:
+    def side(angle: float, driving_side: str, permissions: list[str] | None = None) -> str | None:
+        return movement_side(
+            movement=classify_movement(angle),
+            angle=angle,
+            driving_side=driving_side,
+            turn_permissions=permissions or [],
+            min_degrees=10.0,
+        )
+
+    # A left turn is nearside where traffic drives on the left and offside where it does not.
+    assert side(90.0, "left") == "nearside"
+    assert side(90.0, "right") == "offside"
+    assert side(-90.0, "left") == "offside"
+    assert side(-90.0, "right") == "nearside"
+
+    # A slip road inside the 35 degree `through` band still carries a side.
+    assert classify_movement(19.254) == "through"
+    assert side(19.254, "left") == "nearside"
+    assert side(14.814, "left") == "nearside"
+
+    # Straight-ahead movements carry none, and the threshold is inclusive.
+    assert side(0.469, "left") is None
+    assert side(9.999, "left") is None
+    assert side(10.0, "left") == "nearside"
+    assert side(-10.0, "left") == "offside"
+
+    # An explicit turn:lanes value outranks the geometry, including below the threshold.
+    assert side(0.5, "left", ["left"]) == "nearside"
+    assert side(0.5, "left", ["right"]) == "offside"
+    assert side(-90.0, "left", ["left"]) == "nearside"
+    # Ambiguous or side-free tagging falls back to the angle.
+    assert side(0.5, "left", ["left", "right"]) is None
+    assert side(19.254, "left", ["through"]) == "nearside"
 
 
 @pytest.mark.parametrize(

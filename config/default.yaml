@@ -13,3 +13,5 @@ speed_defaults_kph:
   service: 30.0
 tag_inference:
   infer_missing_lane_count: true
+lane_selection:
+  side_movement_min_degrees: 10.0

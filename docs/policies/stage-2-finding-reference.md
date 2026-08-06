@@ -9,19 +9,19 @@ It is not, by itself, proof that the source or generated map is wrong.
 
 ## Snapshot
 
-- Generator: `direct-osm-stage2-v5`
+- Generator: `direct-osm-stage2-v7`
 - Generation fingerprint:
-  `7efd9681ee919e49de8693ed78819a39b7fc18ad6c5b97b4e0ee87e6fa216df0`
+  `319bdf74a97ea0d2d0bc36ce989d9ecb079e8fe2ffa32907eca131f3a46edc24`
 - Source: [`preliminary.json`](../../workspaces/mosque/lane-model/preliminary.json)
-- Total findings: **3,203**
+- Total findings: **3,164**
 
 | Finding | Count | Share | Severity |
 | --- | ---: | ---: | --- |
-| `lane_width_default` | 1,117 | 34.9% | Warning |
-| `speed_default` | 974 | 30.4% | Warning |
-| `lane_count_inference` | 620 | 19.4% | 550 blockers; 70 warnings |
-| `ambiguous_connector` | 329 | 10.3% | Blocker |
-| `lane_transition_count_mismatch` | 141 | 4.4% | Warning |
+| `lane_width_default` | 1,117 | 35.3% | Warning |
+| `speed_default` | 974 | 30.8% | Warning |
+| `lane_count_inference` | 620 | 19.6% | 550 blockers; 70 warnings |
+| `ambiguous_connector` | 290 | 9.2% | Blocker |
+| `lane_transition_count_mismatch` | 141 | 4.5% | Warning |
 | `inferred_stop_line` | 19 | 0.6% | Warning |
 | `signal_lane_association` | 2 | 0.1% | Blocker |
 | `restriction_effect_review` | 1 | under 0.1% | Blocker |
@@ -38,7 +38,7 @@ and a traced edge example, see the
 
 **Meaning and current scale.** Stage 2 emits this finding when a directed graph
 edge's source way has no usable explicit OSM `width`. The snapshot has **1,117
-findings (34.9%) across 227 unique source ways**. These are edge-level findings,
+findings (35.3%) across 227 unique source ways**. These are edge-level findings,
 not 1,117 distinct roads: a source way split into several directed graph edges
 can appear several times. Their road classes are 541 residential, 193
 secondary, 152 tertiary, 109 motorway, 74 secondary-link, 25 motorway-link,
@@ -76,7 +76,7 @@ and `proposed_value`; inspect each affected lane's `width_m`, `road_class`,
 
 **Meaning and current scale.** This finding says that a directed edge had no
 parseable explicit OSM `maxspeed`, so configuration supplied its generated
-speed. There are **974 findings (30.3%) across 210 unique source ways**, whose
+speed. There are **974 findings (30.8%) across 210 unique source ways**, whose
 affected-feature union is **1,355 lanes**. The findings comprise 541
 residential, 184 secondary, 152 tertiary, 74 secondary-link, and 23
 unclassified edges.
@@ -111,7 +111,7 @@ for the plain-language precedence table, examples, and review workflow.
 
 **Meaning and current scale.** This finding records a directional lane count
 that was inferred rather than read from high-confidence directional or one-way
-evidence. There are **620 findings (19.4%) across 111 unique source ways**:
+evidence. There are **620 findings (19.6%) across 111 unique source ways**:
 
 - 550 missing-count cases defaulted to one lane: low-confidence blockers.
 - 70 even-total cases inferred one directional lane: medium-confidence warnings.
@@ -157,14 +157,18 @@ neighbors, `source_edge`, and `source_way_ids`.
 
 **Meaning and current scale.** This finding represents one generated
 intersection **connector** whose movement remains `review_required`. There are
-**329 findings (10.3%)**. Movement totals are 257 reverse, 58 through, and 14
+**290 findings (9.2%)**. Movement totals are 257 reverse, 23 through, and 10
 left/right/slight-turn connectors. The exact causes overlap: 257 are untagged
-reverse/U-turn candidates, 73 have multiple targets in the same movement
-family, and 13 lie in the inclusive 30°–40° through/turn boundary band. Because
-a connector can satisfy more than one condition, these totals do not sum to
-329. The mutually exclusive combinations are 251 reverse-only, 59
-duplicate-family-only, eight duplicate-plus-borderline, six
-reverse-plus-duplicate, and five borderline-only.
+reverse/U-turn candidates, 35 have multiple targets in the same movement
+family, and eight lie in the inclusive 30°–40° through/turn boundary band.
+Because a connector can satisfy more than one condition, these totals do not sum
+to 290. The mutually exclusive combinations are 251 reverse-only, 25
+duplicate-family-only, six reverse-plus-duplicate, four borderline-only, and
+four duplicate-plus-borderline.
+
+Duplicate-family findings fell sharply once side-aware source filtering landed:
+a nearside exit is no longer emitted from the median lane as well as the
+kerbside one, so the surviving candidate is usually alone in its family.
 
 **Trigger and evidence precedence.** Signed heading change classifies movement:
 up to 35° is through; above 35° and below 70° is slight left/right; from 70° to

@@ -2,7 +2,7 @@
 
 `stage-2-generation-v1` documents how Stage 2 turns the immutable Stage 1 OSM
 snapshot and projected directed graph into the preliminary lane model. The
-current executable implementation is `direct-osm-stage2-v5` in
+current executable implementation is `direct-osm-stage2-v7` in
 [`generation.py`](../../src/osm_scenario/generation.py), with topology and
 restriction helpers in [`topology.py`](../../src/osm_scenario/topology.py).
 
@@ -101,12 +101,44 @@ A node is a decision node when at least one of these is true:
 This rule prevents ordinary shape nodes and harmless way splits from creating
 large numbers of false intersection connectors.
 
+Grouping outgoing lanes by directed edge does not mean every approach lane is
+linked to every group. A movement that carries a side is emitted only from that
+side's lane of the approach, as described under lane-to-lane mapping below.
+
 ## Lane-to-lane mapping
 
 - Stage 2 creates one deterministic target per source lane and outgoing edge
   group, rather than a full incoming-lane by outgoing-lane cross product.
+- Generated lane indices run centre-out. Index `0` is the lane against the road
+  centreline, the **offside** lane, and index `count - 1` is the lane against the
+  kerb, the **nearside** lane. With left-hand traffic the nearside lane is the
+  leftmost from the driver's seat; with right-hand traffic it is the rightmost.
+  This is the driver's frame, not screen orientation.
+- A movement that leaves toward the kerb enters the target group's nearside lane;
+  one that leaves toward the centreline enters its offside lane. A straight-ahead
+  movement carries no side.
+- The same side governs which lane a movement may be emitted **from**. A nearside
+  movement is generated only from the approach's nearside lane and an offside
+  movement only from its offside lane, so an exit is not duplicated out of every
+  lane of the approach. Three cases are exempt: a `reverse` candidate, which the
+  U-turn policy governs; a lane whose `turn:lanes` names `left` or `right`, which
+  is explicit evidence; and a candidate a node-via restriction forbids, which is
+  kept so the restriction still has something to act on and stays visible for
+  audit. If the filter would leave an approach lane with no movement at all, its
+  straightest candidate is kept rather than stranding the lane.
+- Source filtering runs before the ambiguity pass, so a movement left alone in its
+  family after filtering is active rather than `review_required`.
+- Which side a movement takes is decided by `movement_side()` in
+  [`topology.py`](../../src/osm_scenario/topology.py). An explicit `turn:lanes`
+  value naming one direction is used first. Otherwise the sign of the signed turn
+  angle decides, once the angle reaches
+  `lane_selection.side_movement_min_degrees`. That threshold exists because
+  `classify_movement` treats everything within 35 degrees as `through`, so a slip
+  road leaving at 20 degrees is not a `left` movement even though it plainly
+  departs to the left.
 - Equal lane counts preserve lane order.
-- Different lane counts use proportional centre-out lane-index mapping.
+- Different lane counts use proportional centre-out lane-index mapping when the
+  movement carries no side.
 - A lane-count change emits `lane_transition_count_mismatch` because the
   proportional mapping is an inference that may require Stage 3 review.
 - Explicit `turn:lanes` permissions then remove incompatible movement
@@ -207,7 +239,7 @@ application and does not export `review.json`.
 
 ## Current mosque interpretation
 
-With `direct-osm-stage2-v5`, the current mosque output intentionally contains
+With `direct-osm-stage2-v7`, the current mosque output intentionally contains
 review-required U-turn candidates at genuine decision nodes where OSM provides
 neither permission nor prohibition. Those findings are not generation errors;
 they expose legal uncertainty for Stage 3. An unexpectedly large number of

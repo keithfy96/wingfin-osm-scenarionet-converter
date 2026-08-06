@@ -65,6 +65,47 @@ def movement_family(movement: str) -> str:
     return movement
 
 
+def movement_side(
+    *,
+    movement: str,
+    angle: float,
+    driving_side: str,
+    turn_permissions: list[str],
+    min_degrees: float,
+) -> str | None:
+    """Classify a movement as leaving toward the kerb or the centreline.
+
+    Returns `nearside` for a movement toward the kerb, `offside` for one toward the
+    road centre, or `None` for a straight-ahead movement that carries no side.
+
+    `classify_movement` treats everything within 35 degrees as `through`, so a slip
+    road leaving at 20 degrees is not a `left` movement even though it plainly leaves
+    to the left. The angle sign past `min_degrees` recovers that; an explicit
+    `turn:lanes` value naming one direction outranks the geometry either way.
+    """
+    tagged = {item for item in turn_permissions if item in {"left", "right"}}
+    family = movement_family(movement)
+    if len(tagged) == 1:
+        turn = next(iter(tagged))
+    elif family in {"left", "right"}:
+        turn = family
+    elif abs(angle) >= min_degrees:
+        turn = "left" if angle > 0 else "right"
+    else:
+        return None
+    return "nearside" if (turn == "left") == (driving_side == "left") else "offside"
+
+
+def side_lane_index(side: str, lane_count: int) -> int:
+    """Index of the lane on `side` of a carriageway of `lane_count` lanes.
+
+    Indices run centre-out, so the offside lane is always 0 and the nearside lane is
+    the last one. Shared by the source filter and the target selector so the two
+    cannot drift apart.
+    """
+    return lane_count - 1 if side == "nearside" else 0
+
+
 def uturn_evidence_status(turn_permissions: list[str]) -> str:
     """Classify a plausible U-turn from lane-tag evidence alone."""
     if any(permission in {"reverse", "uturn"} for permission in turn_permissions):

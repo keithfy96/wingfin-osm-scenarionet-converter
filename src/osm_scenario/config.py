@@ -26,6 +26,15 @@ class TagInferenceConfig(BaseModel):
     infer_missing_lane_count: bool = True
 
 
+class LaneSelectionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Smallest turn angle that makes a movement a side movement rather than a straight
+    # continuation. Must stay below the 35 degree `through` band in `classify_movement`,
+    # or no movement classified `through` could ever be treated as a turn.
+    side_movement_min_degrees: float = Field(default=10.0, gt=0, lt=35)
+
+
 class ConverterConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -45,6 +54,7 @@ class ConverterConfig(BaseModel):
         }
     )
     tag_inference: TagInferenceConfig = Field(default_factory=TagInferenceConfig)
+    lane_selection: LaneSelectionConfig = Field(default_factory=LaneSelectionConfig)
 
 
 def load_config(path: Path) -> ConverterConfig:
