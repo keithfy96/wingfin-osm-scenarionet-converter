@@ -5,7 +5,8 @@
 - **Files changed:** `src/osm_scenario/generation.py`
   (`_stranded_permission_fallback`, the per-lane candidate loop),
   `tests/unit/test_generation.py`
-- **Generator version:** `direct-osm-stage2-v9` → `direct-osm-stage2-v10`
+- **Generator version:** `direct-osm-stage2-v9` → `direct-osm-stage2-v9`
+  (not bumped — see Verification)
 - **Commit:** `1f0f5ef`
 
 ## Symptom
@@ -132,6 +133,11 @@ nothing was removed).
 
 `ruff format --check` still reports 8 files needing reformatting — pre-existing at
 `HEAD` for both touched files, deliberately not addressed.
+
+**`GENERATOR_VERSION` was not bumped.** It stayed at `direct-osm-stage2-v9` across
+this change, so a `preliminary.json` produced before the fix and one produced after
+carry the same `metadata.generator_version` and cannot be told apart by it. The
+later move to `v10` belongs to a different change, not this one.
 
 > Later note: the working model now reads 110 connectors / 552 findings /
 > 74 `active`, because commit `96ae00d` ("fixed origin point of turn lane

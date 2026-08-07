@@ -2,7 +2,7 @@
 
 `stage-2-generation-v1` documents how Stage 2 turns the immutable Stage 1 OSM
 snapshot and projected directed graph into the preliminary lane model. The
-current executable implementation is `direct-osm-stage2-v10` in
+current executable implementation is `direct-osm-stage2-v11` in
 [`generation.py`](../../src/osm_scenario/generation.py), with topology and
 restriction helpers in [`topology.py`](../../src/osm_scenario/topology.py).
 
@@ -131,13 +131,26 @@ side's lane of the approach, as described under lane-to-lane mapping below.
   Asked one destination at a time instead, both the link and the continuation
   claim the kerbside lane, one lane is left serving two through movements, and
   two others collapse onto a single target — the road silently loses a lane.
+- **A merge is allocated the same way, from the other end.** Where several
+  approaches all join one carriageway — each having that destination and only
+  that one — and their lanes together fill it exactly, they are dealt into it
+  kerb first: the approach turning most toward the kerb to join takes the
+  kerbside lanes and the rest keep their order behind it. This is the same fact
+  as the rule above seen from the opposite side, and the same two failures follow
+  from skipping it: a merging link comes to rest on top of a running lane, and a
+  lane of the road it joins is fed by nothing. Requiring every approach to have
+  exactly one destination is what keeps this unambiguous; at an ordinary
+  crossroads each approach has several, so the rule does not apply.
+- A merge and a diverge never claim the same approach. Every approach of a clean
+  merge brings strictly fewer lanes than the destination holds, so the
+  balanced-approach rule declines it.
 - When the counts do **not** close the approach is oversubscribed, a lane really
   does serve more than one movement — a single lane that may go left or straight
   — and the proportional order mapping below still decides. Sharing is real
   there, and the ambiguity it creates is reported rather than resolved.
-- A balanced approach emits no `lane_transition_count_mismatch`. Its lanes are
-  apportioned across destinations, not lost, so the count difference across any
-  one destination is not a mismatch.
+- A balanced approach or merge emits no `lane_transition_count_mismatch`. Its
+  lanes are apportioned across destinations, not lost, so the count difference
+  across any one destination is not a mismatch.
 - Generated lane indices run centre-out. Index `0` is the lane against the road
   centreline, the **offside** lane, and index `count - 1` is the lane against the
   kerb, the **nearside** lane. With left-hand traffic the nearside lane is the
@@ -317,7 +330,7 @@ application and does not export `review.json`.
 
 ## Current mosque interpretation
 
-With `direct-osm-stage2-v10`, the current mosque output intentionally contains
+With `direct-osm-stage2-v11`, the current mosque output intentionally contains
 review-required U-turn candidates at genuine decision nodes where OSM provides
 neither permission nor prohibition. Those findings are not generation errors;
 they expose legal uncertainty for Stage 3. An unexpectedly large number of

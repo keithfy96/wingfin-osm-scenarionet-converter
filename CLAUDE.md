@@ -30,7 +30,14 @@ anything.
 Re-derive every ID, index, angle and count from the generated model by script
 before drawing. Never copy figures by hand from an earlier message.
 
-### Reference case 1 — node 13946726034
+Both reference cases below show the **pre-v11 model**. The defect they illustrate was
+fixed in `direct-osm-stage2-v11` (`_balanced_merge_assignment`), so neither node looks
+like this any more — see
+`docs/mapping-algo-changes/2026-08-07-12:34:23-merging-approaches-starve-the-middle-lane.md`
+for the after view. They are kept because they remain the worked examples of the
+required format.
+
+### Reference case 1 — node 13946726034 (pre-v11)
 
 ```
  node 13946726034            + = left turn · − = right turn · left-hand traffic
@@ -59,7 +66,7 @@ before drawing. Never copy figures by hand from an earlier message.
    travel direction ───────────────────────────────────────────────────────►
 ```
 
-### Reference case 2 — node 1928630009
+### Reference case 2 — node 1928630009 (pre-v11)
 
 ```
  node 1928630009             + = left turn · − = right turn · left-hand traffic
@@ -89,7 +96,7 @@ before drawing. Never copy figures by hand from an earlier message.
    travel direction ───────────────────────────────────────────────────────►
 ```
 
-Both cases are the **same defect**, mirrored — see "Known-wrong" in section C.
+Both cases were the **same defect**, mirrored, and both are now fixed.
 
 ---
 
@@ -171,30 +178,43 @@ that cuts the drivable network on the strength of a magic number. Already enforc
 in `_side_filtered_candidates` and `_stranded_permission_fallback`; follow the same
 rule anywhere else the two sources of truth meet.
 
-### Known-wrong, not yet fixed: starved middle lanes
+### Starved middle lanes: mostly fixed, one left
 
-Two independent defects stack to leave lanes fed by nothing — both reference
-diagrams in section A are this:
+Two allocation rules now run before the proportional mapping, and between them they
+cover both shapes where the lane arithmetic closes:
 
-1. **`_mapped_lane_index` (`generation.py:292`) cannot produce a middle index.**
-   For a 2-lane approach onto a 3-lane destination it computes
-   `round(idx × (3−1) / (2−1))` → `idx0→0`, `idx1→2`. Index 1 is unreachable for
-   *any* input. The formula stretches lane order across the full width instead of
-   allocating lanes.
-2. **Each approach picks its target independently.** Nothing tracks what another
-   approach into the same outgoing group already claimed, so a ramp or link lands
-   on a lane the main road also feeds. `_balanced_approach_assignment`
-   (`generation.py:320`) solves the mirror case — one approach onto several
-   destinations — but there is no equivalent for several approaches onto one.
+- `_balanced_approach_assignment` — **one** approach across **several** destinations
+  (a lane peeling off cannot also be the straight-on lane). Added in v10.
+- `_balanced_merge_assignment` — **several** approaches into **one** destination
+  (a merging link must not land on a lane the main road already feeds). Added in v11.
 
-In `junction-1` this starves **4** lanes across 50 partially-fed multi-lane groups:
+`_mapped_lane_index` (`generation.py`) is unchanged and still **cannot produce a
+middle index**: for a 2-lane approach onto a 3-lane destination
+`round(idx × (3−1) / (2−1))` gives `idx0→0`, `idx1→2`, and index 1 is unreachable for
+*any* input. It now only decides **oversubscribed** approaches — where the counts do
+not close, a lane genuinely serves more than one movement, and the ambiguity is
+reported rather than resolved. Clean diverges and clean merges no longer go through it.
 
-| way | lane | at node |
-|---|---|---|
-| 776370584 | idx1/3 `37238b17cc` | 13946726034 |
-| 776021091 | idx1/3 `eef18fbc84` | 1928630009 |
-| 39619063 | idx1/2 `c0530c25fd` | 1927184814 |
-| 776021087 | idx0/2 `8caffc7049` | 13946726031 |
+**Still wrong — one lane, and for a third reason neither rule addresses:**
 
-Fixing this touches every multi-lane group and needs its own plan and its own
-change-log entry.
+| way | lane | at node | cause |
+|---|---|---|---|
+| 39619063 | idx1/2 `c0530c25fd` | 1927184814 | see below |
+
+Way `756118314` is tagged `turn:lanes=right|right`, so both its lanes carry
+`turn_permissions=['right']`. An explicit `turn:lanes` value outranks geometry in
+`movement_side()`, so **both** lanes are labelled `offside` and
+`side_lane_index("offside", 2)` returns `0` for both — they collide on one target and
+`39619063` idx1 is fed by nothing. The approach is oversubscribed (2 lanes arriving,
+5 lanes of destination capacity at the node), so neither balanced rule reaches it.
+
+The rule that would fix it: when a source block sends N lanes into one destination
+that has room for them, the side picks where the block **starts**, not where every
+lane goes. Needs its own plan and its own change-log entry.
+
+Two cautions when re-measuring this. A previous version of this table also listed
+`776021087` idx0/2 `8caffc7049` at node 13946726031; under the criterion "no connector
+and no continuation names it as a target" that lane was **already fed at v9**, so it
+was either counted under a different criterion or listed in error. And `junction-1`
+still has **12** destination lanes fed by nothing at nodes with traffic arriving; only
+the row above is a diagnosed defect, and the other 11 have not been examined.

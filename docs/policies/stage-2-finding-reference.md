@@ -18,14 +18,15 @@ It is not, by itself, proof that the source or generated map is wrong.
 > **This snapshot is stale.** The counts below were produced by
 > `direct-osm-stage2-v9` from the mosque workspace, which is no longer present on
 > disk, so they cannot currently be regenerated. The rule descriptions are stable
-> policy and remain accurate. The current generator is `direct-osm-stage2-v10`,
-> which allocates a balanced approach's lanes across its destinations as a whole;
-> it lowers `ambiguous_connector` and `lane_transition_count_mismatch` wherever an
-> approach's lane arithmetic closes, and leaves every other rule untouched.
+> policy and remain accurate. The current generator is `direct-osm-stage2-v11`,
+> which allocates a whole approach across its destinations, and several approaches
+> into the one carriageway they join, whenever the lane arithmetic closes. It
+> lowers `ambiguous_connector` and `lane_transition_count_mismatch` wherever that
+> happens and leaves every other rule untouched.
 >
-> For reference, the same generator over the junction-1 workspace produces **552**
+> For reference, the same generator over the junction-1 workspace produces **546**
 > findings: `speed_default` 192, `lane_width_default` 192, `lane_count_inference`
-> 105, `ambiguous_connector` 31, `lane_transition_count_mismatch` 28,
+> 105, `ambiguous_connector` 31, `lane_transition_count_mismatch` 22,
 > `turn_permission_geometry_conflict` 3, `signal_lane_association` 1. That is a
 > much smaller and hand-corrected extract, so its shares are not comparable to the
 > mosque table below.

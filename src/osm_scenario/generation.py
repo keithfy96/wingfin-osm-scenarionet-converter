@@ -44,7 +44,7 @@ from osm_scenario.topology import (
     via_way_resolution,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v10"
+GENERATOR_VERSION = "direct-osm-stage2-v11"
 LANE_MODEL_SCHEMA_VERSION = 2
 
 # One outgoing carriageway at a node: its OSM way and the directed edge it leaves on.
@@ -317,6 +317,17 @@ def _approach_blocks(
     return [blocks[key] for key in sorted(blocks)]
 
 
+def _kerb_first_key(source: LaneFeature, target: LaneFeature, driving_side: str) -> float:
+    """Rank a movement by how far it turns toward the kerb, most kerbward first."""
+    angle = signed_turn_angle(
+        LineString((point.x, point.y) for point in source.centerline),
+        LineString((point.x, point.y) for point in target.centerline),
+    )
+    # Positive angles turn left, which is the kerb side only where traffic drives on
+    # the left, so the ordering follows the country rather than the screen.
+    return -angle if driving_side == "left" else angle
+
+
 def _balanced_approach_assignment(
     approach: list[LaneFeature],
     outgoing_groups: dict[GroupKey, list[LaneFeature]],
@@ -342,16 +353,9 @@ def _balanced_approach_assignment(
         return None
     if sum(len(targets) for targets in groups.values()) != source.lane_count:
         return None
-    source_line = LineString((point.x, point.y) for point in source.centerline)
-
     def kerb_first(item: tuple[GroupKey, list[LaneFeature]]) -> tuple[float, GroupKey]:
         key, targets = item
-        angle = signed_turn_angle(
-            source_line, LineString((point.x, point.y) for point in targets[0].centerline)
-        )
-        # Positive angles turn left, which is the kerb side only where traffic drives on
-        # the left, so the ordering follows the country rather than the screen.
-        return (-angle if driving_side == "left" else angle, key)
+        return (_kerb_first_key(source, targets[0], driving_side), key)
 
     # Lane indices run centre-out, so the highest index is the kerbside lane.
     remaining = sorted(approach, key=lambda item: -item.lane_index)
@@ -363,6 +367,65 @@ def _balanced_approach_assignment(
             for lane, target in zip(
                 taken, sorted(targets, key=lambda item: -item.lane_index), strict=True
             )
+        }
+    return assignment
+
+
+def _balanced_merge_assignment(
+    approaches: list[list[LaneFeature]],
+    outgoing_groups: dict[GroupKey, list[LaneFeature]],
+    *,
+    driving_side: str,
+) -> dict[tuple[str, ...], dict[GroupKey, dict[str, str]]]:
+    """Deal several approaches into the one carriageway they all join.
+
+    The mirror of `_balanced_approach_assignment`. There, one approach apportions its
+    lanes across several destinations; here several approaches apportion themselves
+    across one. Both say the same thing: no lane may vanish and none may be shared.
+    Requiring every approach to have this destination and only this one is what keeps
+    the allocation unambiguous — at an ordinary crossroads each approach has several
+    destinations, so nothing fires. Returns an empty mapping unless the approaches'
+    lanes fill the destination exactly, leaving the proportional mapping to decide.
+    """
+    if len(approaches) < 2:
+        return {}
+    destination: GroupKey | None = None
+    for approach in approaches:
+        live = [
+            key
+            for key, targets in outgoing_groups.items()
+            if not _is_exact_reverse(approach[0], targets[0])
+        ]
+        if len(live) != 1 or len(approach) != approach[0].lane_count:
+            return {}
+        if destination is not None and live[0] != destination:
+            return {}
+        destination = live[0]
+    if destination is None:
+        return {}
+    targets = outgoing_groups[destination]
+    if sum(len(approach) for approach in approaches) != len(targets):
+        return {}
+    ordered = sorted(
+        approaches,
+        key=lambda approach: (
+            _kerb_first_key(approach[0], targets[0], driving_side),
+            tuple(approach[0].source_edge),
+        ),
+    )
+    # The approach arriving from the kerb side takes the kerbside lanes; the rest keep
+    # their order behind it, so a merging link never lands on top of a running lane.
+    remaining = sorted(targets, key=lambda item: -item.lane_index)
+    assignment: dict[tuple[str, ...], dict[GroupKey, dict[str, str]]] = {}
+    for approach in ordered:
+        taken, remaining = remaining[: len(approach)], remaining[len(approach) :]
+        assignment[tuple(approach[0].source_edge)] = {
+            destination: {
+                lane.identifier: target.identifier
+                for lane, target in zip(
+                    sorted(approach, key=lambda item: -item.lane_index), taken, strict=True
+                )
+            }
         }
     return assignment
 
@@ -1053,13 +1116,22 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
         # Every lane of an approach shares the same destinations, so which lane peels
         # off is a question about the approach as a whole and cannot be answered one
         # lane at a time: asked separately, two destinations both claim the kerb.
+        blocks = _approach_blocks(incoming, lane_lookup)
         approach_assignments: dict[tuple[str, ...], dict[GroupKey, dict[str, str]]] = {}
-        for block in _approach_blocks(incoming, lane_lookup):
+        for block in blocks:
             assignment = _balanced_approach_assignment(
                 block, outgoing_groups, driving_side=manifest["driving_side"]
             )
             if assignment is not None:
                 approach_assignments[tuple(block[0].source_edge)] = assignment
+        # A merge cannot also be a diverge: every approach of a clean merge brings
+        # strictly fewer lanes than the one destination holds, so the rule above has
+        # already declined each of them and there is nothing to overwrite.
+        approach_assignments.update(
+            _balanced_merge_assignment(
+                blocks, outgoing_groups, driving_side=manifest["driving_side"]
+            )
+        )
         for from_id in incoming:
             source = lane_lookup[from_id]
             source_line = LineString((point.x, point.y) for point in source.centerline)

@@ -13,6 +13,7 @@ from osm_scenario.config import ConverterConfig
 from osm_scenario.generation import (
     GenerationError,
     _balanced_approach_assignment,
+    _balanced_merge_assignment,
     _carries_whole_carriageway,
     _direction_arrow,
     _directional_lane_count,
@@ -491,6 +492,66 @@ def test_an_oversubscribed_approach_still_lets_a_lane_serve_two_movements() -> N
     assignment = _balanced_approach_assignment(approach, groups, driving_side="left")
     assert assignment is not None
     assert set(assignment) == {("20", ("n", "c", "0"))}
+
+
+def test_a_merging_link_does_not_land_on_top_of_a_running_lane() -> None:
+    # A two-lane road and a one-lane link join one three-lane road. The counts close
+    # exactly as they do for a diverge, so no lane may vanish and none may be shared.
+    road = _block("10", "a", "n", 2, 0.0)
+    link = _block("20", "b", "n", 1, -20.0)
+    carry_on = _block("30", "n", "c", 3, 0.0)
+    groups = _groups(carry_on)
+
+    assignment = _balanced_merge_assignment([road, link], groups, driving_side="left")
+    destination = ("30", ("n", "c", "0"))
+
+    # The link turns toward the kerb to join, so it takes the kerbside lane and the
+    # road keeps its order behind it — middle lane onto middle lane.
+    assert assignment[("b", "n", "0")] == {destination: {"20-0": "30-2"}}
+    assert assignment[("a", "n", "0")] == {destination: {"10-1": "30-1", "10-0": "30-0"}}
+
+    landed = [
+        target
+        for per_group in assignment.values()
+        for group in per_group.values()
+        for target in group.values()
+    ]
+    assert sorted(landed) == ["30-0", "30-1", "30-2"]  # every lane fed, none twice
+
+
+def test_merge_dealing_follows_the_driving_side_not_the_geometry() -> None:
+    # Identical geometry, opposite countries: the link joins from the kerb side in one
+    # and from the median side in the other, so it must take opposite lanes.
+    road = _block("10", "a", "n", 2, 0.0)
+    link = _block("20", "b", "n", 1, -20.0)
+    groups = _groups(_block("30", "n", "c", 3, 0.0))
+    destination = ("30", ("n", "c", "0"))
+
+    on_the_left = _balanced_merge_assignment([road, link], groups, driving_side="left")
+    on_the_right = _balanced_merge_assignment([road, link], groups, driving_side="right")
+    assert on_the_left[("b", "n", "0")] == {destination: {"20-0": "30-2"}}
+    assert on_the_right[("b", "n", "0")] == {destination: {"20-0": "30-0"}}
+
+
+def test_only_an_unambiguous_merge_is_dealt_as_one() -> None:
+    road = _block("10", "a", "n", 2, 0.0)
+    link = _block("20", "b", "n", 1, -20.0)
+
+    # The counts do not close, so a lane really is shared and the proportional
+    # mapping still decides.
+    assert not _balanced_merge_assignment(
+        [road, link], _groups(_block("30", "n", "c", 2, 0.0)), driving_side="left"
+    )
+
+    # An approach with somewhere else to go is not merging: which of its lanes joins
+    # this carriageway is exactly the question a merge assumes is already answered.
+    crossroads = _groups(_block("30", "n", "c", 3, 0.0), _block("40", "n", "d", 1, 80.0))
+    assert not _balanced_merge_assignment([road, link], crossroads, driving_side="left")
+
+    # One approach is a diverge, which the balanced-approach rule already owns.
+    assert not _balanced_merge_assignment(
+        [road], _groups(_block("30", "n", "c", 2, 0.0)), driving_side="left"
+    )
 
 
 def test_sharp_movements_need_the_evidence_a_uturn_needs() -> None:
