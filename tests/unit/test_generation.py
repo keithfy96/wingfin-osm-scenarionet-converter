@@ -12,6 +12,7 @@ from osm_scenario.acquisition import acquire_osm
 from osm_scenario.config import ConverterConfig
 from osm_scenario.generation import (
     GenerationError,
+    _balanced_approach_assignment,
     _carries_whole_carriageway,
     _direction_arrow,
     _directional_lane_count,
@@ -400,6 +401,98 @@ def test_one_way_carriageways_are_centred_on_the_osm_centreline() -> None:
         assert mirrored == [-value for value in offsets(4, centred=centred)]
 
 
+def _block(
+    way: str, node_from: str, node_to: str, lane_count: int, bearing_degrees: float
+) -> list[LaneFeature]:
+    """Build one carriageway's lanes, all parallel, leaving the shared node at a bearing."""
+    radians = math.radians(90.0 + bearing_degrees)
+    step = (math.cos(radians), math.sin(radians))
+    lanes = []
+    for index in range(lane_count):
+        # Indices run centre-out, so index 0 is offside and the last one is kerbside.
+        offset = (index + 0.5 - 0.5 * lane_count) * 3.5
+        base = (-step[1] * offset, step[0] * offset)
+        span = [(base[0] + step[0] * along, base[1] + step[1] * along) for along in (0.0, 40.0)]
+        if node_to == "n":  # an approach ends at the shared node rather than leaving it
+            span = [(x - step[0] * 40.0, y - step[1] * 40.0) for x, y in span]
+        lanes.append(
+            LaneFeature(
+                identifier=f"{way}-{index}",
+                source_way_ids=[way],
+                source_edge=[node_from, node_to, "0"],
+                lane_index=index,
+                lane_count=lane_count,
+                direction="forward",
+                road_class="tertiary",
+                width_m=3.5,
+                speed_limit_kph=50.0,
+                centerline=[Point2D(x=x, y=y) for x, y in span],
+                polygon=[Point2D(x=0.0, y=0.0), Point2D(x=1.0, y=0.0), Point2D(x=0.0, y=0.0)],
+                boundaries=[],
+                turn_permissions=[],
+            )
+        )
+    return lanes
+
+
+def _groups(*blocks: list[LaneFeature]) -> dict[tuple[str, tuple[str, ...]], list[LaneFeature]]:
+    return {(block[0].source_way_ids[0], tuple(block[0].source_edge)): block for block in blocks}
+
+
+def test_a_peeling_lane_is_not_also_the_straight_on_lane() -> None:
+    # Three lanes arrive; two carry on and one leaves as a link. The counts close, so
+    # every lane has exactly one destination and nothing is left to infer.
+    approach = _block("10", "a", "n", 3, 0.0)
+    carry_on = _block("20", "n", "c", 2, 0.0)
+    link = _block("30", "n", "l", 1, 20.0)
+
+    assignment = _balanced_approach_assignment(
+        approach, _groups(carry_on, link), driving_side="left"
+    )
+    assert assignment is not None
+
+    # The link departs toward the kerb, so the kerbside lane feeds it and no other.
+    assert assignment[("30", ("n", "l", "0"))] == {"10-2": "30-0"}
+    # The remaining lanes carry on in order rather than collapsing onto one target.
+    assert assignment[("20", ("n", "c", "0"))] == {"10-1": "20-1", "10-0": "20-0"}
+
+    landed = [target for group in assignment.values() for target in group.values()]
+    assert len(landed) == len(set(landed)) == 3
+
+
+def test_lane_dealing_follows_the_driving_side_not_the_geometry() -> None:
+    # Identical geometry, opposite countries. A link leaving to the right is kerbside
+    # where traffic drives on the right and offside where it does not, and the lane that
+    # feeds it has to change with the country.
+    approach = _block("10", "a", "n", 2, 0.0)
+    carry_on = _block("20", "n", "c", 1, 0.0)
+    link = _block("30", "n", "l", 1, -20.0)
+    groups = _groups(carry_on, link)
+    link_key = ("30", ("n", "l", "0"))
+
+    on_the_right = _balanced_approach_assignment(approach, groups, driving_side="right")
+    on_the_left = _balanced_approach_assignment(approach, groups, driving_side="left")
+    assert on_the_right is not None and on_the_left is not None
+    assert on_the_right[link_key] == {"10-1": "30-0"}  # kerbside lane
+    assert on_the_left[link_key] == {"10-0": "30-0"}  # offside lane
+
+
+def test_an_oversubscribed_approach_still_lets_a_lane_serve_two_movements() -> None:
+    # One lane, two destinations: the capacity does not close, so a lane genuinely does
+    # go both ways and the caller's proportional mapping must keep deciding.
+    approach = _block("10", "a", "n", 1, 0.0)
+    groups = _groups(_block("20", "n", "c", 1, 0.0), _block("30", "n", "l", 1, 20.0))
+    assert _balanced_approach_assignment(approach, groups, driving_side="left") is None
+
+    # A U-turn is not a destination that consumes a lane, so it must not unbalance one.
+    approach = _block("10", "a", "n", 2, 0.0)
+    back = _block("40", "n", "a", 2, 180.0)
+    groups = _groups(_block("20", "n", "c", 2, 0.0), back)
+    assignment = _balanced_approach_assignment(approach, groups, driving_side="left")
+    assert assignment is not None
+    assert set(assignment) == {("20", ("n", "c", "0"))}
+
+
 def test_sharp_movements_need_the_evidence_a_uturn_needs() -> None:
     def unproven(movement: str, angle: float, permissions: list[str] | None = None) -> bool:
         return _unproven_sharp_movement(
@@ -523,6 +616,12 @@ def test_generate_lane_model_writes_deterministic_stage_2_artifacts(tmp_path: Pa
         LineString((point.x, point.y) for point in connector.centerline).length < 12.0
         for connector in first.connectors
     )
+    # Two lanes of one approach must never hand off to the same lane: a carriageway
+    # that apportions its lanes across destinations cannot make one of them vanish.
+    handoffs: dict[tuple[str, ...], list[str]] = {}
+    for source, target in continuations:
+        handoffs.setdefault(tuple(source.source_edge), []).append(target.identifier)
+    assert all(len(targets) == len(set(targets)) for targets in handoffs.values())
 
     shared = min(_ends("11"), key=lambda p: min(_distance(p, q) for q in _ends("10")))
     near, far = sorted(_ends("10"), key=lambda q: _distance(q, shared))[:2]

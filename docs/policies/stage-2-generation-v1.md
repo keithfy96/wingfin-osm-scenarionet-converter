@@ -2,7 +2,7 @@
 
 `stage-2-generation-v1` documents how Stage 2 turns the immutable Stage 1 OSM
 snapshot and projected directed graph into the preliminary lane model. The
-current executable implementation is `direct-osm-stage2-v9` in
+current executable implementation is `direct-osm-stage2-v10` in
 [`generation.py`](../../src/osm_scenario/generation.py), with topology and
 restriction helpers in [`topology.py`](../../src/osm_scenario/topology.py).
 
@@ -119,6 +119,25 @@ side's lane of the approach, as described under lane-to-lane mapping below.
 
 - Stage 2 creates one deterministic target per source lane and outgoing edge
   group, rather than a full incoming-lane by outgoing-lane cross product.
+- **An approach is allocated as a whole when its arithmetic closes.** A lane that
+  peels off cannot also be the straight-on lane. Where the destinations of one
+  approach hold exactly as many lanes as the approach brings — a three-lane road
+  reaching a two-lane continuation and a one-lane link, say — every lane has
+  exactly one destination and there is nothing left to infer. Those lanes are
+  dealt kerb first: destinations are ordered by how far each turns toward the
+  kerb, and the approach's lanes are handed out from the kerbside inward, so the
+  link leaving toward the kerb is fed by the kerbside lane and the rest carry on
+  in order. Reverse destinations do not consume capacity and take no part.
+  Asked one destination at a time instead, both the link and the continuation
+  claim the kerbside lane, one lane is left serving two through movements, and
+  two others collapse onto a single target — the road silently loses a lane.
+- When the counts do **not** close the approach is oversubscribed, a lane really
+  does serve more than one movement — a single lane that may go left or straight
+  — and the proportional order mapping below still decides. Sharing is real
+  there, and the ambiguity it creates is reported rather than resolved.
+- A balanced approach emits no `lane_transition_count_mismatch`. Its lanes are
+  apportioned across destinations, not lost, so the count difference across any
+  one destination is not a mismatch.
 - Generated lane indices run centre-out. Index `0` is the lane against the road
   centreline, the **offside** lane, and index `count - 1` is the lane against the
   kerb, the **nearside** lane. With left-hand traffic the nearside lane is the
@@ -298,7 +317,7 @@ application and does not export `review.json`.
 
 ## Current mosque interpretation
 
-With `direct-osm-stage2-v9`, the current mosque output intentionally contains
+With `direct-osm-stage2-v10`, the current mosque output intentionally contains
 review-required U-turn candidates at genuine decision nodes where OSM provides
 neither permission nor prohibition. Those findings are not generation errors;
 they expose legal uncertainty for Stage 3. An unexpectedly large number of

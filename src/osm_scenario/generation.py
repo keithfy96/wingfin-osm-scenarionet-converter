@@ -44,8 +44,11 @@ from osm_scenario.topology import (
     via_way_resolution,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v9"
+GENERATOR_VERSION = "direct-osm-stage2-v10"
 LANE_MODEL_SCHEMA_VERSION = 2
+
+# One outgoing carriageway at a node: its OSM way and the directed edge it leaves on.
+GroupKey = tuple[str, tuple[str, ...]]
 
 OPPOSITE_DIRECTION = {"forward": "backward", "backward": "forward"}
 
@@ -299,6 +302,69 @@ def _mapped_lane_index(source: LaneFeature, target_count: int, side: str | None 
     if source.lane_count > 1 and target_count > 1:
         return round(source.lane_index * (target_count - 1) / (source.lane_count - 1))
     return min(source.lane_index, target_count - 1)
+
+
+def _approach_blocks(
+    incoming: list[str], lane_lookup: dict[str, LaneFeature]
+) -> list[list[LaneFeature]]:
+    """Group the lanes arriving at a node by the directed edge they arrive on."""
+    blocks: dict[tuple[str, ...], list[LaneFeature]] = {}
+    for lane_id in incoming:
+        lane = lane_lookup[lane_id]
+        blocks.setdefault(tuple(lane.source_edge), []).append(lane)
+    for block in blocks.values():
+        block.sort(key=lambda item: item.lane_index)
+    return [blocks[key] for key in sorted(blocks)]
+
+
+def _balanced_approach_assignment(
+    approach: list[LaneFeature],
+    outgoing_groups: dict[GroupKey, list[LaneFeature]],
+    *,
+    driving_side: str,
+) -> dict[GroupKey, dict[str, str]] | None:
+    """Deal an approach's lanes across its destinations when the arithmetic closes.
+
+    A lane that peels off cannot also be the straight-on lane. Where the destinations
+    of an approach hold exactly as many lanes as the approach brings, every lane has
+    one destination and there is nothing left to infer, so deal them kerb first: the
+    link leaving toward the kerb is fed by the kerbside lane and the rest carry on in
+    order. Returns None when the counts do not close, because a lane then really does
+    serve more than one movement and the proportional mapping still decides.
+    """
+    source = approach[0]
+    groups = {
+        key: targets
+        for key, targets in outgoing_groups.items()
+        if not _is_exact_reverse(source, targets[0])
+    }
+    if not groups or len(approach) != source.lane_count:
+        return None
+    if sum(len(targets) for targets in groups.values()) != source.lane_count:
+        return None
+    source_line = LineString((point.x, point.y) for point in source.centerline)
+
+    def kerb_first(item: tuple[GroupKey, list[LaneFeature]]) -> tuple[float, GroupKey]:
+        key, targets = item
+        angle = signed_turn_angle(
+            source_line, LineString((point.x, point.y) for point in targets[0].centerline)
+        )
+        # Positive angles turn left, which is the kerb side only where traffic drives on
+        # the left, so the ordering follows the country rather than the screen.
+        return (-angle if driving_side == "left" else angle, key)
+
+    # Lane indices run centre-out, so the highest index is the kerbside lane.
+    remaining = sorted(approach, key=lambda item: -item.lane_index)
+    assignment: dict[GroupKey, dict[str, str]] = {}
+    for key, targets in sorted(groups.items(), key=kerb_first):
+        taken, remaining = remaining[: len(targets)], remaining[len(targets) :]
+        assignment[key] = {
+            lane.identifier: target.identifier
+            for lane, target in zip(
+                taken, sorted(targets, key=lambda item: -item.lane_index), strict=True
+            )
+        }
+    return assignment
 
 
 def _side_filtered_candidates(
@@ -977,17 +1043,30 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                 or node.tags.get("junction") is not None
             )
         )
+        outgoing_groups: dict[GroupKey, list[LaneFeature]] = {}
+        for to_id in outgoing:
+            target = lane_lookup[to_id]
+            group_key = (target.source_way_ids[0], tuple(target.source_edge))
+            outgoing_groups.setdefault(group_key, []).append(target)
+        for targets in outgoing_groups.values():
+            targets.sort(key=lambda item: (item.lane_index, item.identifier))
+        # Every lane of an approach shares the same destinations, so which lane peels
+        # off is a question about the approach as a whole and cannot be answered one
+        # lane at a time: asked separately, two destinations both claim the kerb.
+        approach_assignments: dict[tuple[str, ...], dict[GroupKey, dict[str, str]]] = {}
+        for block in _approach_blocks(incoming, lane_lookup):
+            assignment = _balanced_approach_assignment(
+                block, outgoing_groups, driving_side=manifest["driving_side"]
+            )
+            if assignment is not None:
+                approach_assignments[tuple(block[0].source_edge)] = assignment
         for from_id in incoming:
             source = lane_lookup[from_id]
             source_line = LineString((point.x, point.y) for point in source.centerline)
             candidates_for_lane: list[MovementCandidate] = []
             permission_removed: list[MovementCandidate] = []
             carries_straight_on = False
-            outgoing_groups: dict[tuple[str, tuple[str, ...]], list[LaneFeature]] = {}
-            for to_id in outgoing:
-                target = lane_lookup[to_id]
-                group_key = (target.source_way_ids[0], tuple(target.source_edge))
-                outgoing_groups.setdefault(group_key, []).append(target)
+            allocated = approach_assignments.get(tuple(source.source_edge), {})
             non_reverse_groups = [
                 targets
                 for targets in outgoing_groups.values()
@@ -1001,10 +1080,13 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                 has_control_or_restriction=node_id in restriction_nodes or controlled_node,
                 explicit_reverse=explicit_reverse,
             )
-            for targets in outgoing_groups.values():
-                targets.sort(key=lambda item: (item.lane_index, item.identifier))
+            for group_key, targets in outgoing_groups.items():
                 exact_reverse = _is_exact_reverse(source, targets[0])
                 if exact_reverse and not decision_node:
+                    continue
+                allocation = allocated.get(group_key)
+                if allocation is not None and source.identifier not in allocation:
+                    # The approach balances and this lane's one destination is elsewhere.
                     continue
                 # Every lane in a group is a parallel offset of one edge, so the group's
                 # first lane answers both questions below for the whole group.
@@ -1017,7 +1099,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                 # carriageway that merely bends past the side threshold is not a turn,
                 # and snapping its lanes to the kerb would shuffle the whole block.
                 side = None
-                if not is_continuation:
+                if not is_continuation and allocation is None:
                     group_angle = signed_turn_angle(
                         source_line,
                         LineString((point.x, point.y) for point in targets[0].centerline),
@@ -1029,9 +1111,14 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                         turn_permissions=source.turn_permissions,
                         min_degrees=config.lane_selection.side_movement_min_degrees,
                     )
-                target_index = _mapped_lane_index(source, len(targets), side)
-                target = targets[target_index]
-                if source.lane_count != len(targets):
+                target = (
+                    lane_lookup[allocation[source.identifier]]
+                    if allocation is not None
+                    else targets[_mapped_lane_index(source, len(targets), side)]
+                )
+                # A balanced approach has not lost a lane, it has apportioned them, so
+                # the count difference across any one destination is not a mismatch.
+                if source.lane_count != len(targets) and allocation is None:
                     mismatch_key = (
                         node_id,
                         source.source_way_ids[0],
