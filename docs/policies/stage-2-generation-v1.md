@@ -2,7 +2,7 @@
 
 `stage-2-generation-v1` documents how Stage 2 turns the immutable Stage 1 OSM
 snapshot and projected directed graph into the preliminary lane model. The
-current executable implementation is `direct-osm-stage2-v11` in
+current executable implementation is `direct-osm-stage2-v12` in
 [`generation.py`](../../src/osm_scenario/generation.py), with topology and
 restriction helpers in [`topology.py`](../../src/osm_scenario/topology.py).
 
@@ -200,18 +200,26 @@ share a node to be connected. A lane must not be drawn stopping there: it would
 end in the middle of the opposing carriageway, pointing at through traffic,
 instead of reaching the lane it enters.
 
-- Where an **active** connector carries a `through` movement — a merge or a
-  diverge — and the two lanes are further apart than
-  `lane_geometry.merge_taper_min_gap_m`, the lane on the side with fewer lanes is
-  bent so its end meets its counterpart. The displacement is blended in over
-  `lane_geometry.merge_taper_length_m`, clamped to the lane's own length, so the
-  lane bends rather than steps sideways.
+- Where a connector carries a `through` movement — a merge or a diverge — and the
+  two lanes are further apart than `lane_geometry.merge_taper_min_gap_m`, the lane
+  on the side with fewer lanes is bent so its end meets its counterpart. The
+  displacement is blended in over `lane_geometry.merge_taper_length_m`, clamped to
+  the lane's own length, so the lane bends rather than steps sideways.
 - The through carriageway is never bent: only the minor side yields. An even split
   is left alone, because there is nothing to choose between the two, and a real
   turn is left alone because it ends at a stop line and its connector curve is
   already the right shape.
+- Connector status does not gate the taper. Status answers whether a movement is
+  right; where a lane's free end sits is a different question, and the junction
+  node is the one answer that is never right. A movement awaiting review is still
+  a movement that exists, so it is drawn reaching the lane it enters rather than
+  parked on a centreline until someone decides. A **forbidden** movement is the
+  exception — it does not exist, so it may not move geometry.
 - Where several lanes merge into one, that lane can only begin in one place. The
-  remaining approaches keep their gap and their connectors span it.
+  remaining approaches keep their gap and their connectors span it. Where two
+  movements name two different places for the same lane end, an active one
+  outranks one awaiting review; if the disagreement survives that, the end is left
+  where OSM put it rather than settled by an arbitrary tie-break.
 - A taper is geometry only. Movement classification, side selection and connector
   status are all decided from the untapered OSM geometry first: letting a taper
   change an angle would let it change the classification that selected it. The
@@ -330,7 +338,7 @@ application and does not export `review.json`.
 
 ## Current mosque interpretation
 
-With `direct-osm-stage2-v11`, the current mosque output intentionally contains
+With `direct-osm-stage2-v12`, the current mosque output intentionally contains
 review-required U-turn candidates at genuine decision nodes where OSM provides
 neither permission nor prohibition. Those findings are not generation errors;
 they expose legal uncertainty for Stage 3. An unexpectedly large number of

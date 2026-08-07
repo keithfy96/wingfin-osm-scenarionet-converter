@@ -44,7 +44,7 @@ from osm_scenario.topology import (
     via_way_resolution,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v11"
+GENERATOR_VERSION = "direct-osm-stage2-v12"
 LANE_MODEL_SCHEMA_VERSION = 2
 
 # One outgoing carriageway at a node: its OSM way and the directed edge it leaves on.
@@ -218,29 +218,64 @@ def _merge_taper_plan(
     connector curve is already the right shape. The side with fewer lanes yields, so
     the through carriageway is never bent, and an even split is left alone because
     there is nothing to choose between the two.
+
+    A connector's status answers whether the movement is right; where a lane's free end
+    sits is a different question, and the junction node is the one answer that is never
+    right. So review only withholds a decision, it does not park a lane on a centreline
+    until someone makes one. A forbidden movement is the exception: it does not exist,
+    so it may not drag geometry.
     """
-    candidates: list[tuple[tuple[str, str], tuple[str, str], tuple[float, float]]] = []
+    candidates: list[tuple[tuple[str, str], tuple[str, str], tuple[float, float], int]] = []
     for connector in sorted(connectors, key=lambda item: item.identifier):
-        if connector.status != "active" or connector.movement != "through":
+        if connector.status == "forbidden" or connector.movement != "through":
             continue
         source = lane_lookup[connector.from_lane_id]
         target = lane_lookup[connector.to_lane_id]
         leaves, enters = source.centerline[-1], target.centerline[0]
         if math.dist((leaves.x, leaves.y), (enters.x, enters.y)) <= min_gap:
             continue
+        rank = 0 if connector.status == "active" else 1
         if source.lane_count < target.lane_count:
             candidates.append(
-                ((source.identifier, "end"), (target.identifier, "start"), (enters.x, enters.y))
+                (
+                    (source.identifier, "end"),
+                    (target.identifier, "start"),
+                    (enters.x, enters.y),
+                    rank,
+                )
             )
         elif target.lane_count < source.lane_count:
             candidates.append(
-                ((target.identifier, "start"), (source.identifier, "end"), (leaves.x, leaves.y))
+                (
+                    (target.identifier, "start"),
+                    (source.identifier, "end"),
+                    (leaves.x, leaves.y),
+                    rank,
+                )
             )
-    moving = {subject for subject, _, _ in candidates}
+    # A decided movement outranks one still awaiting review, and where the best rank an
+    # endpoint has still names two places it cannot be in both: leave it where OSM put
+    # it rather than settle a real disagreement on whichever connector ID sorted first.
+    best_rank: dict[tuple[str, str], int] = {}
+    for subject, _, _, rank in candidates:
+        best_rank[subject] = min(rank, best_rank.get(subject, rank))
+    contested = {
+        subject
+        for subject in best_rank
+        if len(
+            {
+                destination
+                for other, _, destination, rank in candidates
+                if other == subject and rank == best_rank[subject]
+            }
+        )
+        > 1
+    }
+    moving = {subject for subject, _, _, _ in candidates} - contested
     plan: dict[tuple[str, str], tuple[float, float]] = {}
-    for subject, anchor, destination in candidates:
+    for subject, anchor, destination, rank in candidates:
         # Chasing an endpoint that is itself moving would reopen the gap it closed.
-        if anchor not in moving:
+        if subject not in contested and anchor not in moving and rank == best_rank[subject]:
             plan.setdefault(subject, destination)
     return plan
 

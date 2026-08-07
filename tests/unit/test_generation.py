@@ -324,6 +324,82 @@ def test_a_taper_bends_one_end_onto_its_target_and_leaves_the_rest_alone() -> No
     assert short.coords[-1] == pytest.approx((10.0, 3.5))
 
 
+def _taper_connector(
+    identifier: str, source: str, target: str, movement: str, status: str = "active"
+) -> ConnectorFeature:
+    return ConnectorFeature(
+        identifier=identifier,
+        junction_node_id="1",
+        from_lane_id=source,
+        to_lane_id=target,
+        from_way_id="10",
+        to_way_id="20",
+        movement=movement,
+        turn_angle_degrees=0.0,
+        status=status,
+        centerline=[Point2D(x=0.0, y=0.0), Point2D(x=1.0, y=0.0)],
+        polygon=[Point2D(x=0.0, y=0.0), Point2D(x=1.0, y=0.0), Point2D(x=0.0, y=0.0)],
+    )
+
+
+def _taper_lane(identifier: str, lane_count: int, start: float, end: float) -> LaneFeature:
+    feature = _approach(0, lane_count)
+    return feature.model_copy(
+        update={
+            "identifier": identifier,
+            "centerline": [Point2D(x=start, y=0.0), Point2D(x=end, y=0.0)],
+        }
+    )
+
+
+def test_an_unreviewed_movement_still_pulls_its_lane_off_the_centreline() -> None:
+    # A link peeling off a road it shares a lane with: the lane serves two movements, so
+    # both are flagged for review, but the link still has to start on the lane that
+    # feeds it rather than on the junction node.
+    lookup = {
+        "link": _taper_lane("link", 1, 0.0, 40.0),
+        "road": _taper_lane("road", 2, -60.0, -5.25),
+    }
+    plan = _merge_taper_plan(
+        [_taper_connector("c", "road", "link", "through", "review_required")],
+        lookup,
+        min_gap=0.5,
+    )
+    assert plan == {("link", "start"): (-5.25, 0.0)}
+
+    # A forbidden movement does not exist, so it may not drag geometry.
+    assert (
+        _merge_taper_plan(
+            [_taper_connector("c", "road", "link", "through", "forbidden")],
+            lookup,
+            min_gap=0.5,
+        )
+        == {}
+    )
+
+
+def test_an_endpoint_two_movements_disagree_about_is_left_where_osm_put_it() -> None:
+    lookup = {
+        "link": _taper_lane("link", 1, 0.0, 40.0),
+        "road": _taper_lane("road", 2, -60.0, -5.25),
+        "other": _taper_lane("other", 2, -60.0, -9.75),
+    }
+    same_rank = [
+        _taper_connector("a", "road", "link", "through", "review_required"),
+        _taper_connector("b", "other", "link", "through", "review_required"),
+    ]
+    # Two unreviewed movements name two different places for one endpoint. It cannot be
+    # in both, and picking by connector id would settle a real disagreement by accident.
+    assert _merge_taper_plan(same_rank, lookup, min_gap=0.5) == {}
+
+    # A decided movement outranks one still awaiting review, so the tie is not a tie.
+    mixed = [
+        _taper_connector("a", "road", "link", "through", "review_required"),
+        _taper_connector("b", "other", "link", "through", "active"),
+    ]
+    assert _merge_taper_plan(mixed, lookup, min_gap=0.5) == {("link", "start"): (-9.75, 0.0)}
+
+
 def test_only_the_minor_side_of_a_shallow_merge_yields() -> None:
     def connector(identifier: str, source: str, target: str, movement: str) -> ConnectorFeature:
         return ConnectorFeature(
