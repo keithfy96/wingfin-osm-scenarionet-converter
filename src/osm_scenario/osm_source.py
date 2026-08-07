@@ -67,10 +67,21 @@ class OsmSnapshot:
     nodes: dict[str, OsmNode]
     ways: dict[str, OsmWay]
     relations: dict[str, OsmRelation]
+    deleted_elements: dict[str, tuple[str, ...]]
 
 
 class SourceAuditError(RuntimeError):
     """Raised when the source and selected graph do not agree."""
+
+
+def _is_deleted(element: ET.Element) -> bool:
+    """Report whether an editor has flagged this element as deleted in the source XML."""
+    # A file saved from an editor is an edit journal, not a snapshot: a deleted element
+    # stays in the document carrying action='delete' (and its <nd> refs stripped), and
+    # an element read back from the API with its history carries visible='false'. Both
+    # mean the element is gone. OSMnx already skips them, so reading them here would
+    # make the snapshot disagree with the very graph it is audited against.
+    return element.attrib.get("action") == "delete" or element.attrib.get("visible") == "false"
 
 
 def read_osm_snapshot(path: Path) -> OsmSnapshot:
@@ -79,10 +90,14 @@ def read_osm_snapshot(path: Path) -> OsmSnapshot:
     nodes: dict[str, OsmNode] = {}
     ways: dict[str, OsmWay] = {}
     relations: dict[str, OsmRelation] = {}
+    deleted: dict[str, list[str]] = {}
 
     for element in root:
         identifier = element.attrib.get("id")
         if identifier is None:
+            continue
+        if _is_deleted(element):
+            deleted.setdefault(element.tag, []).append(identifier)
             continue
         tags = {
             tag.attrib["k"]: tag.attrib["v"]
@@ -118,7 +133,12 @@ def read_osm_snapshot(path: Path) -> OsmSnapshot:
                 ),
                 tags=tags,
             )
-    return OsmSnapshot(nodes=nodes, ways=ways, relations=relations)
+    return OsmSnapshot(
+        nodes=nodes,
+        ways=ways,
+        relations=relations,
+        deleted_elements={kind: tuple(sorted(ids)) for kind, ids in sorted(deleted.items())},
+    )
 
 
 def road_exclusion_reason(tags: dict[str, str]) -> str | None:
@@ -188,6 +208,12 @@ def select_public_driving_graph(
             "excluded_source_ways": sum(excluded_counts.values()),
             "ignored_non_highway_ways": ignored_non_highway_ways,
             "excluded_by_reason": dict(sorted(excluded_counts.items())),
+            # Reported rather than dropped in silence: a way removed before selection
+            # never reaches excluded_by_reason, so this is the only place a reviewer
+            # can see that the source once described a road here.
+            "deleted_source_elements": {
+                kind: list(ids) for kind, ids in snapshot.deleted_elements.items()
+            },
             "filtered_graph_way_count": len(unexpected_way_ids - selected_way_ids),
         }
     )

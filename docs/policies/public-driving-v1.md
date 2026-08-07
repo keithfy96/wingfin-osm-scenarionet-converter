@@ -4,6 +4,22 @@
 motor-vehicle road graph. Its implementation is
 [`src/osm_scenario/osm_source.py`](../../src/osm_scenario/osm_source.py).
 
+## Source snapshot boundary
+
+Selection runs over a snapshot of the source XML, and an element flagged as deleted
+is not part of that snapshot. A file saved from an editor is an edit journal rather
+than a snapshot: a way that was deleted, or combined into a neighbouring way, stays
+in the document carrying `action='delete'` with its node references stripped but its
+`highway=*` tag intact, and an element read back with its history carries
+`visible='false'`. Both forms are skipped by `read_osm_snapshot()` before any policy
+question is asked, which matches what the graph builder already does — reading them
+would make the snapshot disagree with the graph it is audited against, and a way that
+is in neither would be reported as a road that went missing.
+
+Skipped elements are listed in the manifest under
+`road_selection.deleted_source_elements`, keyed by element kind. They never appear in
+`excluded_by_reason`, because they are not excluded roads; they are not roads at all.
+
 ## Included roads
 
 Ways must have a supported `highway=*` value and must not be explicitly private

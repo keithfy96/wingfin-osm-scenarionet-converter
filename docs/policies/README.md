@@ -31,6 +31,8 @@ source code remains authoritative:
 
 - Policy identifier: `ROAD_SELECTION_POLICY_ID` in
   [`src/osm_scenario/osm_source.py`](../../src/osm_scenario/osm_source.py)
+- Source snapshot boundary: `read_osm_snapshot()` in the same module, which decides
+  which source elements exist at all before any selection question is asked
 - Included road classes: `PUBLIC_DRIVING_HIGHWAYS` in the same module
 - Prohibited access values: `PROHIBITED_ACCESS` in the same module
 - Selection decision: `road_exclusion_reason()` in the same module

@@ -1,4 +1,5 @@
 import json
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import osmnx as ox
@@ -173,6 +174,31 @@ def test_source_audit_filters_non_driving_ways_and_preserves_all_tags(tmp_path: 
     source_tags = (json.loads(stored_tags) if isinstance(stored_tags, str) else stored_tags)["11"]
     assert source_tags["toll"] == "yes"
     assert source_tags["operator:test"] == "retained exactly"
+
+
+def test_a_way_deleted_in_an_editor_is_not_a_road_that_went_missing(tmp_path: Path) -> None:
+    # What JOSM writes when a way is deleted or combined into another: the element
+    # stays in the file flagged, with its node refs stripped but its tags intact.
+    tree = ET.parse(FIXTURE)
+    combined = next(way for way in tree.getroot() if way.attrib.get("id") == "11")
+    combined.set("action", "delete")
+    for reference in combined.findall("nd"):
+        combined.remove(reference)
+    source = tmp_path / "map.osm"
+    tree.write(source, encoding="utf-8", xml_declaration=True)
+
+    snapshot = read_osm_snapshot(source)
+    graph = ox.graph_from_xml(source, simplify=False, retain_all=True)
+    _, audit = select_public_driving_graph(graph, snapshot)
+
+    assert "11" not in snapshot.ways
+    # The way is gone from the graph too, so calling it selected would report the
+    # parity failure that catches a genuinely dropped road.
+    assert audit["status"] == "passed"
+    assert audit["missing_way_ids"] == []
+    assert not any(error["code"] == "missing_selected_way" for error in audit["errors"])
+    assert audit["selected_source_ways"] == 1
+    assert audit["deleted_source_elements"] == {"way": ["11"]}
 
 
 def test_source_audit_detects_a_missing_travel_direction() -> None:
