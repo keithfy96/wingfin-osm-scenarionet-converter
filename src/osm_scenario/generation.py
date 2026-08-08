@@ -656,7 +656,13 @@ def _direction_arrow(centerline: list[Point2D], width: float) -> list[Point2D] |
     ]
 
 
-def _render_review_html(model: PreliminaryLaneModel, snapshot: OsmSnapshot) -> str:
+def build_review_payload(model: PreliminaryLaneModel, snapshot: OsmSnapshot) -> dict[str, Any]:
+    """Projected features, findings and counts shared by the Stage 2 audit and Stage 3 review.
+
+    Both views draw the same map and differ only in whether decisions can be recorded
+    on it. One builder means a reviewer cannot be shown different geometry depending
+    on which view they opened.
+    """
     transformer = Transformer.from_crs(
         model.metadata.coordinate_system_wkt, "EPSG:4326", always_xy=True
     )
@@ -863,21 +869,24 @@ def _render_review_html(model: PreliminaryLaneModel, snapshot: OsmSnapshot) -> s
         )
         findings.append(finding_data)
 
-    payload = json.dumps(
-        {
-            "features": {"type": "FeatureCollection", "features": features},
-            "findings": findings,
-            "summary": {
-                "lanes": len(model.lanes),
-                "connectors": len(model.connectors),
-                "signals": len(model.signals),
-                "stop_lines": len(model.stop_lines),
-                "restrictions": len(model.restrictions),
-                "findings": len(model.findings),
-            },
+    return {
+        "features": {"type": "FeatureCollection", "features": features},
+        "findings": findings,
+        "summary": {
+            "lanes": len(model.lanes),
+            "connectors": len(model.connectors),
+            "signals": len(model.signals),
+            "stop_lines": len(model.stop_lines),
+            "restrictions": len(model.restrictions),
+            "findings": len(model.findings),
         },
-        separators=(",", ":"),
-    ).replace("</", "<\\/")
+    }
+
+
+def _render_review_html(model: PreliminaryLaneModel, snapshot: OsmSnapshot) -> str:
+    payload = json.dumps(build_review_payload(model, snapshot), separators=(",", ":")).replace(
+        "</", "<\\/"
+    )
     template = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Stage 2 Review Audit</title><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">

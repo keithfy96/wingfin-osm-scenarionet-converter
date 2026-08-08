@@ -30,6 +30,7 @@ class InspectView(str, Enum):
     normalized = "normalized"
     audit = "audit"
     stage_1 = "stage-1"
+    review = "review"
 
 
 Workspace = Annotated[
@@ -103,7 +104,10 @@ def inspect(
         InspectView,
         typer.Option(
             "--view",
-            help="Stage 1 view to render: source, normalized, audit, or stage-1.",
+            help=(
+                "View to render: source, normalized, audit, or stage-1 for Stage 1; "
+                "review for the Stage 3 decision view over a generated lane model."
+            ),
         ),
     ] = InspectView.stage_1,
 ) -> None:

@@ -15,7 +15,7 @@ from shapely.strtree import STRtree
 
 from osm_scenario.osm_source import read_osm_snapshot, road_exclusion_reason
 
-InspectionView = Literal["source", "normalized", "audit", "stage-1"]
+InspectionView = Literal["source", "normalized", "audit", "stage-1", "review"]
 
 
 class InspectionError(RuntimeError):
@@ -529,6 +529,15 @@ def _render_html(*, title: str, data: dict[str, Any], summary: dict[str, Any]) -
 def generate_inspection(*, workspace: Path, view: InspectionView) -> Path:
     """Generate an inspectable HTML checkpoint for the requested stage view."""
     workspace = workspace.resolve()
+    if view == "review":
+        # Stage 3 reads the generated lane model rather than the Stage 1 acquisition
+        # artifacts, and validates its own inputs with messages about regeneration.
+        from osm_scenario.review import ReviewError, generate_review
+
+        try:
+            return generate_review(workspace=workspace)
+        except ReviewError as error:
+            raise InspectionError(str(error)) from error
     manifest_path = workspace / "source" / "manifest.json"
     report_path = workspace / "reports" / "acquisition.json"
     if not manifest_path.is_file() or not report_path.is_file():
