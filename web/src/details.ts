@@ -12,9 +12,17 @@ import type { DecisionStatus, Finding, GeoJsonFeature } from "./types.js";
 type Properties = Record<string, unknown>;
 
 export interface LinkRow {
+  /** The lane at the far end of the link. */
   id: string;
   movement: string;
   status: string;
+  /**
+   * The connector this link was generated as, when there is one. A finding about a
+   * movement names the connector, never the lane, so without this the reviewer has
+   * no route from a link that needs review to the blocker asking about it.
+   * Continuations carry no connector and so carry no id here.
+   */
+  connectorId?: string;
 }
 
 /**
@@ -95,6 +103,29 @@ export class FeatureIndex {
     return identifier;
   }
 
+  /** The same lane, short enough to sit either side of an arrow. */
+  private shortLabel(identifier: string): string {
+    const properties = this.properties.get(identifier);
+    const lane = properties ? laneNumbers(properties) : null;
+    return lane ? `${identifier} lane ${lane.index + 1}/${lane.count}` : identifier;
+  }
+
+  /**
+   * A connector as the movement it is: from which lane to which, how, and where.
+   * Two connector findings of one rule are otherwise indistinguishable in a queue.
+   */
+  describeConnector(identifier: string): string | null {
+    const properties = this.properties.get(identifier);
+    if (!properties || !isConnector(properties)) return null;
+    const angle = properties.turn_angle_degrees;
+    const turn =
+      typeof angle === "number" ? ` ${angle > 0 ? "+" : ""}${angle.toFixed(1)}°` : "";
+    const from = this.shortLabel(String(properties.from_lane_id ?? ""));
+    const to = this.shortLabel(String(properties.to_lane_id ?? ""));
+    const node = String(properties.junction_node_id ?? "");
+    return `${from} → ${to} · ${String(properties.movement ?? "")}${turn}${node ? ` at node ${node}` : ""}`;
+  }
+
   /** What kind of thing an id names, in prose a reviewer can read in a sentence. */
   describe(identifier: string): string {
     const properties = this.properties.get(identifier);
@@ -103,7 +134,7 @@ export class FeatureIndex {
     if (kind === "source_way") return `OSM way ${String(properties.osm_way_id ?? "")}`;
     if (kind === "source_node") return `OSM node ${String(properties.osm_node_id ?? "")}`;
     if (laneNumbers(properties)) return `Lane ${this.label(identifier)}`;
-    if (isConnector(properties)) return `Connector ${this.label(identifier)}`;
+    if (isConnector(properties)) return `Movement ${this.describeConnector(identifier)}`;
     return `${kind.replaceAll("_", " ")} ${identifier}`;
   }
 
@@ -135,6 +166,7 @@ export class FeatureIndex {
         id: String(connector[far] ?? ""),
         movement: String(connector.movement ?? "movement"),
         status: String(connector.status ?? "active"),
+        connectorId: String(connector.id ?? ""),
       });
     }
     const continuations = properties[incoming ? "entry_lanes" : "exit_lanes"];
@@ -167,6 +199,34 @@ export interface PopupHooks {
   statusOf(findingId: string): DecisionStatus;
 }
 
+/**
+ * The status of one link, as something the reviewer can act on.
+ *
+ * A movement generated as a connector is clickable: to its blocker if one names it,
+ * otherwise to the movement on the map. A continuation has no connector and nothing
+ * to decide, so it stays inert text rather than a button that does nothing.
+ */
+function statusCell(index: FeatureIndex, row: LinkRow, hooks: PopupHooks): HTMLElement {
+  const cell = element("td");
+  const label = row.status === "review_required" ? "review" : row.status;
+  if (!row.connectorId) {
+    cell.append(pill(row.status, label));
+    return cell;
+  }
+  const connectorId = row.connectorId;
+  const finding = index.findingsFor(connectorId)[0];
+  const button = element("button", `pill ${row.status} actionable`, label);
+  button.type = "button";
+  button.title = finding
+    ? `Open the ${finding.rule} finding for this movement`
+    : "Show this movement on the map";
+  button.addEventListener("click", () =>
+    finding ? hooks.openFinding(finding) : hooks.focus(connectorId),
+  );
+  cell.append(button);
+  return cell;
+}
+
 function linkTable(index: FeatureIndex, rows: LinkRow[], hooks: PopupHooks): HTMLElement {
   if (!rows.length) return element("span", "muted", "none");
   const table = element("table", "link-table");
@@ -178,9 +238,7 @@ function linkTable(index: FeatureIndex, rows: LinkRow[], hooks: PopupHooks): HTM
     );
     line.append(target);
     line.append(element("td", "muted", row.movement));
-    const status = element("td");
-    status.append(pill(row.status, row.status === "review_required" ? "review" : row.status));
-    line.append(status);
+    line.append(statusCell(index, row, hooks));
     table.append(line);
   }
   return table;
@@ -224,8 +282,22 @@ export function buildPopup(
     definitionRow(list, "Turn angle", `${String(properties.turn_angle_degrees ?? "")}°`);
     definitionRow(list, "Status", pill(String(properties.status ?? "active")));
   } else if (laneNumbers(properties)) {
-    definitionRow(list, "Entered from", linkTable(index, index.links(properties, true), hooks));
-    definitionRow(list, "Leaves to", linkTable(index, index.links(properties, false), hooks));
+    const incoming = index.links(properties, true);
+    const outgoing = index.links(properties, false);
+    // The status pills alone left a reviewer reading colours. Say it in words: these
+    // movements are blockers, and the tag beside each one opens it.
+    const held = [...incoming, ...outgoing].filter((row) => row.status === "review_required");
+    if (held.length) {
+      root.append(
+        element(
+          "p",
+          "warning",
+          `${held.length} movement(s) at this lane need review — click a review tag to open the blocker.`,
+        ),
+      );
+    }
+    definitionRow(list, "Entered from", linkTable(index, incoming, hooks));
+    definitionRow(list, "Leaves to", linkTable(index, outgoing, hooks));
     const permissions = properties.turn_permissions;
     definitionRow(
       list,

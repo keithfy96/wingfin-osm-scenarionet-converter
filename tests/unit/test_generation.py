@@ -12,6 +12,8 @@ from osm_scenario.acquisition import acquire_osm
 from osm_scenario.config import ConverterConfig
 from osm_scenario.generation import (
     GenerationError,
+    _ambiguity_causes,
+    _ambiguity_reason,
     _balanced_approach_assignment,
     _balanced_merge_assignment,
     _carries_whole_carriageway,
@@ -286,6 +288,95 @@ def test_permission_fallback_stays_off_when_the_lane_is_not_stranded() -> None:
     assert _fallback([], [shallow], has_continuation=True) is None
     # Nothing was rejected, so nothing is restored.
     assert _fallback([], []) is None
+
+
+def _causes(
+    candidate: MovementCandidate,
+    *,
+    source: LaneFeature,
+    uturn_status: str = "review_required",
+    family_count: int = 1,
+) -> tuple[str, ...]:
+    return _ambiguity_causes(
+        candidate,
+        source=source,
+        uturn_status=uturn_status,
+        family_count=family_count,
+        sharp_movement_min_degrees=130.0,
+    )
+
+
+def test_ambiguity_reports_every_trigger_that_fired_not_just_the_first() -> None:
+    source = _approach(0, 1)
+    uturn = _candidate("dst", "reverse", -180.0)
+
+    # A U-turn that also competes with another movement is two separate reasons to
+    # look at it, and the U-turn is the one that decides whether it exists at all.
+    assert _causes(uturn, source=source, family_count=2) == (
+        "uturn_without_evidence",
+        "competing_movements",
+    )
+    assert _causes(uturn, source=source, uturn_status="active") == ()
+    assert _causes(_candidate("dst", "through", 35.0), source=source) == ("borderline_angle",)
+    assert _causes(_candidate("dst", "right", -138.0), source=source) == (
+        "unproven_sharp_movement",
+    )
+    # An explicit turn:lanes permission is positive evidence and settles it.
+    assert _causes(_candidate("dst", "right", -138.0), source=_approach(0, 1, ["right"])) == ()
+
+
+def test_naming_the_cause_does_not_change_which_movements_are_flagged() -> None:
+    source = _approach(0, 1)
+    for movement, angle in [
+        ("reverse", -180.0),
+        ("through", 0.5),
+        ("through", 35.0),
+        ("right", -138.0),
+        ("left", 90.0),
+        ("slight_right", -29.0),
+    ]:
+        for uturn_status in ("active", "review_required", "excluded"):
+            for family_count in (1, 2):
+                candidate = _candidate("dst", movement, angle)
+                # The oracle is the four-clause expression this replaced. Naming a
+                # trigger must not add or remove one.
+                expected = (
+                    (movement == "reverse" and uturn_status == "review_required")
+                    or family_count > 1
+                    or 30 <= abs(angle) <= 40
+                    or _unproven_sharp_movement(candidate, source=source, min_degrees=130.0)
+                )
+                causes = _causes(
+                    candidate,
+                    source=source,
+                    uturn_status=uturn_status,
+                    family_count=family_count,
+                )
+                assert bool(causes) is expected
+
+
+def test_the_review_reason_names_the_headline_cause_and_lists_the_rest() -> None:
+    source = _approach(0, 1)
+    uturn = _candidate("dst", "reverse", -160.2)
+    both = MovementCandidate(
+        **{
+            **uturn.__dict__,
+            "ambiguity_causes": _causes(uturn, source=source, family_count=2),
+        }
+    )
+    reason = _ambiguity_reason(both, sharp_movement_min_degrees=130.0)
+    assert reason.startswith("U-turn at -160.2 degrees")
+    assert "also competing movements in the same turn family" in reason
+
+    # The sharp-movement sentence predates this change and stays word for word, so
+    # entries written either side of it remain comparable.
+    sharp = _candidate("dst", "right", -138.0)
+    sharp = MovementCandidate(
+        **{**sharp.__dict__, "ambiguity_causes": _causes(sharp, source=source)}
+    )
+    assert _ambiguity_reason(sharp, sharp_movement_min_degrees=130.0) == (
+        "movement doubles back beyond 130 degrees without an explicit turn:lanes permission"
+    )
 
 
 def test_a_taper_bends_one_end_onto_its_target_and_leaves_the_rest_alone() -> None:

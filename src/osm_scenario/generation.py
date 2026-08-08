@@ -44,7 +44,7 @@ from osm_scenario.topology import (
     via_way_resolution,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v12"
+GENERATOR_VERSION = "direct-osm-stage2-v13"
 LANE_MODEL_SCHEMA_VERSION = 2
 
 # One outgoing carriageway at a node: its OSM way and the directed edge it leaves on.
@@ -550,6 +550,84 @@ def _unproven_sharp_movement(
         movement_matches(permission, candidate.movement)
         for permission in source.turn_permissions
     )
+
+
+# The angle band where `classify_movement` is choosing between through and a turn.
+# A movement landing inside it is reported rather than asserted.
+_BORDERLINE_TURN_BAND = (30.0, 40.0)
+
+# How each ambiguity trigger reads when it is not the headline reason.
+_CAUSE_LABELS = {
+    "uturn_without_evidence": "U-turn without evidence",
+    "unproven_sharp_movement": "sharp doubling back without a turn:lanes permission",
+    "competing_movements": "competing movements in the same turn family",
+    "borderline_angle": "borderline turn angle",
+}
+
+
+def _ambiguity_causes(
+    candidate: MovementCandidate,
+    *,
+    source: LaneFeature,
+    uturn_status: str,
+    family_count: int,
+    sharp_movement_min_degrees: float,
+) -> tuple[str, ...]:
+    """Which ambiguity triggers a movement fired, most decision-relevant first.
+
+    These are exactly the conditions that have always set `ambiguous`; naming them is
+    what lets a reviewer see why a movement is held. Several can fire on one movement
+    and all are reported: a U-turn that also competes with another movement is two
+    separate reasons to look at it, not one.
+    """
+    causes: list[str] = []
+    if candidate.movement == "reverse" and uturn_status == "review_required":
+        causes.append("uturn_without_evidence")
+    if _unproven_sharp_movement(
+        candidate, source=source, min_degrees=sharp_movement_min_degrees
+    ):
+        causes.append("unproven_sharp_movement")
+    if family_count > 1:
+        causes.append("competing_movements")
+    low, high = _BORDERLINE_TURN_BAND
+    if low <= abs(candidate.angle_degrees) <= high:
+        causes.append("borderline_angle")
+    return tuple(causes)
+
+
+def _ambiguity_reason(candidate: MovementCandidate, *, sharp_movement_min_degrees: float) -> str:
+    """One sentence naming why this movement needs review, from its headline cause."""
+    causes = candidate.ambiguity_causes
+    headline = causes[0] if causes else ""
+    low, high = _BORDERLINE_TURN_BAND
+    if headline == "uturn_without_evidence":
+        text = (
+            f"U-turn at {candidate.angle_degrees:.1f} degrees and nothing in the tags "
+            "permits a U-turn here"
+        )
+    elif headline == "unproven_sharp_movement":
+        # Kept word for word, so entries either side of this change stay comparable.
+        text = (
+            "movement doubles back beyond "
+            f"{sharp_movement_min_degrees:g}"
+            " degrees without an explicit turn:lanes permission"
+        )
+    elif headline == "competing_movements":
+        text = (
+            "another movement from this lane is classed "
+            f"{movement_family(candidate.movement)} as well, so which lane serves it "
+            "is not settled"
+        )
+    elif headline == "borderline_angle":
+        text = (
+            f"turn angle of {candidate.angle_degrees:.1f} degrees sits in the "
+            f"{low:g}-{high:g} degree band where through and turn are not separable"
+        )
+    else:  # pragma: no cover - a status of review_required always carries a cause
+        text = "movement has multiple or borderline geometric interpretations"
+    if len(causes) > 1:
+        text += "; also " + ", ".join(_CAUSE_LABELS[cause] for cause in causes[1:])
+    return text
 
 
 def _is_decision_node(
@@ -1355,23 +1433,21 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                 family = movement_family(candidate.movement)
                 family_counts[family] = family_counts.get(family, 0) + 1
             for candidate in candidates_for_lane:
+                causes = _ambiguity_causes(
+                    candidate,
+                    source=source,
+                    uturn_status=uturn_status,
+                    family_count=family_counts[movement_family(candidate.movement)],
+                    sharp_movement_min_degrees=(
+                        config.lane_selection.sharp_movement_review_degrees
+                    ),
+                )
                 movement_candidates.append(
                     MovementCandidate(
                         **{
                             **candidate.__dict__,
-                            "ambiguous": (
-                                candidate.movement == "reverse"
-                                and uturn_status == "review_required"
-                            )
-                            or family_counts[movement_family(candidate.movement)] > 1
-                            or 30 <= abs(candidate.angle_degrees) <= 40
-                            or _unproven_sharp_movement(
-                                candidate,
-                                source=source,
-                                min_degrees=(
-                                    config.lane_selection.sharp_movement_review_degrees
-                                ),
-                            ),
+                            "ambiguous": bool(causes),
+                            "ambiguity_causes": causes,
                         }
                     )
                 )
@@ -1450,20 +1526,15 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                     proposed_value={
                         "movement": candidate.movement,
                         "to_lane_id": candidate.to_lane_id,
+                        "ambiguity_causes": list(candidate.ambiguity_causes),
+                        "turn_angle_degrees": round(candidate.angle_degrees, 3),
                     },
                     confidence="low",
-                    reason=(
-                        "movement doubles back beyond "
-                        f"{config.lane_selection.sharp_movement_review_degrees:g}"
-                        " degrees without an explicit turn:lanes permission"
-                        if _unproven_sharp_movement(
-                            candidate,
-                            source=lane_lookup[candidate.from_lane_id],
-                            min_degrees=(
-                                config.lane_selection.sharp_movement_review_degrees
-                            ),
-                        )
-                        else "movement has multiple or borderline geometric interpretations"
+                    reason=_ambiguity_reason(
+                        candidate,
+                        sharp_movement_min_degrees=(
+                            config.lane_selection.sharp_movement_review_degrees
+                        ),
                     ),
                 )
             )

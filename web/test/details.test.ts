@@ -56,9 +56,16 @@ describe("FeatureIndex", () => {
 
   it("folds continuations in with connector movements and drops duplicates", () => {
     const target = lane("lane-b", 0, 2);
-    const source = lane("lane-a", 0, 2, { exit_lanes: ["lane-b", "conn-1"] });
+    const source = lane("lane-a", 0, 2, { exit_lanes: ["lane-b", "lane-d", "conn-1"] });
     const index = new FeatureIndex(
-      [source, target, connector("conn-1", "lane-a", "lane-b"), connector("conn-2", "lane-a", "lane-c")],
+      [
+        source,
+        target,
+        lane("lane-c", 0, 1),
+        lane("lane-d", 0, 1),
+        connector("conn-1", "lane-a", "lane-b"),
+        connector("conn-2", "lane-a", "lane-c"),
+      ],
       [],
     );
 
@@ -66,9 +73,39 @@ describe("FeatureIndex", () => {
     // lane-b is reached by both a connector and a continuation; it is one link, and
     // the connector describes it, since that is the movement actually generated.
     // conn-1 appears in exit_lanes but is a connector id, not a lane to travel to.
-    expect(links.map((row) => row.id)).toEqual(["lane-b", "lane-c"]);
-    expect(links[0]?.movement).toBe("through");
+    expect(links.map((row) => row.id)).toEqual(["lane-d", "lane-b", "lane-c"]);
+    expect(links.find((row) => row.id === "lane-b")?.movement).toBe("through");
+    // A movement's finding names the connector, so the link has to carry its id or
+    // there is no route from "this needs review" to the blocker asking about it.
+    expect(links.find((row) => row.id === "lane-c")?.connectorId).toBe("conn-2");
+    // A continuation is generated as no connector, so it has nothing to open.
+    expect(links.find((row) => row.id === "lane-d")?.connectorId).toBeUndefined();
     expect(index.links(target.properties, true).map((row) => row.id)).toEqual(["lane-a"]);
+  });
+
+  it("describes a connector as the movement it is, so two are never alike", () => {
+    const index = new FeatureIndex(
+      [
+        lane("lane-a", 0, 1),
+        lane("lane-b", 0, 1),
+        feature({
+          id: "conn-1",
+          kind: "connector",
+          from_lane_id: "lane-a",
+          to_lane_id: "lane-b",
+          movement: "reverse",
+          status: "review_required",
+          turn_angle_degrees: -160.21,
+          junction_node_id: "1928630157",
+        }),
+      ],
+      [],
+    );
+    // Every ambiguous_connector finding at one node otherwise reads identically.
+    expect(index.describeConnector("conn-1")).toBe(
+      "lane-a lane 1/1 → lane-b lane 1/1 · reverse -160.2° at node 1928630157",
+    );
+    expect(index.describeConnector("lane-a")).toBeNull();
   });
 
   it("finds a feature's findings through generated and source geometry alike", () => {

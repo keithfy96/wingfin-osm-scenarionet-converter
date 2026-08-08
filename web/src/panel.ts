@@ -326,18 +326,23 @@ export class ReviewPanel {
 
   /** Where a finding is, in the words a reviewer uses: which lane, at which node. */
   private whereLabel(finding: Finding): string {
-    const drawn = [...finding.affected_feature_ids, ...finding.geometry_ids].filter((id) =>
-      this.index.has(id),
+    const drawn = [...new Set([...finding.affected_feature_ids, ...finding.geometry_ids])].filter(
+      (id) => this.index.has(id),
     );
     const primary = drawn[0];
-    const at = finding.source_ids.length
-      ? ` at ${finding.source_type} ${finding.source_ids.join(", ")}`
-      : "";
     if (!primary) {
       return `${finding.source_type} ${finding.source_ids.join(", ") || "unlocated"}`;
     }
-    const others = new Set(drawn).size - 1;
-    return `${this.index.describe(primary)}${others > 0 ? ` +${others} more` : ""}${at}`;
+    const others = drawn.length - 1;
+    const more = others > 0 ? ` +${others} more` : "";
+    // A movement already names the node it happens at, so the usual suffix would
+    // repeat it. Everything else needs telling where it is.
+    const movement = this.index.describeConnector(primary);
+    if (movement) return `${movement}${more}`;
+    const at = finding.source_ids.length
+      ? ` at ${finding.source_type} ${finding.source_ids.join(", ")}`
+      : "";
+    return `${this.index.describe(primary)}${more}${at}`;
   }
 
   private renderNote(visible: number): void {

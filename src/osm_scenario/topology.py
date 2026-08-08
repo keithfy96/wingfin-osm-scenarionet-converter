@@ -25,6 +25,9 @@ class MovementCandidate:
     angle_degrees: float
     centerline: LineString
     ambiguous: bool
+    # Which ambiguity triggers fired, so a review finding can say why this movement
+    # is held rather than leaving every one of them to one generic sentence.
+    ambiguity_causes: tuple[str, ...] = ()
 
 
 def signed_turn_angle(incoming: LineString, outgoing: LineString) -> float:

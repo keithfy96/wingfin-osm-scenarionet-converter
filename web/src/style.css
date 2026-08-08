@@ -57,7 +57,11 @@ button.ghost{border-style:dashed;color:#687078}
 .chip:hover{background:#ffd43b;color:#202428}
 .chip.inert{border-color:#ced4da;background:#f1f3f5;color:#687078;cursor:default}
 .chip-row{display:block}
-.pill{display:inline-block;padding:1px 7px;font-size:11px;border-radius:9px;border:1px solid #ced4da;color:#495057}
+.pill{display:inline-block;padding:1px 7px;font:inherit;font-size:11px;border-radius:9px;
+  border:1px solid #ced4da;background:#fff;color:#495057}
+/* A movement's status is a control: it opens the blocker that asks about it. */
+.pill.actionable{cursor:pointer;text-decoration:underline dotted}
+.pill.actionable:hover{filter:brightness(.96);text-decoration:underline}
 .pill.active{border-color:#2b8a3e;color:#2b8a3e;background:#ebfbee}
 .pill.review_required{border-color:#f08c00;color:#a35c00;background:#fff4e6}
 .pill.forbidden{border-color:#c92a2a;color:#c92a2a;background:#fff5f5}
