@@ -49,13 +49,20 @@ button.ghost{border-style:dashed;color:#687078}
 .error{flex:1 1 100%;margin:0;color:#c92a2a;font-size:12px;min-height:15px}
 
 .queue-note{margin:0}
-.warning{margin:0;padding:6px 8px;font-size:12px;color:#a35c00;background:#fff4e6;border:1px solid #ffc078;border-radius:4px}
+/* Deliberately not `.warning`: a queue row carries its severity as a class, so a
+   rule named for the severity would paint every warning row as a banner. */
+.notice{margin:0;padding:6px 8px;font-size:12px;color:#a35c00;background:#fff4e6;border:1px solid #ffc078;border-radius:4px}
 
 /* Selection is yellow on the map, so an id chip is yellow in the text too. */
 .chip{display:inline-block;padding:2px 8px;margin:1px 3px 1px 0;font:inherit;font-size:12px;
   border:1px solid #b38600;border-radius:10px;background:#fff9db;color:#7a5c00;cursor:pointer}
 .chip:hover{background:#ffd43b;color:#202428}
 .chip.inert{border-color:#ced4da;background:#f1f3f5;color:#687078;cursor:default}
+/* The two ends of a movement, in the colours the map paints them. */
+.chip.entry{border-color:#f76707;background:#fff4e6;color:#9a4a06}
+.chip.entry:hover{background:#f76707;color:#fff}
+.chip.exit{border-color:#37b24d;background:#ebfbee;color:#1f6f2b}
+.chip.exit:hover{background:#37b24d;color:#fff}
 .chip-row{display:block}
 .pill{display:inline-block;padding:1px 7px;font:inherit;font-size:11px;border-radius:9px;
   border:1px solid #ced4da;background:#fff;color:#495057}
@@ -82,6 +89,8 @@ button.ghost{border-style:dashed;color:#687078}
 .legend{display:grid;grid-template-columns:20px 1fr;gap:6px 8px;align-items:center;margin:8px 0;font-size:12px}
 .swatch{height:5px;border-radius:2px}
 .swatch.selected{height:8px;background:#ffd43b}
+.swatch.entry{height:8px;background:#f76707}
+.swatch.exit{height:8px;background:#37b24d}
 .swatch.lane{background:#277da1}
 .swatch.lane-direction{background:#0b4f7a}
 .swatch.connector-band{height:9px;background:#8ce99a}

@@ -152,6 +152,27 @@ export class FeatureIndex {
   }
 
   /**
+   * The lanes a set of features enters from and leaves to.
+   *
+   * A finding about a movement names only the connector, so "which lanes is this
+   * about" has to be read off the connector's own ends. Ids that are not connectors
+   * contribute nothing rather than guessing a direction for them.
+   */
+  movementEnds(identifiers: string[]): { entry: string[]; exit: string[] } {
+    const entry = new Set<string>();
+    const exit = new Set<string>();
+    for (const identifier of identifiers) {
+      const properties = this.properties.get(identifier);
+      if (!properties || !isConnector(properties)) continue;
+      const from = String(properties.from_lane_id ?? "");
+      const to = String(properties.to_lane_id ?? "");
+      if (this.properties.has(from)) entry.add(from);
+      if (this.properties.has(to)) exit.add(to);
+    }
+    return { entry: [...entry], exit: [...exit] };
+  }
+
+  /**
    * Every link a lane has, one row each. A direct continuation has no connector,
    * so it is named in entry_lanes/exit_lanes and has to be folded in separately —
    * without it a lane that simply carries on looks like a dead end.
@@ -276,8 +297,14 @@ export function buildPopup(
   if (isConnector(properties)) {
     const from = String(properties.from_lane_id ?? "");
     const to = String(properties.to_lane_id ?? "");
-    definitionRow(list, "Incoming lane", chip(index.label(from), () => hooks.focus(from)));
-    definitionRow(list, "Outgoing lane", chip(index.label(to), () => hooks.focus(to)));
+    // Same colours the two ends are painted on the map, so the chip and the lane it
+    // names are recognisably the same thing.
+    const entry = chip(index.label(from), () => hooks.focus(from));
+    entry.classList.add("entry");
+    const exit = chip(index.label(to), () => hooks.focus(to));
+    exit.classList.add("exit");
+    definitionRow(list, "Entry lane", entry);
+    definitionRow(list, "Exit lane", exit);
     definitionRow(list, "Movement", String(properties.movement ?? ""));
     definitionRow(list, "Turn angle", `${String(properties.turn_angle_degrees ?? "")}°`);
     definitionRow(list, "Status", pill(String(properties.status ?? "active")));
@@ -291,7 +318,7 @@ export function buildPopup(
       root.append(
         element(
           "p",
-          "warning",
+          "notice",
           `${held.length} movement(s) at this lane need review — click a review tag to open the blocker.`,
         ),
       );

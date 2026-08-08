@@ -108,6 +108,24 @@ describe("FeatureIndex", () => {
     expect(index.describeConnector("lane-a")).toBeNull();
   });
 
+  it("reads a movement's two ends off the connector, since the finding names only it", () => {
+    const index = new FeatureIndex(
+      [lane("lane-a", 0, 1), lane("lane-b", 0, 1), connector("conn-1", "lane-a", "lane-b")],
+      [],
+    );
+    // An ambiguous_connector finding affects the connector alone; entry and exit are
+    // the only way to say which lanes the reviewer is being asked about.
+    expect(index.movementEnds(["conn-1"])).toEqual({ entry: ["lane-a"], exit: ["lane-b"] });
+    // A lane has no direction of its own here, so it contributes neither end.
+    expect(index.movementEnds(["lane-a"])).toEqual({ entry: [], exit: [] });
+    // A connector whose far lane was never drawn must not name geometry that is absent.
+    const dangling = new FeatureIndex(
+      [lane("lane-a", 0, 1), connector("conn-2", "lane-a", "lane-gone")],
+      [],
+    );
+    expect(dangling.movementEnds(["conn-2"])).toEqual({ entry: ["lane-a"], exit: [] });
+  });
+
   it("finds a feature's findings through generated and source geometry alike", () => {
     const index = new FeatureIndex(
       [lane("lane-a", 0, 2)],

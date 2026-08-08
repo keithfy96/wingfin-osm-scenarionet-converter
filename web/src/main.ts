@@ -48,8 +48,11 @@ function boot(): void {
   // A popup and the panel light the map the same way, so both go through here.
   const focusFeature = (identifier: string): void => {
     clearFocus(index, focused);
-    focused = [identifier];
-    focusFeatures(map, index, [identifier], []);
+    // Focusing a movement lights its two ends as well, so a connector on its own is
+    // still read as "from this lane, into that one".
+    const ends = features.movementEnds([identifier]);
+    focused = [identifier, ...ends.entry, ...ends.exit];
+    focusFeatures(map, index, { generated: [identifier], source: [], ...ends });
     for (const layer of index.byId.get(identifier) ?? []) layer.openPopup?.();
   };
 
@@ -77,8 +80,13 @@ function boot(): void {
       // `source_ids` are raw OSM ids; the drawn source geometry is keyed
       // `way:<id>` / `node:<id>`, which is what `source_geometry_ids` already holds.
       const generated = [...new Set([...finding.affected_feature_ids, ...finding.geometry_ids])];
-      focused = [...generated, ...finding.source_geometry_ids];
-      return focusFeatures(map, index, generated, finding.source_geometry_ids);
+      const ends = features.movementEnds(generated);
+      focused = [...generated, ...finding.source_geometry_ids, ...ends.entry, ...ends.exit];
+      return focusFeatures(map, index, {
+        generated,
+        source: finding.source_geometry_ids,
+        ...ends,
+      });
     },
     onFocusFeature: focusFeature,
     onChanged() {

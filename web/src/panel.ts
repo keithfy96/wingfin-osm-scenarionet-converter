@@ -138,6 +138,8 @@ export class ReviewPanel {
   private selectedId: string | null = null;
   private focusedId: string | null = null;
   private mappedLayers = 0;
+  /** The last selection scrolled to, so a state re-render does not move the list. */
+  private scrolledTo: string | null = null;
   private readonly sorted: Finding[];
   private readonly laneIds: string[];
 
@@ -159,10 +161,25 @@ export class ReviewPanel {
   select(findingId: string): void {
     const finding = this.state.finding(findingId);
     if (!finding) return;
+    // The detail pane must show the row that is highlighted. If the current filters
+    // hide this finding there would be no row to highlight, so the filters give way
+    // rather than leaving the two out of step.
+    if (!this.isVisible(finding)) this.clearFilters();
     this.selectedId = findingId;
     this.mappedLayers = this.hooks.onFocus(finding);
     this.renderQueue();
-    this.root.querySelector("#detail")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  private isVisible(finding: Finding): boolean {
+    return applyFilters([finding], this.filters, (id) => this.state.statusOf(id)).length > 0;
+  }
+
+  private clearFilters(): void {
+    this.filters = { search: "", rule: "", severity: "", status: "" };
+    for (const id of ["#filter-search", "#filter-rule", "#filter-severity", "#filter-status"]) {
+      const node = this.root.querySelector<HTMLInputElement | HTMLSelectElement>(id);
+      if (node) node.value = "";
+    }
   }
 
   private renderShell(payload: ReviewPayload): void {
@@ -211,6 +228,7 @@ export class ReviewPanel {
     });
 
     const severity = element("select");
+    severity.id = "filter-severity";
     severity.append(new Option("All severities", ""), new Option("Blocker", "blocker"), new Option("Warning", "warning"));
     severity.addEventListener("change", () => {
       this.filters.severity = severity.value;
@@ -218,6 +236,7 @@ export class ReviewPanel {
     });
 
     const status = element("select");
+    status.id = "filter-status";
     status.append(
       new Option("Any state", ""),
       new Option("Unresolved", "unresolved"),
@@ -259,6 +278,8 @@ export class ReviewPanel {
     const legend = element("div", "legend");
     const entries: [string, string][] = [
       ["swatch selected", "Selected or searched geometry"],
+      ["swatch entry", "Entry lane of the selected movement — where it comes from"],
+      ["swatch exit", "Exit lane of the selected movement — where it goes"],
       ["swatch lane", "Lane centreline"],
       ["swatch lane-direction", "Direction of travel (arrow points downstream)"],
       ["swatch connector-band", "Connector band — the lane-width path a movement takes"],
@@ -359,6 +380,12 @@ export class ReviewPanel {
     const queue = this.root.querySelector<HTMLElement>("#queue");
     if (!queue) return;
     const visible = applyFilters(this.sorted, this.filters, (id) => this.state.statusOf(id));
+    // The detail pane is the highlighted row's pane. A finding the filters have
+    // dropped has no row to highlight, so it stops being the selection too.
+    if (this.selectedId && !visible.some((finding) => finding.identifier === this.selectedId)) {
+      this.selectedId = null;
+      this.scrolledTo = null;
+    }
     this.renderBulk(visible);
     this.renderNote(visible.length);
 
@@ -368,10 +395,14 @@ export class ReviewPanel {
       this.renderDetail();
       return;
     }
+    // The detail pane below shows exactly this row, so the reviewer should not have
+    // to hunt for it after a selection made from the map.
+    let selectedRow: HTMLElement | null = null;
     for (const finding of visible.slice(0, 400)) {
       const status = this.state.statusOf(finding.identifier);
       const selected = finding.identifier === this.selectedId ? " selected" : "";
       const row = element("button", `row ${status} ${finding.severity}${selected}`);
+      if (selected) selectedRow = row;
       row.append(element("span", "row-rule", finding.rule));
       row.append(element("span", "row-status", STATUS_LABEL[status]));
       // Findings of the same rule share a reason verbatim, so the row has to name
@@ -388,6 +419,12 @@ export class ReviewPanel {
     if (visible.length > 400) {
       queue.append(element("p", "muted", `${visible.length - 400} more; narrow the filters to see them.`));
     }
+    // Only when the selection actually moved: recording a decision re-renders the
+    // queue, and scrolling then would yank the list out from under the reviewer.
+    if (selectedRow && this.selectedId !== this.scrolledTo) {
+      selectedRow.scrollIntoView({ block: "nearest" });
+      this.scrolledTo = this.selectedId;
+    }
     this.renderDetail();
   }
 
@@ -395,7 +432,11 @@ export class ReviewPanel {
    * A row of ids the reviewer can click to put on the map. `resolve` is how a raw
    * id in the finding maps to a drawn feature — an OSM way id is `way:<id>` there.
    */
-  private chipRow(identifiers: string[], resolve?: (raw: string) => string | null): HTMLElement {
+  private chipRow(
+    identifiers: string[],
+    resolve?: (raw: string) => string | null,
+    role?: "entry" | "exit",
+  ): HTMLElement {
     const row = element("span", "chip-row");
     if (!identifiers.length) {
       row.append(element("span", "muted", "none"));
@@ -405,9 +446,12 @@ export class ReviewPanel {
       const key = resolve ? resolve(identifier) : identifier;
       const drawn = key !== null && this.index.has(key);
       const label = drawn && key !== null ? this.index.label(key) : identifier;
-      row.append(
-        chip(label, drawn && key !== null ? () => this.hooks.onFocusFeature(key) : undefined),
+      const node = chip(
+        label,
+        drawn && key !== null ? () => this.hooks.onFocusFeature(key) : undefined,
       );
+      if (role) node.classList.add(role);
+      row.append(node);
     }
     return row;
   }
@@ -438,6 +482,18 @@ export class ReviewPanel {
       "Affects",
       this.chipRow([...new Set([...finding.affected_feature_ids, ...finding.geometry_ids])]),
     );
+    // A movement finding names only the connector. Naming its two ends, in the
+    // colours they are painted on the map, is what makes it a picture.
+    const ends = this.index.movementEnds([
+      ...finding.affected_feature_ids,
+      ...finding.geometry_ids,
+    ]);
+    if (ends.entry.length) {
+      definitionRow(evidence, "Entry lane", this.chipRow(ends.entry, undefined, "entry"));
+    }
+    if (ends.exit.length) {
+      definitionRow(evidence, "Exit lane", this.chipRow(ends.exit, undefined, "exit"));
+    }
     definitionRow(evidence, "Proposed", JSON.stringify(finding.proposed_value));
     definitionRow(evidence, "State", STATUS_LABEL[status]);
     node.append(evidence);
@@ -448,7 +504,7 @@ export class ReviewPanel {
       node.append(
         element(
           "p",
-          "warning",
+          "notice",
           "No geometry on the map could be matched to this finding — decide it from the evidence above.",
         ),
       );

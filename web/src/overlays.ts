@@ -31,6 +31,25 @@ const SOURCE_HIGHLIGHT = {
   radius: 9,
 };
 
+// The two ends of the selected movement, so "this lane, into that lane" can be read
+// off the map rather than inferred from a hex id. Orange approaches, green receives.
+// The green is a shade off the active-connector green so a highlighted lane is never
+// mistaken for a movement band lying across it.
+const ENTRY_HIGHLIGHT = {
+  color: "#f76707",
+  weight: 8,
+  fillColor: "#f76707",
+  fillOpacity: 0.35,
+  opacity: 1,
+};
+const EXIT_HIGHLIGHT = {
+  color: "#37b24d",
+  weight: 8,
+  fillColor: "#37b24d",
+  fillOpacity: 0.35,
+  opacity: 1,
+};
+
 export const LAYER_LABELS: Record<string, string> = {
   source_way: "Source OSM ways",
   source_node: "Source OSM nodes",
@@ -161,25 +180,34 @@ export function buildOverlays(
   return { byId, baseStyle, groups };
 }
 
+export interface FocusPlan {
+  /** Generated features the finding names. Painted yellow. */
+  generated: string[];
+  /** Source OSM geometry, `way:<id>` / `node:<id>`. Painted yellow, own weight. */
+  source: string[];
+  /** Lanes the selected movement leaves. Painted orange. */
+  entry?: string[];
+  /** Lanes the selected movement enters. Painted green. */
+  exit?: string[];
+}
+
 /**
- * Paint the features a finding names yellow and pan to them.
+ * Paint everything a finding names and pan to it.
  *
  * Source OSM geometry gets its own weight so a way and the lanes generated from it
- * stay distinguishable while both are lit. Returns how many layers were actually
- * found, so the panel can say plainly when a finding maps to no geometry rather
+ * stay distinguishable while both are lit, and the two ends of a movement are painted
+ * last so their roles win over the plain selection colour. Returns how many layers
+ * were found, so the panel can say plainly when a finding maps to no geometry rather
  * than leaving the reviewer looking for a highlight that was never drawn.
  */
-export function focusFeatures(
-  map: LeafletMap,
-  index: OverlayIndex,
-  generated: string[],
-  source: string[],
-): number {
+export function focusFeatures(map: LeafletMap, index: OverlayIndex, plan: FocusPlan): number {
   let bounds: ReturnType<typeof L.latLngBounds> | null = null;
   let painted = 0;
   for (const [identifiers, style] of [
-    [source, SOURCE_HIGHLIGHT],
-    [generated, GENERATED_HIGHLIGHT],
+    [plan.source, SOURCE_HIGHLIGHT],
+    [plan.generated, GENERATED_HIGHLIGHT],
+    [plan.entry ?? [], ENTRY_HIGHLIGHT],
+    [plan.exit ?? [], EXIT_HIGHLIGHT],
   ] as const) {
     for (const identifier of identifiers) {
       for (const layer of index.byId.get(identifier) ?? []) {

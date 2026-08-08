@@ -86,6 +86,40 @@
   direction-warning layers; no browser smoke test; no signal-association overlay;
   `apply-review` (Stage 4) does not exist.
 
+## Follow-up in the same run — the two ends of a movement are drawn
+
+Keith could read the description of a movement finding but not see which lanes it
+meant. Selecting a finding now paints the **entry lane orange** (`#f76707`) and the
+**exit lane green** (`#37b24d`), on top of the yellow selection, and the same two
+colours are used for the "Entry lane" / "Exit lane" chips in the detail pane and the
+connector popup, so a chip and the lane it names are recognisably one thing.
+
+- `FeatureIndex.movementEnds()` reads the ends off the connector — a finding names
+  only the connector, so there is nowhere else to get them. Ids that are not
+  connectors contribute nothing rather than guessing a direction.
+- `focusFeatures` now takes a `FocusPlan` and paints roles last, so they win over the
+  plain selection colour where the two overlap.
+- Verified against junction-1: all 29 movement findings resolve to two drawn lanes.
+- Client tests 28 passed (1 new, covering a connector whose far lane was never drawn).
+
+## Follow-up — the queue highlight and the detail pane are one selection
+
+Keith reported unrelated rows looking highlighted while the detail pane showed the row
+he had clicked.
+
+- **Cause: a CSS class collision.** A queue row carries `finding.severity` as a class,
+  so every `warning`-severity row matched the `.warning` banner rule added earlier for
+  notices — cream background, orange border. Two unrelated rows read as selected.
+  The banner class is now `.notice`, and the reason is written above the rule.
+- The selection and the detail pane are now kept in step in both directions: a
+  finding the filters have dropped stops being the selection, and `select()` from a
+  map popup clears the filters rather than highlighting a row that is not rendered.
+- The selected row scrolls itself into view, but only when the selection actually
+  moved — recording a decision re-renders the queue, and scrolling then would yank
+  the list out from under the reviewer.
+- Not covered by a test: the panel is DOM-bound and the client test setup has no DOM
+  environment. `applyFilters` (the pure part) is tested; the rendering rules are not.
+
 ## Not Written
 
 - No `docs/mapping-algo-changes/` entry. CLAUDE.md Section B criterion 2 asks for a
