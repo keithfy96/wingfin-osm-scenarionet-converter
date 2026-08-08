@@ -20,6 +20,8 @@ export function finding(overrides: Partial<Finding> = {}): Finding {
     source_type: "way",
     source_ids: ["776021091"],
     affected_feature_ids: ["lane-a"],
+    geometry_ids: ["lane-a"],
+    source_geometry_ids: ["way:776021091"],
     proposed_value: { maxspeed_kph: 50 },
     evidence_checksum: "evidence-1",
     road_class: "secondary",

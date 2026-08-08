@@ -2,6 +2,7 @@
 // #app / #map pair, then loads this bundle.
 
 import styles from "./style.css";
+import { buildPopup, FeatureIndex } from "./details.js";
 import { buildOverlays, clearFocus, focusFeatures, type OverlayIndex } from "./overlays.js";
 import { ReviewPanel } from "./panel.js";
 import { clearDraft, debounce, loadDraft, saveDraft } from "./persistence.js";
@@ -41,7 +42,24 @@ function boot(): void {
   }).addTo(map);
 
   let focused: string[] = [];
-  const index: OverlayIndex = buildOverlays(map, payload.features, () => undefined);
+  let panel: ReviewPanel | null = null;
+  const features = new FeatureIndex(payload.features, payload.findings);
+
+  // A popup and the panel light the map the same way, so both go through here.
+  const focusFeature = (identifier: string): void => {
+    clearFocus(index, focused);
+    focused = [identifier];
+    focusFeatures(map, index, [identifier], []);
+    for (const layer of index.byId.get(identifier) ?? []) layer.openPopup?.();
+  };
+
+  const index: OverlayIndex = buildOverlays(map, payload.features, (properties) =>
+    buildPopup(features, properties, {
+      focus: focusFeature,
+      openFinding: (finding) => panel?.select(finding.identifier),
+      statusOf: (findingId) => state.statusOf(findingId),
+    }),
+  );
 
   const toolbar = document.createElement("div");
   toolbar.className = "toolbar";
@@ -53,17 +71,20 @@ function boot(): void {
     draftStatus.textContent = `Draft saved locally at ${new Date().toLocaleTimeString()}. Drafts are not authoritative — export to hand to Stage 4.`;
   }, 400);
 
-  const panel = new ReviewPanel(app, state, payload, {
+  panel = new ReviewPanel(app, state, payload, features, {
     onFocus(finding: Finding) {
       clearFocus(index, focused);
-      focused = [...finding.affected_feature_ids, ...finding.source_ids];
-      focusFeatures(map, index, focused, state.statusOf(finding.identifier));
+      // `source_ids` are raw OSM ids; the drawn source geometry is keyed
+      // `way:<id>` / `node:<id>`, which is what `source_geometry_ids` already holds.
+      const generated = [...new Set([...finding.affected_feature_ids, ...finding.geometry_ids])];
+      focused = [...generated, ...finding.source_geometry_ids];
+      return focusFeatures(map, index, generated, finding.source_geometry_ids);
     },
+    onFocusFeature: focusFeature,
     onChanged() {
       persist();
     },
   });
-  void panel;
 
   const exportButton = document.createElement("button");
   exportButton.className = "primary";

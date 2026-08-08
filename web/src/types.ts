@@ -21,6 +21,10 @@ export interface Finding {
   source_type: string;
   source_ids: string[];
   affected_feature_ids: string[];
+  /** Generated features this finding maps to, resolved to ids actually drawn. */
+  geometry_ids: string[];
+  /** Source OSM geometry, as `way:<id>` / `node:<id>` keys that are drawn. */
+  source_geometry_ids: string[];
   proposed_value: Record<string, unknown>;
   evidence_checksum: string;
   /** Road class of the first affected lane, for bulk scoping. Null when unknown. */

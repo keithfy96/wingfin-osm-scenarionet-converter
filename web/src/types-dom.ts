@@ -18,6 +18,9 @@ export interface LeafletLayer {
   setStyle?(style: Record<string, unknown>): LeafletLayer;
   getBounds?(): LatLngBoundsLike;
   bringToFront?(): LeafletLayer;
+  /** Leaflet accepts a node, so popup content is built as DOM rather than HTML. */
+  bindPopup?(content: () => HTMLElement, options?: Record<string, unknown>): LeafletLayer;
+  openPopup?(): LeafletLayer;
 }
 
 export interface LeafletLayerGroup extends LeafletLayer {

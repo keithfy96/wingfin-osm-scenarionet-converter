@@ -2,6 +2,8 @@
 // that turn a finding into a decision.
 
 import { controlFor, supportsBulk, type OverrideField } from "./controls.js";
+import type { FeatureIndex } from "./details.js";
+import { chip, definitionRow, element } from "./dom.js";
 import { DecisionError, type ReviewState } from "./state.js";
 import type { DecisionStatus, Finding, ReviewPayload } from "./types.js";
 
@@ -59,17 +61,6 @@ export function applyFilters(findings: Finding[], filters: Filters, statusOf: (i
       .toLowerCase();
     return haystack.includes(needle);
   });
-}
-
-function element<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  className?: string,
-  text?: string,
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
 }
 
 function fieldInput(field: OverrideField, laneOptions: string[]): HTMLElement {
@@ -135,13 +126,18 @@ function readFields(container: HTMLElement, fields: OverrideField[]): Record<str
 }
 
 export interface PanelHooks {
-  onFocus(finding: Finding): void;
+  /** Light up everything a finding names and pan to it. Returns layers painted. */
+  onFocus(finding: Finding): number;
+  /** Light up one feature the reviewer named by id or clicked in a chip. */
+  onFocusFeature(identifier: string): void;
   onChanged(): void;
 }
 
 export class ReviewPanel {
   private filters: Filters = { search: "", rule: "", severity: "", status: "" };
   private selectedId: string | null = null;
+  private focusedId: string | null = null;
+  private mappedLayers = 0;
   private readonly sorted: Finding[];
   private readonly laneIds: string[];
 
@@ -149,6 +145,7 @@ export class ReviewPanel {
     private readonly root: HTMLElement,
     private readonly state: ReviewState,
     payload: ReviewPayload,
+    private readonly index: FeatureIndex,
     private readonly hooks: PanelHooks,
   ) {
     this.sorted = sortFindings(payload.findings);
@@ -156,6 +153,16 @@ export class ReviewPanel {
     this.renderShell(payload);
     this.state.subscribe(() => this.renderQueue());
     this.renderQueue();
+  }
+
+  /** Open a finding from outside the queue — a map popup naming it, say. */
+  select(findingId: string): void {
+    const finding = this.state.finding(findingId);
+    if (!finding) return;
+    this.selectedId = findingId;
+    this.mappedLayers = this.hooks.onFocus(finding);
+    this.renderQueue();
+    this.root.querySelector("#detail")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
   private renderShell(payload: ReviewPayload): void {
@@ -178,9 +185,18 @@ export class ReviewPanel {
     const filters = element("div", "filters");
     const search = element("input");
     search.id = "filter-search";
-    search.placeholder = "Search rule, reason, lane, way or node id";
+    search.placeholder = "Search rule or reason; paste a lane, way or node id to focus it";
     search.addEventListener("input", () => {
       this.filters.search = search.value;
+      // A pasted id is a request to look at that thing, not to filter by its text.
+      // Both happen: the queue narrows and the map jumps to what was named.
+      const hit = this.index.resolve(search.value);
+      if (hit && hit !== this.focusedId) {
+        this.focusedId = hit;
+        this.hooks.onFocusFeature(hit);
+      } else if (!hit) {
+        this.focusedId = null;
+      }
       this.renderQueue();
     });
 
@@ -217,6 +233,10 @@ export class ReviewPanel {
     filters.append(search, ruleSelect, severity, status);
     this.root.append(filters);
 
+    const note = element("p", "queue-note muted");
+    note.id = "queue-note";
+    this.root.append(note);
+
     const bulk = element("div", "bulk");
     bulk.id = "bulk";
     this.root.append(bulk);
@@ -228,6 +248,39 @@ export class ReviewPanel {
     const detail = element("div", "detail");
     detail.id = "detail";
     this.root.append(detail);
+
+    this.root.append(this.renderLegend());
+  }
+
+  /** What the map colours mean. Without it every band is just a coloured line. */
+  private renderLegend(): HTMLElement {
+    const box = element("details", "legend-box");
+    box.append(element("summary", undefined, "Legend"));
+    const legend = element("div", "legend");
+    const entries: [string, string][] = [
+      ["swatch selected", "Selected or searched geometry"],
+      ["swatch lane", "Lane centreline"],
+      ["swatch lane-direction", "Direction of travel (arrow points downstream)"],
+      ["swatch connector-band", "Connector band — the lane-width path a movement takes"],
+      ["swatch active", "Allowed movement"],
+      ["swatch review", "Movement needing review"],
+      ["swatch forbidden", "Forbidden movement"],
+      ["swatch stop-line", "Inferred stop line"],
+      ["swatch source", "Source OSM way or node (dashed)"],
+    ];
+    for (const [className, label] of entries) {
+      legend.append(element("span", className), element("span", undefined, label));
+    }
+    box.append(legend);
+    box.append(
+      element(
+        "p",
+        "muted",
+        "Queue rows are edged by decision state: orange unresolved, green accepted, " +
+          "blue overridden, grey not applicable.",
+      ),
+    );
+    return box;
   }
 
   private renderReadiness(): void {
@@ -271,12 +324,38 @@ export class ReviewPanel {
     node.append(accept);
   }
 
+  /** Where a finding is, in the words a reviewer uses: which lane, at which node. */
+  private whereLabel(finding: Finding): string {
+    const drawn = [...finding.affected_feature_ids, ...finding.geometry_ids].filter((id) =>
+      this.index.has(id),
+    );
+    const primary = drawn[0];
+    const at = finding.source_ids.length
+      ? ` at ${finding.source_type} ${finding.source_ids.join(", ")}`
+      : "";
+    if (!primary) {
+      return `${finding.source_type} ${finding.source_ids.join(", ") || "unlocated"}`;
+    }
+    const others = new Set(drawn).size - 1;
+    return `${this.index.describe(primary)}${others > 0 ? ` +${others} more` : ""}${at}`;
+  }
+
+  private renderNote(visible: number): void {
+    const node = this.root.querySelector<HTMLElement>("#queue-note");
+    if (!node) return;
+    const focused = this.focusedId
+      ? `${this.index.describe(this.focusedId)} focused on the map. `
+      : "";
+    node.textContent = `${focused}${visible} finding(s) match these filters.`;
+  }
+
   private renderQueue(): void {
     this.renderReadiness();
     const queue = this.root.querySelector<HTMLElement>("#queue");
     if (!queue) return;
     const visible = applyFilters(this.sorted, this.filters, (id) => this.state.statusOf(id));
     this.renderBulk(visible);
+    this.renderNote(visible.length);
 
     queue.innerHTML = "";
     if (!visible.length) {
@@ -286,14 +365,18 @@ export class ReviewPanel {
     }
     for (const finding of visible.slice(0, 400)) {
       const status = this.state.statusOf(finding.identifier);
-      const row = element("button", `row ${status} ${finding.severity}`);
+      const selected = finding.identifier === this.selectedId ? " selected" : "";
+      const row = element("button", `row ${status} ${finding.severity}${selected}`);
       row.append(element("span", "row-rule", finding.rule));
       row.append(element("span", "row-status", STATUS_LABEL[status]));
+      // Findings of the same rule share a reason verbatim, so the row has to name
+      // the lane it is about or the queue reads as a list of duplicates.
+      row.append(element("span", "row-where", this.whereLabel(finding)));
       row.append(element("span", "row-reason muted", finding.reason));
       row.addEventListener("click", () => {
         this.selectedId = finding.identifier;
-        this.hooks.onFocus(finding);
-        this.renderDetail();
+        this.mappedLayers = this.hooks.onFocus(finding);
+        this.renderQueue();
       });
       queue.append(row);
     }
@@ -301,6 +384,27 @@ export class ReviewPanel {
       queue.append(element("p", "muted", `${visible.length - 400} more; narrow the filters to see them.`));
     }
     this.renderDetail();
+  }
+
+  /**
+   * A row of ids the reviewer can click to put on the map. `resolve` is how a raw
+   * id in the finding maps to a drawn feature — an OSM way id is `way:<id>` there.
+   */
+  private chipRow(identifiers: string[], resolve?: (raw: string) => string | null): HTMLElement {
+    const row = element("span", "chip-row");
+    if (!identifiers.length) {
+      row.append(element("span", "muted", "none"));
+      return row;
+    }
+    for (const identifier of identifiers) {
+      const key = resolve ? resolve(identifier) : identifier;
+      const drawn = key !== null && this.index.has(key);
+      const label = drawn && key !== null ? this.index.label(key) : identifier;
+      row.append(
+        chip(label, drawn && key !== null ? () => this.hooks.onFocusFeature(key) : undefined),
+      );
+    }
+    return row;
   }
 
   private renderDetail(): void {
@@ -321,18 +425,29 @@ export class ReviewPanel {
     node.append(element("p", "muted", finding.reason));
 
     const evidence = element("dl", "evidence");
-    const rows: [string, string][] = [
-      ["Severity", finding.severity],
-      ["Confidence", finding.confidence],
-      ["Source", `${finding.source_type} ${finding.source_ids.join(", ")}`],
-      ["Affects", finding.affected_feature_ids.join(", ")],
-      ["Proposed", JSON.stringify(finding.proposed_value)],
-      ["State", STATUS_LABEL[status]],
-    ];
-    for (const [label, value] of rows) {
-      evidence.append(element("dt", undefined, label), element("dd", undefined, value));
-    }
+    definitionRow(evidence, "Severity", finding.severity);
+    definitionRow(evidence, "Confidence", finding.confidence);
+    definitionRow(evidence, "Source", this.chipRow(finding.source_ids, (raw) => this.index.resolve(raw)));
+    definitionRow(
+      evidence,
+      "Affects",
+      this.chipRow([...new Set([...finding.affected_feature_ids, ...finding.geometry_ids])]),
+    );
+    definitionRow(evidence, "Proposed", JSON.stringify(finding.proposed_value));
+    definitionRow(evidence, "State", STATUS_LABEL[status]);
     node.append(evidence);
+
+    if (!this.mappedLayers) {
+      // Silence here would read as "nothing is wrong on the map"; it means the
+      // opposite — the reviewer is being asked about geometry that was not drawn.
+      node.append(
+        element(
+          "p",
+          "warning",
+          "No geometry on the map could be matched to this finding — decide it from the evidence above.",
+        ),
+      );
+    }
 
     const form = element("div", "controls");
     const fieldWrap = element("div", "fields");

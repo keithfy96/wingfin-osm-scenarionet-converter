@@ -4,7 +4,6 @@
 // reviewer moving between the two sees the same map, with decision state added.
 
 import type { GeoJsonFeature, LeafletLayer, LeafletLayerGroup, LeafletMap } from "./types-dom.js";
-import type { DecisionStatus } from "./types.js";
 
 const STATUS_COLOR: Record<string, string> = {
   active: "#2f9e44",
@@ -12,11 +11,24 @@ const STATUS_COLOR: Record<string, string> = {
   forbidden: "#c92a2a",
 };
 
-const DECISION_COLOR: Record<DecisionStatus, string> = {
-  unresolved: "#e8590c",
-  accepted: "#2f9e44",
-  overridden: "#1971c2",
-  not_applicable: "#868e96",
+// Selection is yellow, as in the Stage 2 audit. Decision state is deliberately not
+// a highlight colour: unresolved and review_required are both orange, so colouring
+// the selection by state made the selected feature indistinguishable from its
+// neighbours — which is exactly the thing a reviewer needs to see.
+const GENERATED_HIGHLIGHT = {
+  color: "#ffd43b",
+  weight: 8,
+  fillColor: "#ffd43b",
+  fillOpacity: 0.4,
+  opacity: 1,
+};
+const SOURCE_HIGHLIGHT = {
+  color: "#ffd43b",
+  weight: 7,
+  fillColor: "#ffd43b",
+  fillOpacity: 0.9,
+  opacity: 1,
+  radius: 9,
 };
 
 export const LAYER_LABELS: Record<string, string> = {
@@ -81,16 +93,23 @@ function styleFor(properties: Record<string, unknown>): Record<string, unknown> 
 export interface OverlayIndex {
   /** Every layer drawn for a generated feature or OSM id, keyed by that id. */
   byId: Map<string, LeafletLayer[]>;
+  /**
+   * The style each layer was drawn with. Restoring from the layer's own feature
+   * fails for a lane — a GeoJSON layer group carries no `feature` — and silently
+   * repaints it as the default connector style, so the style is kept here.
+   */
+  baseStyle: Map<LeafletLayer, Record<string, unknown>>;
   groups: Record<string, LeafletLayerGroup>;
 }
 
 export function buildOverlays(
   map: LeafletMap,
   features: GeoJsonFeature[],
-  onSelect: (ids: string[]) => void,
+  popupFor: (properties: Record<string, unknown>) => HTMLElement,
 ): OverlayIndex {
   const groups: Record<string, LeafletLayerGroup> = {};
   const byId = new Map<string, LeafletLayer[]>();
+  const baseStyle = new Map<LeafletLayer, Record<string, unknown>>();
 
   for (const name of Object.keys(LAYER_LABELS)) {
     groups[name] = L.layerGroup();
@@ -122,7 +141,8 @@ export function buildOverlays(
     ]
       .filter((value): value is string => typeof value === "string" && value.length > 0);
 
-    layer.on("click", () => onSelect(identifiers));
+    layer.bindPopup?.(() => popupFor(properties), { maxWidth: 420, maxHeight: 380 });
+    baseStyle.set(layer, styleFor(properties));
     for (const identifier of identifiers) {
       const existing = byId.get(identifier);
       if (existing) existing.push(layer);
@@ -138,39 +158,53 @@ export function buildOverlays(
   }
   L.control.layers(null, overlayControl, { collapsed: true }).addTo(map);
 
-  return { byId, groups };
+  return { byId, baseStyle, groups };
 }
 
-/** Draw attention to the features a finding names, and pan to them. */
+/**
+ * Paint the features a finding names yellow and pan to them.
+ *
+ * Source OSM geometry gets its own weight so a way and the lanes generated from it
+ * stay distinguishable while both are lit. Returns how many layers were actually
+ * found, so the panel can say plainly when a finding maps to no geometry rather
+ * than leaving the reviewer looking for a highlight that was never drawn.
+ */
 export function focusFeatures(
   map: LeafletMap,
   index: OverlayIndex,
-  identifiers: string[],
-  status: DecisionStatus,
-): void {
+  generated: string[],
+  source: string[],
+): number {
   let bounds: ReturnType<typeof L.latLngBounds> | null = null;
-  for (const identifier of identifiers) {
-    for (const layer of index.byId.get(identifier) ?? []) {
-      layer.setStyle?.({ color: DECISION_COLOR[status], weight: 6, opacity: 1 });
-      layer.bringToFront?.();
-      const layerBounds = layer.getBounds?.();
-      if (layerBounds?.isValid()) {
-        bounds = bounds ? bounds.extend(layerBounds) : layerBounds;
+  let painted = 0;
+  for (const [identifiers, style] of [
+    [source, SOURCE_HIGHLIGHT],
+    [generated, GENERATED_HIGHLIGHT],
+  ] as const) {
+    for (const identifier of identifiers) {
+      for (const layer of index.byId.get(identifier) ?? []) {
+        layer.setStyle?.(style);
+        layer.bringToFront?.();
+        painted += 1;
+        const layerBounds = layer.getBounds?.();
+        if (layerBounds?.isValid()) {
+          bounds = bounds ? bounds.extend(layerBounds) : layerBounds;
+        }
       }
     }
   }
   if (bounds?.isValid()) {
     map.fitBounds(bounds.pad(0.45), { maxZoom: 19 });
   }
+  return painted;
 }
 
 /** Undo a previous focus so the map returns to its status colouring. */
 export function clearFocus(index: OverlayIndex, identifiers: string[]): void {
   for (const identifier of identifiers) {
     for (const layer of index.byId.get(identifier) ?? []) {
-      const properties = (layer as unknown as { feature?: { properties?: Record<string, unknown> } })
-        .feature?.properties;
-      layer.setStyle?.(styleFor(properties ?? {}));
+      const style = index.baseStyle.get(layer);
+      if (style) layer.setStyle?.(style);
     }
   }
 }

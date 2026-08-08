@@ -1,0 +1,86 @@
+import { describe, expect, it } from "vitest";
+
+import { FeatureIndex, laneSide } from "../src/details.js";
+import type { GeoJsonFeature } from "../src/types.js";
+import { finding } from "./fixtures.js";
+
+function feature(properties: Record<string, unknown>): GeoJsonFeature {
+  return { type: "Feature", geometry: { type: "LineString", coordinates: [] }, properties };
+}
+
+function lane(id: string, index: number, count: number, extra: Record<string, unknown> = {}) {
+  return feature({
+    id,
+    kind: "lane_centerline",
+    lane_index: index,
+    lane_count: count,
+    entry_lanes: [],
+    exit_lanes: [],
+    ...extra,
+  });
+}
+
+function connector(id: string, from: string, to: string, movement = "through") {
+  return feature({ id, kind: "connector", from_lane_id: from, to_lane_id: to, movement, status: "active" });
+}
+
+describe("laneSide", () => {
+  it("names the sides centre-out, so idx0 is the offside lane", () => {
+    // Indices run centre-out: idx0 hugs the centreline, idx(n-1) is kerbside.
+    expect(laneSide(0, 3)).toBe("offside");
+    expect(laneSide(1, 3)).toBe("middle");
+    expect(laneSide(2, 3)).toBe("nearside");
+    expect(laneSide(0, 1)).toBe("single lane");
+  });
+});
+
+describe("FeatureIndex", () => {
+  it("labels a lane the way a reviewer reads it off the map", () => {
+    const index = new FeatureIndex([lane("lane-mid", 1, 3)], []);
+    // Two findings of one rule share a reason verbatim; the lane label is the only
+    // thing that tells them apart in the queue.
+    expect(index.label("lane-mid")).toBe("lane-mid · lane 2/3 middle");
+    expect(index.describe("lane-mid")).toBe("Lane lane-mid · lane 2/3 middle");
+  });
+
+  it("resolves a bare OSM id into whichever namespace was drawn", () => {
+    const index = new FeatureIndex(
+      [feature({ id: "way:776021091", kind: "source_way", osm_way_id: "776021091" })],
+      [],
+    );
+    expect(index.resolve("776021091")).toBe("way:776021091");
+    expect(index.resolve("way:776021091")).toBe("way:776021091");
+    expect(index.resolve("does-not-exist")).toBeNull();
+    expect(index.describe("way:776021091")).toBe("OSM way 776021091");
+  });
+
+  it("folds continuations in with connector movements and drops duplicates", () => {
+    const target = lane("lane-b", 0, 2);
+    const source = lane("lane-a", 0, 2, { exit_lanes: ["lane-b", "conn-1"] });
+    const index = new FeatureIndex(
+      [source, target, connector("conn-1", "lane-a", "lane-b"), connector("conn-2", "lane-a", "lane-c")],
+      [],
+    );
+
+    const links = index.links(source.properties, false);
+    // lane-b is reached by both a connector and a continuation; it is one link, and
+    // the connector describes it, since that is the movement actually generated.
+    // conn-1 appears in exit_lanes but is a connector id, not a lane to travel to.
+    expect(links.map((row) => row.id)).toEqual(["lane-b", "lane-c"]);
+    expect(links[0]?.movement).toBe("through");
+    expect(index.links(target.properties, true).map((row) => row.id)).toEqual(["lane-a"]);
+  });
+
+  it("finds a feature's findings through generated and source geometry alike", () => {
+    const index = new FeatureIndex(
+      [lane("lane-a", 0, 2)],
+      [
+        finding({ identifier: "f1", affected_feature_ids: ["lane-a"], geometry_ids: [] }),
+        finding({ identifier: "f2", affected_feature_ids: [], geometry_ids: ["lane-a"] }),
+        finding({ identifier: "f3", affected_feature_ids: [], geometry_ids: ["lane-z"] }),
+      ],
+    );
+    expect(index.findingsFor("lane-a").map((item) => item.identifier)).toEqual(["f1", "f2"]);
+    expect(index.findingsFor("way:776021091").map((item) => item.identifier)).toHaveLength(3);
+  });
+});
