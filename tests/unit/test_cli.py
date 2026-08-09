@@ -109,6 +109,30 @@ def test_inspect_requires_workspace() -> None:
     assert "Traceback" not in result.output
 
 
+def test_apply_review_requires_a_submission(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["apply-review", "--workspace", str(tmp_path)])
+
+    assert result.exit_code != 0
+    assert "--submission" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_apply_review_reports_a_stage_4_failure_as_one_line(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    submission = tmp_path / "review.json"
+    submission.write_text("{}", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        ["apply-review", "--workspace", str(workspace), "--submission", str(submission)],
+    )
+
+    assert result.exit_code == 1
+    assert "Stage 4 failed:" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_removed_downstream_commands_are_unknown() -> None:
     for command in (
         "generate-lanelet2",

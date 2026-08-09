@@ -52,8 +52,12 @@ export interface ControlSpec {
    *
    * These state the Stage 4 contract in `docs/implementation-plan/README.md`: which
    * decisions are written into `review/reviewed.osm` as tags and which stay non-OSM
-   * overrides in `review/review.json`. `apply-review` is not built yet, so they must
-   * be kept in step with that document when it is.
+   * overrides in `review/applied-decisions.json`.
+   *
+   * `apply-review` applies the non-OSM ones today and *refuses* any override whose
+   * effect is an OSM tag, naming the rule. So the `overrideEffect` strings below
+   * describe the intended contract rather than what runs now — keep them in step with
+   * `_OSM_NATIVE_RULES` in `src/osm_scenario/apply_review.py` as each is implemented.
    */
   acceptEffect: string;
   /** What overriding does. Null exactly when `overrideLabel` is null. */

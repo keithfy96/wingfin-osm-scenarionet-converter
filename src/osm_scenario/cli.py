@@ -7,6 +7,7 @@ from typing import Annotated
 import typer
 
 from osm_scenario.acquisition import AcquisitionError, acquire_osm
+from osm_scenario.apply_review import ApplyReviewError, apply_review
 from osm_scenario.config import ConverterConfig, load_config
 from osm_scenario.generation import GenerationError, generate_lane_model
 from osm_scenario.inspection import InspectionError, generate_inspection
@@ -140,6 +141,37 @@ def generate_map(
         typer.echo(f"Stage 2 failed: {error}", err=True)
         raise typer.Exit(code=1) from error
     typer.echo(f"Stage 2 complete: {report_path}")
+
+
+@app.command("apply-review")
+def apply_review_command(
+    workspace: Workspace,
+    submission: Annotated[
+        Path,
+        typer.Option(
+            "--submission",
+            exists=True,
+            dir_okay=False,
+            help="The review.json exported by Stage 3.",
+        ),
+    ],
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", exists=True, dir_okay=False, help="Versioned YAML config."),
+    ] = None,
+) -> None:
+    """Apply a Stage 3 review to WORKSPACE and regenerate the reviewed lane model."""
+    try:
+        config = (
+            load_config(config_path)
+            if config_path is not None
+            else ConverterConfig(config_version=1)
+        )
+        report_path = apply_review(workspace=workspace, submission=submission, config=config)
+    except (ApplyReviewError, ValueError, KeyError) as error:
+        typer.echo(f"Stage 4 failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(f"Stage 4 complete: {report_path}")
 
 
 if __name__ == "__main__":

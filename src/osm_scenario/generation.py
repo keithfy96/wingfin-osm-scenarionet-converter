@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -1270,40 +1271,46 @@ for(const id of ['search','rule','severity'])document.getElementById(id).addEven
     return template.replace("__PAYLOAD__", payload)
 
 
-def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
-    """Generate deterministic preliminary lane geometry from Stage 1 artifacts."""
-    workspace = workspace.resolve()
-    manifest_path = workspace / "source" / "manifest.json"
-    if not manifest_path.is_file():
-        raise GenerationError("Stage 1 manifest is missing; run fetch first")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("stage_1b", {}).get("status") != "passed":
-        raise GenerationError("Stage 1B has not passed")
+@dataclass(frozen=True)
+class ReviewOverrides:
+    """Stage 4 decisions that change generation without changing the OSM.
 
-    source_path = workspace / manifest["source"]["path"]
-    graph_artifact = manifest["stage_1b"]["artifacts"]["projected_graphml"]
-    graph_path = workspace / graph_artifact["path"]
-    for label, path, expected in (
-        ("source OSM", source_path, manifest["source"]["sha256"]),
-        ("projected GraphML", graph_path, graph_artifact["sha256"]),
-    ):
-        if not path.is_file() or _sha256(path) != expected:
-            raise GenerationError(f"{label} checksum does not match the Stage 1 manifest")
+    A movement the reviewer judged is no longer ambiguous, but nothing in the source
+    records that: `turn:lanes` says what is permitted, not what a human concluded about
+    one connector. So the verdict rides alongside the snapshot rather than being written
+    into it, and Stage 2 keeps producing exactly what it produced before.
+    """
 
-    graph = ox.load_graphml(graph_path)
-    snapshot = read_osm_snapshot(source_path)
-    config_payload = config.model_dump(mode="json")
-    config_checksum = _canonical_checksum(config_payload)
-    fingerprint = _canonical_checksum(
-        {
-            "generator_version": GENERATOR_VERSION,
-            "schema_version": LANE_MODEL_SCHEMA_VERSION,
-            "source_checksum": manifest["source"]["sha256"],
-            "graph_checksum": graph_artifact["sha256"],
-            "configuration_checksum": config_checksum,
-        }
-    )
+    forbidden_connector_ids: frozenset[str] = frozenset()
+    active_connector_ids: frozenset[str] = frozenset()
 
+
+# Module-level rather than a default argument: a mutable-looking default in the signature
+# trips ruff B008, and every no-override caller should share one object anyway.
+NO_OVERRIDES = ReviewOverrides()
+
+
+def build_lane_model(
+    *,
+    snapshot: OsmSnapshot,
+    graph: Any,
+    config: ConverterConfig,
+    driving_side: str,
+    source_checksum: str,
+    graph_checksum: str,
+    config_checksum: str,
+    fingerprint: str,
+    coordinate_system_wkt: str,
+    overrides: ReviewOverrides = NO_OVERRIDES,
+) -> tuple[PreliminaryLaneModel, dict[str, int]]:
+    """Build the lane model from an OSM snapshot and its projected graph.
+
+    Pure with respect to the workspace: it reads no files and writes none. Stage 2 calls
+    it with `NO_OVERRIDES` over the acquired source; Stage 4 calls it with the reviewer's
+    verdicts over `review/reviewed.osm`. Everything either stage needs to differ about —
+    which checksums identify the inputs, which movements were judged — arrives as an
+    argument, so there is one generator rather than two that must be kept in step.
+    """
     lanes: list[LaneFeature] = []
     findings: list[ReviewFinding] = []
     lanes_by_start: dict[str, list[str]] = {}
@@ -1340,7 +1347,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
         )
         base = _edge_geometry(graph, u, v, data)
         created: list[str] = []
-        side_sign = 1.0 if manifest["driving_side"] == "left" else -1.0
+        side_sign = 1.0 if driving_side == "left" else -1.0
         centred = _carries_whole_carriageway(way.tags)
         for lane_index in range(count):
             offset = _lane_offset(
@@ -1380,7 +1387,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                     direction,
                     lane_index,
                     count,
-                    manifest["driving_side"],
+                    driving_side,
                 ),
             )
             lanes.append(lane)
@@ -1507,7 +1514,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
         approach_assignments: dict[tuple[str, ...], dict[GroupKey, dict[str, str]]] = {}
         for block in blocks:
             assignment = _balanced_approach_assignment(
-                block, outgoing_groups, driving_side=manifest["driving_side"]
+                block, outgoing_groups, driving_side=driving_side
             )
             if assignment is not None:
                 approach_assignments[tuple(block[0].source_edge)] = assignment
@@ -1516,7 +1523,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
         # already declined each of them and there is nothing to overwrite.
         approach_assignments.update(
             _balanced_merge_assignment(
-                blocks, outgoing_groups, driving_side=manifest["driving_side"]
+                blocks, outgoing_groups, driving_side=driving_side
             )
         )
         for from_id in incoming:
@@ -1567,7 +1574,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                     side = movement_side(
                         movement=classify_movement(group_angle),
                         angle=group_angle,
-                        driving_side=manifest["driving_side"],
+                        driving_side=driving_side,
                         turn_permissions=source.turn_permissions,
                         min_degrees=config.lane_selection.side_movement_min_degrees,
                     )
@@ -1578,7 +1585,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                         side_block = _tagged_side_block(
                             blocks_by_edge[tuple(source.source_edge)],
                             side,
-                            driving_side=manifest["driving_side"],
+                            driving_side=driving_side,
                         )
                 target = (
                     lane_lookup[allocation[source.identifier]]
@@ -1672,7 +1679,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
             candidates_for_lane = _side_filtered_candidates(
                 candidates_for_lane,
                 source=source,
-                driving_side=manifest["driving_side"],
+                driving_side=driving_side,
                 min_degrees=config.lane_selection.side_movement_min_degrees,
                 node_restrictions=node_restrictions,
                 has_continuation=carries_straight_on,
@@ -1744,6 +1751,13 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
             if candidate.ambiguous
             else "active"
         )
+        # A reviewed movement stops being a question. Forbidding drops it from the lane
+        # graph below; promoting wires it in and, because only `review_required` raises
+        # the finding, stops it being asked again — no second code path either way.
+        if connector_id in overrides.forbidden_connector_ids:
+            status = "forbidden"
+        elif connector_id in overrides.active_connector_ids and status == "review_required":
+            status = "active"
         connectors.append(
             ConnectorFeature(
                 identifier=connector_id,
@@ -1959,11 +1973,11 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
     metadata = GenerationMetadata(
         generator_version=GENERATOR_VERSION,
         lane_model_schema_version=LANE_MODEL_SCHEMA_VERSION,
-        source_checksum=manifest["source"]["sha256"],
-        projected_graph_checksum=graph_artifact["sha256"],
+        source_checksum=source_checksum,
+        projected_graph_checksum=graph_checksum,
         configuration_checksum=config_checksum,
         generation_fingerprint=fingerprint,
-        coordinate_system_wkt=manifest["stage_1b"]["projection"]["local_crs_wkt"],
+        coordinate_system_wkt=coordinate_system_wkt,
     )
     # After every finding exists and, critically, after each one's evidence checksum
     # was computed: location is derived from `source_ids`, which the checksum already
@@ -1979,6 +1993,70 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
         stop_lines=stop_lines,
         restrictions=restrictions,
         findings=sorted(findings, key=lambda item: item.identifier),
+    )
+
+    feature_counts = {
+        "lanes": len(lanes),
+        "connectors": len(connectors),
+        "direct_continuations": direct_continuations,
+        "merge_tapers": len(taper_plan),
+        "signals": len(signals),
+        "stop_lines": len(stop_lines),
+        "restrictions": len(restrictions),
+        "active_connectors": sum(item.status == "active" for item in connectors),
+        "forbidden_connectors": sum(item.status == "forbidden" for item in connectors),
+        "review_required_connectors": sum(
+            item.status == "review_required" for item in connectors
+        ),
+        "findings": len(findings),
+    }
+    return model, feature_counts
+
+
+def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
+    """Generate deterministic preliminary lane geometry from Stage 1 artifacts."""
+    workspace = workspace.resolve()
+    manifest_path = workspace / "source" / "manifest.json"
+    if not manifest_path.is_file():
+        raise GenerationError("Stage 1 manifest is missing; run fetch first")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("stage_1b", {}).get("status") != "passed":
+        raise GenerationError("Stage 1B has not passed")
+
+    source_path = workspace / manifest["source"]["path"]
+    graph_artifact = manifest["stage_1b"]["artifacts"]["projected_graphml"]
+    graph_path = workspace / graph_artifact["path"]
+    for label, path, expected in (
+        ("source OSM", source_path, manifest["source"]["sha256"]),
+        ("projected GraphML", graph_path, graph_artifact["sha256"]),
+    ):
+        if not path.is_file() or _sha256(path) != expected:
+            raise GenerationError(f"{label} checksum does not match the Stage 1 manifest")
+
+    graph = ox.load_graphml(graph_path)
+    snapshot = read_osm_snapshot(source_path)
+    config_payload = config.model_dump(mode="json")
+    config_checksum = _canonical_checksum(config_payload)
+    fingerprint = _canonical_checksum(
+        {
+            "generator_version": GENERATOR_VERSION,
+            "schema_version": LANE_MODEL_SCHEMA_VERSION,
+            "source_checksum": manifest["source"]["sha256"],
+            "graph_checksum": graph_artifact["sha256"],
+            "configuration_checksum": config_checksum,
+        }
+    )
+
+    model, feature_counts = build_lane_model(
+        snapshot=snapshot,
+        graph=graph,
+        config=config,
+        driving_side=manifest["driving_side"],
+        source_checksum=manifest["source"]["sha256"],
+        graph_checksum=graph_artifact["sha256"],
+        config_checksum=config_checksum,
+        fingerprint=fingerprint,
+        coordinate_system_wkt=manifest["stage_1b"]["projection"]["local_crs_wkt"],
     )
 
     lane_model_dir = workspace / "lane-model"
@@ -2005,21 +2083,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
             "projected_graphml": graph_artifact["sha256"],
             "configuration": config_checksum,
         },
-        "feature_counts": {
-            "lanes": len(lanes),
-            "connectors": len(connectors),
-            "direct_continuations": direct_continuations,
-            "merge_tapers": len(taper_plan),
-            "signals": len(signals),
-            "stop_lines": len(stop_lines),
-            "restrictions": len(restrictions),
-            "active_connectors": sum(item.status == "active" for item in connectors),
-            "forbidden_connectors": sum(item.status == "forbidden" for item in connectors),
-            "review_required_connectors": sum(
-                item.status == "review_required" for item in connectors
-            ),
-            "findings": len(findings),
-        },
+        "feature_counts": feature_counts,
     }
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     artifacts = {}

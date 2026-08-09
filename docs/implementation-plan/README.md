@@ -128,13 +128,33 @@ show completed increments beneath it.
        evidence checksum still match.
 
 - [ ] **Stage 4 - Apply decisions and regenerate automatically**
+  - Implemented so far: the spine. Decisions that resolve a movement are applied
+    and the model is regenerated from them. Decisions whose effect is an **OSM
+    tag are refused by name**, not half-applied - see `_OSM_NATIVE_RULES` in
+    `src/osm_scenario/apply_review.py`. Until those land, `review/reviewed.osm`
+    is the source verbatim.
   - Outputs:
     - `review/reviewed.osm` - OSM-native reviewed corrections, leaving
-      `source/map.osm` unchanged.
-    - `review/review.json` - authoritative decisions and non-OSM overrides.
-    - `lane-model/reviewed.json` - fully regenerated reviewed lane model.
-    - A preliminary-versus-reviewed comparison audit and its checksums.
-  - Verify after implementation:
+      `source/map.osm` unchanged. The source is checksummed before and after
+      every run and is never written.
+    - `review/applied-decisions.json` - authoritative decisions and non-OSM
+      overrides. **Deliberately not** `review/review.json`, which this document
+      previously named: that is one path segment away from the hand-made Stage 3
+      export that is its input, and two files a directory apart with the same
+      name is a mistake waiting to be made.
+    - `lane-model/reviewed.json` - fully regenerated reviewed lane model, built
+      by the same `build_lane_model` core Stage 2 uses, over the reviewed OSM and
+      in Stage 1B's pinned coordinate frame.
+    - `reports/reviewed-comparison.json` / `.md` and
+      `inspection/stage-4-comparison.html` - preliminary versus reviewed, plus a
+      `stage_4` record in `source/manifest.json`.
+  - Two properties the implementation must keep:
+    - The reviewed graph goes through **public-driving-v1 road selection**, as
+      Stage 1A does. Rebuilding from OSM without it readmits every excluded way.
+    - The reviewed model is keyed on `sha256(review/reviewed.osm)`, not on a
+      rebuilt GraphML - osmnx stamps a build timestamp into GraphML, which would
+      mint a new fingerprint for a byte-identical model on every run.
+  - Verify:
     1. Record the checksum of `source/map.osm`.
     2. Run `osm-scenario apply-review --workspace WORKSPACE --submission
        EXPORTED_REVIEW.json`.
@@ -144,6 +164,8 @@ show completed increments beneath it.
        was regenerated rather than patched directly in `preliminary.json`.
     5. Confirm stale fingerprints, invalid references, and unresolved blockers
        cause a non-zero command exit.
+    6. Run it a second time and confirm every output is byte-identical apart
+       from `applied_at`.
 
 - [ ] **Stage 5 - Validate the reviewed map**
   - Outputs:

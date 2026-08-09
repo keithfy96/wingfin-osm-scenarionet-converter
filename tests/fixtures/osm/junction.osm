@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A T junction of three two-way residential roads, for Stage 4.
+
+  `tiny.osm` generates no connectors at all, so it cannot exercise a decision about a
+  movement. Here three ways all END at node 100, and each is `oneway=no`, so each has a
+  forward and a backward lane meeting at that node. The generator therefore raises a
+  reverse (U-turn) movement per way with nothing in the tags permitting it — an
+  `ambiguous_connector` blocker, which is the only rule Stage 4 currently applies.
+
+  Kept deliberately free of `maxspeed`, `width` and `turn:lanes` so the warning-level
+  findings stay few and the connector findings are what the tests are looking at.
+
+  Ways 300 and 301 exist to be EXCLUDED. Stage 1A applies the public-driving-v1 selection
+  before handing its graph on, and any stage that rebuilds a graph from OSM and forgets
+  to do the same silently readmits them. Without something here for the policy to reject,
+  that mistake looks identical to correct behaviour.
+-->
+<osm version="0.6" generator="osm-scenario-test">
+  <node id="100" lat="3.1600" lon="101.7100" />
+  <node id="101" lat="3.1600" lon="101.7110" />
+  <node id="102" lat="3.1600" lon="101.7090" />
+  <node id="103" lat="3.1610" lon="101.7100" />
+  <node id="110" lat="3.1620" lon="101.7120" />
+  <node id="111" lat="3.1620" lon="101.7130" />
+  <node id="112" lat="3.1630" lon="101.7120" />
+  <way id="200">
+    <nd ref="101" />
+    <nd ref="100" />
+    <tag k="highway" v="residential" />
+    <tag k="oneway" v="no" />
+    <tag k="lanes" v="2" />
+  </way>
+  <way id="201">
+    <nd ref="100" />
+    <nd ref="102" />
+    <tag k="highway" v="residential" />
+    <tag k="oneway" v="no" />
+    <tag k="lanes" v="2" />
+  </way>
+  <way id="202">
+    <nd ref="100" />
+    <nd ref="103" />
+    <tag k="highway" v="residential" />
+    <tag k="oneway" v="no" />
+    <tag k="lanes" v="2" />
+  </way>
+  <way id="300">
+    <nd ref="110" />
+    <nd ref="111" />
+    <tag k="highway" v="footway" />
+  </way>
+  <way id="301">
+    <nd ref="110" />
+    <nd ref="112" />
+    <tag k="highway" v="residential" />
+    <tag k="access" v="private" />
+  </way>
+</osm>
