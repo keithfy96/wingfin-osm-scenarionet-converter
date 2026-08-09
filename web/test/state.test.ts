@@ -104,9 +104,62 @@ describe("readiness", () => {
     review.decide("b", { status: "accepted" });
 
     const submission = review.toSubmission();
-    expect(submission.submission_version).toBe(2);
+    expect(submission.submission_version).toBe(3);
     expect(submission.decisions[0]?.location).toEqual(located.location);
     expect(submission.decisions[0]?.source_ids).toEqual(located.source_ids);
+  });
+});
+
+describe("ignoring a warning", () => {
+  it("sets a warning aside without counting it as judged", () => {
+    const review = state([
+      finding({ identifier: "w", severity: "warning" }),
+      finding({ identifier: "b", severity: "blocker", rule: "ambiguous_connector" }),
+    ]);
+    review.decide("w", { status: "ignored" });
+
+    // "Decided" has to keep meaning judged, or the banner overstates how much of the
+    // map a reviewer has actually looked at.
+    expect(review.readiness()).toMatchObject({ resolved: 0, ignored: 1, ready: false });
+    expect(review.statusOf("w")).toBe("ignored");
+  });
+
+  it("refuses to ignore a blocker, which would wave the Stage 4 gate through", () => {
+    const review = state([finding({ identifier: "b", severity: "blocker" })]);
+    expect(() => review.decide("b", { status: "ignored" })).toThrow(DecisionError);
+    expect(review.statusOf("b")).toBe("unresolved");
+  });
+
+  it("drops an ignored blocker arriving from a file rather than trusting it", () => {
+    const blocker = finding({ identifier: "b", severity: "blocker" });
+    const review = state([blocker]);
+    const summary = review.loadDecisions([
+      {
+        finding_id: "b",
+        rule: blocker.rule,
+        status: "ignored",
+        decided_at: clock(),
+        evidence_checksum: blocker.evidence_checksum,
+      },
+    ]);
+    // The file is not the authority on what may be ignored.
+    expect(summary).toMatchObject({ carried: 0, invalidated: 1 });
+    expect(review.statusOf("b")).toBe("unresolved");
+  });
+
+  it("ignores a whole rule across every road class, or one class alone", () => {
+    const review = state([
+      finding({ identifier: "a", severity: "warning", road_class: "residential" }),
+      finding({ identifier: "b", severity: "warning", road_class: "tertiary" }),
+      finding({ identifier: "c", severity: "warning", road_class: null }),
+    ]);
+
+    // Omitting roadClass means every class; `null` still means the unclassified ones.
+    expect(review.decideBulk({ rule: "speed_default" }, { status: "ignored" })).toHaveLength(3);
+    review.reset();
+    expect(
+      review.decideBulk({ rule: "speed_default", roadClass: null }, { status: "ignored" }),
+    ).toEqual(["c"]);
   });
 });
 

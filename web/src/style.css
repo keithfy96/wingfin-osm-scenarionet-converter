@@ -17,6 +17,14 @@ h2{font-size:15px;margin:0 0 4px}
 
 .bulk:not(:empty){display:flex;align-items:center;gap:8px;padding:8px 10px;background:#e7f5ff;border:1px solid #a5d8ff;border-radius:6px}
 
+.warning-box{flex:0 0 auto;border:1px solid #ffc078;border-radius:6px;background:#fff9f0}
+.warning-box>summary{padding:7px 10px;font-size:12px;font-weight:600;color:#a35c00;
+  cursor:pointer;list-style-position:inside;user-select:none}
+.warning-rules{display:flex;flex-direction:column;gap:5px;padding:6px 10px 9px}
+.warning-rule{display:grid;grid-template-columns:1fr auto auto;gap:6px;align-items:center;font-size:12px}
+.warning-rule-name{font-weight:600;overflow-wrap:anywhere}
+.warning-rule button{padding:3px 8px;font-size:11px}
+
 /* `overflow:auto` makes a flex item's automatic min-height 0, so the list was free
    to be squeezed to a single row by everything else in the column. It keeps its own
    height instead, and the panel scrolls. */
@@ -38,6 +46,7 @@ h2{font-size:15px;margin:0 0 4px}
 .row.accepted{border-left-color:#2f9e44}
 .row.overridden{border-left-color:#1971c2}
 .row.not_applicable{border-left-color:#adb5bd}
+.row.ignored{border-left-color:#adb5bd;background:#f8f9fa;color:#6b7580}
 .row.blocker .row-rule::after{content:" ·  blocker";font-weight:400;font-size:11px;color:#c92a2a}
 
 .detail{display:flex;flex-direction:column;gap:8px;padding-top:8px;border-top:1px solid #dee2e6}

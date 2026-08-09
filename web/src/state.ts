@@ -15,11 +15,14 @@ import type {
 export class DecisionError extends Error {}
 
 /** A decision is only complete when its status carries what that status requires. */
-export function validateDecision(input: {
-  status: DecisionStatus;
-  value?: unknown;
-  reason?: string;
-}): void {
+export function validateDecision(
+  input: {
+    status: DecisionStatus;
+    value?: unknown;
+    reason?: string;
+  },
+  finding?: Finding,
+): void {
   if (input.status === "not_applicable") {
     const reason = (input.reason ?? "").trim();
     if (!reason) {
@@ -28,6 +31,14 @@ export function validateDecision(input: {
   }
   if (input.status === "overridden" && input.value === undefined) {
     throw new DecisionError("An override must carry a replacement value.");
+  }
+  if (input.status === "ignored" && finding?.severity === "blocker") {
+    // Ignoring is for findings that do not gate promotion. Allowing it here would
+    // let a review reach Stage 4 with the very findings the gate exists for marked
+    // as handled. No reason is required for a warning: friction defeats the point.
+    throw new DecisionError(
+      "A blocking finding cannot be ignored; decide it, override it, or mark it not applicable.",
+    );
   }
 }
 
@@ -81,7 +92,7 @@ export class ReviewState {
   ): void {
     const finding = this.byId.get(findingId);
     if (!finding) throw new DecisionError(`Unknown finding ${findingId}`);
-    validateDecision(input);
+    validateDecision(input, finding);
 
     if (input.status === "unresolved") {
       this.decisions.delete(findingId);
@@ -114,13 +125,19 @@ export class ReviewState {
    * explicitly — so this writes individual decision records, not a group record.
    */
   decideBulk(
-    scope: { rule: string; roadClass: string | null },
+    scope: { rule: string; roadClass?: string | null },
     input: { status: DecisionStatus; value?: unknown; reason?: string },
   ): string[] {
-    validateDecision(input);
+    // Omitting roadClass means every road class — that is how a whole rule is set
+    // aside at once. Passing `null` still means the unclassified ones only, so the
+    // narrower road-class cohorts keep working.
+    const anyRoadClass = !("roadClass" in scope);
     const targets = this.findings.filter(
-      (finding) => finding.rule === scope.rule && finding.road_class === scope.roadClass,
+      (finding) =>
+        finding.rule === scope.rule &&
+        (anyRoadClass || finding.road_class === scope.roadClass),
     );
+    for (const finding of targets) validateDecision(input, finding);
     for (const finding of targets) {
       this.decide(finding.identifier, input);
     }
@@ -132,12 +149,14 @@ export class ReviewState {
     const blockersUnresolved = blockers.filter(
       (finding) => this.statusOf(finding.identifier) === "unresolved",
     ).length;
-    const resolved = this.findings.filter(
-      (finding) => this.statusOf(finding.identifier) !== "unresolved",
-    ).length;
+    // Ignored is counted apart from resolved, so "decided" keeps meaning judged.
+    // Reporting them together would overstate how much of the map has been reviewed.
+    const statuses = this.findings.map((finding) => this.statusOf(finding.identifier));
     return {
       total: this.findings.length,
-      resolved,
+      resolved: statuses.filter((status) => status !== "unresolved" && status !== "ignored")
+        .length,
+      ignored: statuses.filter((status) => status === "ignored").length,
       blockers_total: blockers.length,
       blockers_unresolved: blockersUnresolved,
       ready: blockersUnresolved === 0,
@@ -155,7 +174,7 @@ export class ReviewState {
   toSubmission(): ReviewSubmission {
     const readiness = this.readiness();
     return {
-      submission_version: 2,
+      submission_version: 3,
       exported_at: this.clock(),
       identity: this.identity,
       decisions: this.allDecisions(),
@@ -184,6 +203,14 @@ export class ReviewState {
         continue;
       }
       if (finding.evidence_checksum !== decision.evidence_checksum) {
+        summary.invalidated += 1;
+        summary.invalidated_ids.push(decision.finding_id);
+        continue;
+      }
+      if (decision.status === "ignored" && finding.severity === "blocker") {
+        // The file is not the authority on what may be ignored. A hand-edited or
+        // stale review must not be able to set a blocker aside by loading it, so it
+        // is dropped here rather than at the parser, which has no severities.
         summary.invalidated += 1;
         summary.invalidated_ids.push(decision.finding_id);
         continue;

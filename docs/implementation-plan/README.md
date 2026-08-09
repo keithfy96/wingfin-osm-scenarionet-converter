@@ -282,6 +282,13 @@ Deliver Stage 3 in three internal milestones:
 - Blocking findings must end as `accepted`, `overridden`, or
   `not_applicable`; `unresolved` prevents promotion. The UI reports readiness,
   while Stage 4 remains the authoritative promotion gate.
+- A warning may also end as `ignored`: set aside unjudged, with the generated
+  proposal standing. It is deliberately not `accepted` — an accepted finding
+  records a judgement, an ignored one records that none was made, and the two
+  must stay distinguishable for anything scored against a reviewer's decisions.
+  **`ignored` is permitted on warnings only, and Stage 4 must reject a
+  submission carrying it on a blocking finding**, exactly as it rejects
+  `unresolved` there. Submissions containing it carry `submission_version: 3`.
 
 ### Stage 4 - Materialize Decisions and Regenerate
 

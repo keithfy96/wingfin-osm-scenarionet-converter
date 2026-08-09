@@ -4,6 +4,7 @@
 import {
   CLEAR_EFFECT,
   controlFor,
+  IGNORE_EFFECT,
   NOT_APPLICABLE_EFFECT,
   supportsBulk,
   type ControlSpec,
@@ -32,6 +33,7 @@ const STATUS_LABEL: Record<DecisionStatus, string> = {
   accepted: "Accepted",
   overridden: "Overridden",
   not_applicable: "Not applicable",
+  ignored: "Ignored",
 };
 
 export function sortFindings(findings: Finding[]): Finding[] {
@@ -53,9 +55,13 @@ export interface Filters {
 export function applyFilters(findings: Finding[], filters: Filters, statusOf: (id: string) => DecisionStatus): Finding[] {
   const needle = filters.search.trim().toLowerCase();
   return findings.filter((finding) => {
+    const status = statusOf(finding.identifier);
+    // Ignoring exists to clear the queue, so ignored findings leave it — hidden,
+    // never gone: selecting the Ignored state brings every one of them back.
+    if (status === "ignored" && filters.status !== "ignored") return false;
     if (filters.rule && finding.rule !== filters.rule) return false;
     if (filters.severity && finding.severity !== filters.severity) return false;
-    if (filters.status && statusOf(finding.identifier) !== filters.status) return false;
+    if (filters.status && status !== filters.status) return false;
     if (!needle) return true;
     const haystack = [
       finding.rule,
@@ -250,6 +256,7 @@ export class ReviewPanel {
       new Option("Accepted", "accepted"),
       new Option("Overridden", "overridden"),
       new Option("Not applicable", "not_applicable"),
+      new Option("Ignored", "ignored"),
     );
     status.addEventListener("change", () => {
       this.filters.status = status.value;
@@ -266,6 +273,14 @@ export class ReviewPanel {
     const bulk = element("div", "bulk");
     bulk.id = "bulk";
     this.root.append(bulk);
+
+    const warnings = element("details", "warning-box");
+    warnings.id = "warning-box";
+    warnings.append(element("summary", undefined, "Warnings — set aside by rule"));
+    const warningList = element("div", "warning-rules");
+    warningList.id = "warning-rules";
+    warnings.append(warningList);
+    this.root.append(warnings);
 
     // Collapsible, because on a short window the list and the detail pane compete
     // for the same column. Closing it is the reviewer's choice; anything that
@@ -331,6 +346,7 @@ export class ReviewPanel {
         "span",
         "muted",
         `${readiness.resolved}/${readiness.total} findings decided · ` +
+          (readiness.ignored ? `${readiness.ignored} ignored · ` : "") +
           `${readiness.blockers_unresolved} of ${readiness.blockers_total} blockers unresolved`,
       ),
     );
@@ -405,11 +421,65 @@ export class ReviewPanel {
     const unresolved = visible.filter(
       (finding) => this.state.statusOf(finding.identifier) === "unresolved",
     ).length;
-    summary.textContent = `${visible.length} finding(s) listed · ${unresolved} unresolved`;
+    // Ignored findings are hidden from the list but never from the count, so the
+    // queue can never quietly understate how much of the model is set aside.
+    const ignored = this.state.readiness().ignored;
+    summary.textContent =
+      `${visible.length} finding(s) listed · ${unresolved} unresolved` +
+      (ignored ? ` · ${ignored} ignored` : "");
+  }
+
+  /**
+   * The class-level ignore control: one row per warning rule.
+   *
+   * Blockers are absent by construction — a rule that gates promotion has nothing to
+   * offer here, and `validateDecision` would refuse it anyway.
+   */
+  private renderWarningRules(): void {
+    const node = this.root.querySelector<HTMLElement>("#warning-rules");
+    if (!node) return;
+    node.innerHTML = "";
+    const rules = [
+      ...new Set(
+        this.sorted.filter((finding) => finding.severity === "warning").map((f) => f.rule),
+      ),
+    ].sort();
+    if (!rules.length) {
+      node.append(element("p", "muted", "No warnings in this model."));
+      return;
+    }
+    for (const rule of rules) {
+      const findings = this.sorted.filter((finding) => finding.rule === rule);
+      const ignored = findings.filter(
+        (finding) => this.state.statusOf(finding.identifier) === "ignored",
+      ).length;
+      const row = element("div", "warning-rule");
+      row.append(element("span", "warning-rule-name", rule));
+      row.append(
+        element(
+          "span",
+          "muted",
+          ignored ? `${ignored} of ${findings.length} ignored` : `${findings.length} findings`,
+        ),
+      );
+      const ignoreAll = element("button", undefined, "Ignore all");
+      ignoreAll.addEventListener("click", () => {
+        this.state.decideBulk({ rule }, { status: "ignored" });
+        this.hooks.onChanged();
+      });
+      const restore = element("button", "ghost", "Restore");
+      restore.addEventListener("click", () => {
+        this.state.decideBulk({ rule }, { status: "unresolved" });
+        this.hooks.onChanged();
+      });
+      row.append(ignoreAll, restore);
+      node.append(row);
+    }
   }
 
   private renderQueue(): void {
     this.renderReadiness();
+    this.renderWarningRules();
     const queue = this.root.querySelector<HTMLElement>("#queue");
     if (!queue) return;
     const visible = applyFilters(this.sorted, this.filters, (id) => this.state.statusOf(id));
@@ -599,9 +669,17 @@ export class ReviewPanel {
     const clear = element("button", "ghost", "Clear decision");
     clear.addEventListener("click", () => decide({ status: "unresolved" }));
 
-    form.append(reason, notApplicable, clear, error);
+    form.append(reason, notApplicable);
+    // Only warnings. A blocker has no "set aside" option, and offering a button that
+    // always errors would be worse than not offering one.
+    if (finding.severity === "warning") {
+      const ignore = element("button", undefined, "Ignore");
+      ignore.addEventListener("click", () => decide({ status: "ignored" }));
+      form.append(ignore);
+    }
+    form.append(clear, error);
     node.append(form);
-    node.append(this.renderEffects(spec));
+    node.append(this.renderEffects(spec, finding.severity));
   }
 
   /**
@@ -611,13 +689,14 @@ export class ReviewPanel {
    * blockers should never have to guess whether "Remove this movement" means the
    * turn stops existing.
    */
-  private renderEffects(spec: ControlSpec): HTMLElement {
+  private renderEffects(spec: ControlSpec, severity: Finding["severity"]): HTMLElement {
     const box = element("dl", "effects");
     definitionRow(box, spec.acceptLabel, spec.acceptEffect);
     if (spec.overrideLabel && spec.overrideEffect) {
       definitionRow(box, spec.overrideLabel, spec.overrideEffect);
     }
     definitionRow(box, "Not applicable", NOT_APPLICABLE_EFFECT);
+    if (severity === "warning") definitionRow(box, "Ignore", IGNORE_EFFECT);
     definitionRow(box, "Clear decision", CLEAR_EFFECT);
     return box;
   }

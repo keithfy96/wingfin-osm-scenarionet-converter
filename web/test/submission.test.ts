@@ -29,9 +29,18 @@ describe("parsing a submission", () => {
   });
 
   it("rejects a future submission_version rather than guessing at its shape", () => {
-    expect(() => parseSubmission(JSON.stringify({ ...valid, submission_version: 3 }))).toThrow(
+    expect(() => parseSubmission(JSON.stringify({ ...valid, submission_version: 4 }))).toThrow(
       SubmissionError,
     );
+  });
+
+  it("accepts an ignored decision, which only version 3 can carry", () => {
+    const ignored = {
+      ...valid,
+      submission_version: 3,
+      decisions: [{ ...valid.decisions[0], status: "ignored" }],
+    };
+    expect(parseSubmission(JSON.stringify(ignored)).decisions[0]?.status).toBe("ignored");
   });
 
   it("still accepts a version 1 export, which is version 2 without locations", () => {

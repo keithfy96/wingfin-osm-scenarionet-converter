@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { CLEAR_EFFECT, controlFor, NOT_APPLICABLE_EFFECT } from "../src/controls.js";
+import {
+  CLEAR_EFFECT,
+  controlFor,
+  IGNORE_EFFECT,
+  NOT_APPLICABLE_EFFECT,
+} from "../src/controls.js";
 import { finding } from "./fixtures.js";
 
 const RULES = [
@@ -52,5 +57,11 @@ describe("control specs", () => {
   it("explains the two buttons every rule shares", () => {
     expect(NOT_APPLICABLE_EFFECT).toBeTruthy();
     expect(CLEAR_EFFECT).toContain("blocks export");
+  });
+
+  it("says an ignored finding was never judged, not that it was accepted", () => {
+    // The distinction is the whole reason `ignored` is its own status.
+    expect(IGNORE_EFFECT).toContain("unjudged");
+    expect(IGNORE_EFFECT).toContain("nobody decided it");
   });
 });

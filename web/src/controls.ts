@@ -176,6 +176,10 @@ const FALLBACK: ControlSpec = {
 export const NOT_APPLICABLE_EFFECT =
   "Says the finding itself is wrong, not the value. The reason is kept in the audit record.";
 export const CLEAR_EFFECT = "Returns this finding to unresolved, which blocks export.";
+/** Warnings only — a blocking finding cannot be set aside. */
+export const IGNORE_EFFECT =
+  "Sets it aside unjudged: the generator's proposal stands, and the record says " +
+  "nobody decided it. Hidden from the queue until you filter for Ignored.";
 
 export function controlFor(finding: Finding): ControlSpec {
   return SPECS[finding.rule] ?? FALLBACK;

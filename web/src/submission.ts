@@ -4,7 +4,13 @@ import type { Decision, ReviewIdentity, ReviewSubmission } from "./types.js";
 
 export class SubmissionError extends Error {}
 
-const STATUSES = new Set(["unresolved", "accepted", "overridden", "not_applicable"]);
+const STATUSES = new Set([
+  "unresolved",
+  "accepted",
+  "overridden",
+  "not_applicable",
+  "ignored",
+]);
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new SubmissionError(message);
@@ -19,11 +25,12 @@ export function parseSubmission(raw: string): ReviewSubmission {
   }
   const candidate = parsed as Partial<ReviewSubmission>;
   assert(candidate && typeof candidate === "object", "File is not a review submission.");
-  // A version 1 file is a version 2 file without per-decision locations. The
-  // decision content is identical, so an older review still loads.
+  // A version 1 file is a version 2 file without per-decision locations, and a
+  // version 2 file is a version 3 file that cannot contain `ignored`. Older reviews
+  // still load; the version is what stops a newer one being read by older rules.
   assert(
-    candidate.submission_version === 1 || candidate.submission_version === 2,
-    `Unsupported submission_version ${String(candidate.submission_version)}; expected 1 or 2.`,
+    [1, 2, 3].includes(candidate.submission_version as number),
+    `Unsupported submission_version ${String(candidate.submission_version)}; expected 1, 2 or 3.`,
   );
   assert(candidate.identity && typeof candidate.identity === "object", "Submission has no identity.");
   assert(Array.isArray(candidate.decisions), "Submission has no decisions array.");

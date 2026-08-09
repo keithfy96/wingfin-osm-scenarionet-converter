@@ -100,10 +100,20 @@ export interface ReviewPayload {
 }
 
 /**
- * Terminal states the plan allows for a blocking finding. `unresolved` prevents
- * export; every blocker must reach one of the other three.
+ * `unresolved` prevents promotion; a blocker must reach `accepted`, `overridden` or
+ * `not_applicable`.
+ *
+ * `ignored` is deliberately none of those. It means a valid finding was set aside
+ * unjudged and the generator's proposal stands — the same map as accepting the
+ * default, but not the same record, because no judgement was made. It is permitted
+ * on warnings only.
  */
-export type DecisionStatus = "unresolved" | "accepted" | "overridden" | "not_applicable";
+export type DecisionStatus =
+  | "unresolved"
+  | "accepted"
+  | "overridden"
+  | "not_applicable"
+  | "ignored";
 
 export interface Decision {
   finding_id: string;
@@ -132,15 +142,21 @@ export interface Decision {
 
 export interface Readiness {
   total: number;
+  /** Judged: accepted, overridden or not applicable. Ignored findings are not. */
   resolved: number;
+  ignored: number;
   blockers_total: number;
   blockers_unresolved: number;
   ready: boolean;
 }
 
 export interface ReviewSubmission {
-  /** 2 adds per-decision location; a version 1 file is one without it. */
-  submission_version: 1 | 2;
+  /**
+   * 2 adds per-decision location; 3 adds the `ignored` status. A reader written
+   * against 2 knows four statuses and would mishandle a fifth, so the bump is what
+   * tells it to stop rather than guess.
+   */
+  submission_version: 1 | 2 | 3;
   exported_at: string;
   identity: ReviewIdentity;
   decisions: Decision[];
