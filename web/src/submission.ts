@@ -19,9 +19,11 @@ export function parseSubmission(raw: string): ReviewSubmission {
   }
   const candidate = parsed as Partial<ReviewSubmission>;
   assert(candidate && typeof candidate === "object", "File is not a review submission.");
+  // A version 1 file is a version 2 file without per-decision locations. The
+  // decision content is identical, so an older review still loads.
   assert(
-    candidate.submission_version === 1,
-    `Unsupported submission_version ${String(candidate.submission_version)}; expected 1.`,
+    candidate.submission_version === 1 || candidate.submission_version === 2,
+    `Unsupported submission_version ${String(candidate.submission_version)}; expected 1 or 2.`,
   );
   assert(candidate.identity && typeof candidate.identity === "object", "Submission has no identity.");
   assert(Array.isArray(candidate.decisions), "Submission has no decisions array.");

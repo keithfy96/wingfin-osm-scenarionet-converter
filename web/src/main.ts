@@ -5,7 +5,13 @@ import styles from "./style.css";
 import { buildPopup, FeatureIndex } from "./details.js";
 import { buildOverlays, clearFocus, focusFeatures, type OverlayIndex } from "./overlays.js";
 import { ReviewPanel } from "./panel.js";
-import { clearDraft, debounce, loadDraft, saveDraft } from "./persistence.js";
+import {
+  clearDraft,
+  debounce,
+  findRecoverableDrafts,
+  loadDraft,
+  saveDraft,
+} from "./persistence.js";
 import { ReviewState } from "./state.js";
 import { compareIdentity, parseSubmission, serializeSubmission, SubmissionError } from "./submission.js";
 import type { Finding, ReviewPayload } from "./types.js";
@@ -96,12 +102,28 @@ function boot(): void {
 
   const exportButton = document.createElement("button");
   exportButton.className = "primary";
-  exportButton.textContent = "Export review.json";
+  // An unfinished review is exportable, but never under a name that hides it. The
+  // label and the filename both change with readiness, so neither the click nor the
+  // file on disk can be mistaken for a finished review.
+  const syncExportLabel = (): void => {
+    exportButton.textContent = state.readiness().ready
+      ? "Export review.json"
+      : "Export partial review";
+  };
+  syncExportLabel();
+  state.subscribe(syncExportLabel);
+
   exportButton.addEventListener("click", () => {
     try {
       const submission = state.toSubmission();
-      download("review.json", serializeSubmission(submission));
-      draftStatus.textContent = "Exported. Pass this file to `osm-scenario apply-review`.";
+      const ready = submission.readiness.ready;
+      download(ready ? "review.json" : "review.partial.json", serializeSubmission(submission));
+      draftStatus.textContent = ready
+        ? "Exported review.json. Pass this file to `osm-scenario apply-review`."
+        : `Exported review.partial.json — ${submission.readiness.resolved} of ` +
+          `${submission.readiness.total} findings decided, ` +
+          `${submission.readiness.blockers_unresolved} blocker(s) still unresolved. ` +
+          "Stage 4 will refuse it until they are resolved.";
     } catch (caught) {
       draftStatus.textContent = caught instanceof Error ? caught.message : String(caught);
     }
@@ -162,7 +184,21 @@ function boot(): void {
     const summary = state.loadDecisions(draft.decisions);
     draftStatus.textContent = `Restored ${summary.carried} decision(s) from a local draft saved ${draft.saved_at}.`;
   } else {
-    draftStatus.textContent = "No local draft yet. Decisions autosave to this browser as you work.";
+    // Nothing for this generation. A draft from an earlier one is still this map's
+    // work, so it is offered back rather than left stranded by a regenerate — but
+    // through loadDecisions, which drops anything whose evidence has moved.
+    const [recoverable] = findRecoverableDrafts(window.localStorage, payload.identity);
+    if (recoverable) {
+      const summary = state.loadDecisions(recoverable.decisions);
+      draftStatus.textContent =
+        `Recovered a draft saved ${recoverable.saved_at}, from an earlier generation of ` +
+        `this map: ${summary.carried} decision(s) carried over, ` +
+        `${summary.invalidated} invalidated by changed evidence, ` +
+        `${summary.unknown} for findings that no longer exist.`;
+    } else {
+      draftStatus.textContent =
+        "No local draft yet. Every decision autosaves to this browser as you make it.";
+    }
   }
 }
 

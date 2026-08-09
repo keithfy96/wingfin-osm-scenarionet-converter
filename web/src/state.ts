@@ -94,6 +94,11 @@ export class ReviewState {
       status: input.status,
       decided_at: this.clock(),
       evidence_checksum: finding.evidence_checksum,
+      // Copied from the finding so an exported review can be lined up against a GPS
+      // track on its own, without preliminary.json beside it.
+      location: finding.location,
+      source_type: finding.source_type,
+      source_ids: finding.source_ids,
     };
     if (input.value !== undefined) decision.value = input.value;
     if (input.reason !== undefined && input.reason.trim()) decision.reason = input.reason.trim();
@@ -139,15 +144,18 @@ export class ReviewState {
     };
   }
 
+  /**
+   * The review as an exportable submission, finished or not.
+   *
+   * An unfinished review exports with `readiness.ready` false. Refusing to write the
+   * file at all was a second gate on top of Stage 4, which is the authoritative
+   * promotion gate and already rejects unresolved blockers; all the extra strictness
+   * bought was stranding a reviewer's work in browser storage.
+   */
   toSubmission(): ReviewSubmission {
     const readiness = this.readiness();
-    if (!readiness.ready) {
-      throw new DecisionError(
-        `${readiness.blockers_unresolved} blocking finding(s) are still unresolved.`,
-      );
-    }
     return {
-      submission_version: 1,
+      submission_version: 2,
       exported_at: this.clock(),
       identity: this.identity,
       decisions: this.allDecisions(),

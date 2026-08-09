@@ -120,6 +120,30 @@ he had clicked.
 - Not covered by a test: the panel is DOM-bound and the client test setup has no DOM
   environment. `applyFilters` (the pure part) is tested; the rendering rules are not.
 
+## Follow-up — every button states what it does
+
+Keith asked what accepting or rejecting a movement actually means. The UI never said.
+
+- `ControlSpec` gained `acceptEffect` / `overrideEffect`, filled for all nine rules and
+  the fallback, plus two shared constants for "Not applicable" and "Clear decision".
+  The detail pane renders them as an always-visible block under the buttons.
+- `ambiguous_connector` was the rule that prompted the question and read worst:
+  "Accept movement" / "Reject movement" became "Keep this movement" / "Remove this
+  movement", and the question now asks whether the movement should exist at all.
+- The sentences say *where* a decision lands, because it differs per rule: connector
+  selection, signal association and stop-line placement stay non-OSM overrides in
+  `review/review.json`, while speed, width, lane counts, turn tags and restrictions
+  are written into `review/reviewed.osm` and regenerated from.
+- New `web/test/controls.test.ts`: every rule states an accept effect, an override
+  effect exists exactly when an override button does, and an unknown rule falls back
+  to a spec that still states its effect.
+- Client tests 33 passed (5 new). All 7 rules present in junction-1 verified against
+  the shipped bundle.
+
+**These sentences are a contract, not observed behaviour.** They restate Stage 4 in
+`docs/implementation-plan/README.md`, and `apply-review` does not exist yet. Whoever
+builds Stage 4 has to keep `controls.ts` in step with what it actually does.
+
 ## Not Written
 
 - No `docs/mapping-algo-changes/` entry. CLAUDE.md Section B criterion 2 asks for a

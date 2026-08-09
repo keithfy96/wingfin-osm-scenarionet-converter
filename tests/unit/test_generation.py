@@ -19,6 +19,7 @@ from osm_scenario.generation import (
     _carries_whole_carriageway,
     _direction_arrow,
     _directional_lane_count,
+    _finding,
     _is_decision_node,
     _lane_offset,
     _mapped_lane_index,
@@ -785,6 +786,81 @@ def test_lane_model_rejects_numeric_identifier() -> None:
                 "lanes": [{"identifier": 9007199254740993}],
             }
         )
+
+
+def test_findings_carry_the_wgs84_geometry_they_came_from(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    generate_lane_model(workspace=workspace, config=ConverterConfig(config_version=1))
+    model = PreliminaryLaneModel.model_validate_json(
+        (workspace / "lane-model" / "preliminary.json").read_bytes()
+    )
+    located = [finding for finding in model.findings if finding.location is not None]
+    assert located, "findings sourced from OSM ways and nodes must be placeable"
+
+    # tiny.osm states its coordinates as literals, so these are exact, not approximate.
+    # Way 10 runs nodes 1..4 and a way-sourced finding copies them in that order.
+    way_sourced = next(
+        finding
+        for finding in located
+        if finding.source_type == "way" and finding.source_ids == ["10"]
+    )
+    location = way_sourced.location
+    assert location is not None
+    assert [source.ref for source in location.sources] == ["way:10"]
+    assert [(point.lat, point.lon) for point in location.sources[0].coordinates] == [
+        (3.1500, 101.7000),
+        (3.1501, 101.7001),
+        (3.1502, 101.7002),
+        (3.1503, 101.7003),
+    ]
+
+    node_sourced = next(
+        (finding for finding in located if finding.source_type == "node"), None
+    )
+    if node_sourced is not None:
+        assert node_sourced.location is not None
+        assert len(node_sourced.location.sources) == 1
+        assert len(node_sourced.location.sources[0].coordinates) == 1
+
+    for finding in located:
+        place = finding.location
+        assert place is not None
+        points = [point for source in place.sources for point in source.coordinates]
+        minimum_lon, minimum_lat, maximum_lon, maximum_lat = place.bbox
+        assert all(minimum_lon <= point.lon <= maximum_lon for point in points)
+        assert all(minimum_lat <= point.lat <= maximum_lat for point in points)
+        # The point is one the way actually passes through; a bbox centre can sit off
+        # the road entirely where a way bends.
+        assert any(
+            point.lat == place.lat and point.lon == place.lon for point in points
+        )
+
+
+def test_a_location_never_reaches_the_evidence_a_decision_was_made_against(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    generate_lane_model(workspace=workspace, config=ConverterConfig(config_version=1))
+    model = PreliminaryLaneModel.model_validate_json(
+        (workspace / "lane-model" / "preliminary.json").read_bytes()
+    )
+    finding = next(item for item in model.findings if item.location is not None)
+
+    # A review recorded before findings had coordinates must survive regeneration.
+    # Rebuilding the same finding without its location must not move the checksum.
+    rebuilt = _finding(
+        rule=finding.rule,
+        severity=finding.severity,
+        source_type=finding.source_type,
+        source_ids=finding.source_ids,
+        affected_feature_ids=finding.affected_feature_ids,
+        proposed_value=finding.proposed_value,
+        confidence=finding.confidence,
+        reason=finding.reason,
+    )
+    assert rebuilt.location is None
+    assert rebuilt.evidence_checksum == finding.evidence_checksum
+    assert rebuilt.identifier == finding.identifier
 
 
 def test_generate_lane_model_writes_deterministic_stage_2_artifacts(tmp_path: Path) -> None:

@@ -18,7 +18,10 @@ from osm_scenario.config import ConverterConfig
 from osm_scenario.ids import deterministic_id
 from osm_scenario.lane_model import (
     ConnectorFeature,
+    FindingLocation,
+    FindingSource,
     GenerationMetadata,
+    GeoPoint,
     LaneBoundary,
     LaneFeature,
     Point2D,
@@ -44,8 +47,8 @@ from osm_scenario.topology import (
     via_way_resolution,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v13"
-LANE_MODEL_SCHEMA_VERSION = 2
+GENERATOR_VERSION = "direct-osm-stage2-v14"
+LANE_MODEL_SCHEMA_VERSION = 3
 
 # One outgoing carriageway at a node: its OSM way and the directed edge it leaves on.
 GroupKey = tuple[str, tuple[str, ...]]
@@ -552,6 +555,86 @@ def _unproven_sharp_movement(
     )
 
 
+def _source_refs(finding: ReviewFinding, snapshot: OsmSnapshot) -> tuple[set[str], set[str]]:
+    """The OSM ways and nodes a finding points at.
+
+    A relation carries no geometry of its own, so it contributes its member ways and
+    nodes instead. Shared by the review payload and the finding location, so the two
+    can never disagree about what a finding refers to.
+    """
+    ways: set[str] = set()
+    nodes: set[str] = set()
+    for identifier in finding.source_ids:
+        if finding.source_type == "way":
+            ways.add(identifier)
+        elif finding.source_type == "node":
+            nodes.add(identifier)
+        elif finding.source_type == "relation":
+            relation = snapshot.relations.get(identifier)
+            for member in relation.members if relation else ():
+                if member.member_type == "way":
+                    ways.add(member.reference)
+                elif member.member_type == "node":
+                    nodes.add(member.reference)
+    return ways, nodes
+
+
+def _finding_location(finding: ReviewFinding, snapshot: OsmSnapshot) -> FindingLocation | None:
+    """Where a finding is, in WGS84, with the referenced geometry copied in.
+
+    OSM node positions are already WGS84, so this is a lookup and not a projection —
+    the projected CRS the lane geometry uses never enters into it.
+
+    The representative point is the middle node of the longest source polyline. It
+    therefore always lies on real geometry, where the centre of the bounding box can
+    fall off the road entirely on an L-shaped or curved way.
+
+    Returns `None` when nothing resolves — a `source_type` of `edge` names graph
+    edges, which have no OSM geometry, and a fabricated point would be worse than
+    none for anything matching these against recorded positions.
+    """
+    ways, nodes = _source_refs(finding, snapshot)
+    sources: list[FindingSource] = []
+    for way_id in sorted(ways):
+        way = snapshot.ways.get(way_id)
+        if way is None:
+            continue
+        points = [
+            GeoPoint(lat=node.latitude, lon=node.longitude)
+            for node in (snapshot.nodes.get(reference) for reference in way.node_ids)
+            if node is not None
+        ]
+        if points:
+            sources.append(FindingSource(ref=f"way:{way_id}", coordinates=points))
+    for node_id in sorted(nodes):
+        node = snapshot.nodes.get(node_id)
+        if node is None:
+            continue
+        sources.append(
+            FindingSource(
+                ref=f"node:{node_id}",
+                coordinates=[GeoPoint(lat=node.latitude, lon=node.longitude)],
+            )
+        )
+    if not sources:
+        return None
+
+    every = [point for source in sources for point in source.coordinates]
+    anchor = max(sources, key=lambda source: len(source.coordinates)).coordinates
+    middle = anchor[len(anchor) // 2]
+    return FindingLocation(
+        lat=middle.lat,
+        lon=middle.lon,
+        bbox=[
+            min(point.lon for point in every),
+            min(point.lat for point in every),
+            max(point.lon for point in every),
+            max(point.lat for point in every),
+        ],
+        sources=sources,
+    )
+
+
 # The angle band where `classify_movement` is choosing between through and a turn.
 # A movement landing inside it is reported rather than asserted.
 _BORDERLINE_TURN_BAND = (30.0, 40.0)
@@ -852,21 +935,7 @@ def build_review_payload(model: PreliminaryLaneModel, snapshot: OsmSnapshot) -> 
     # not merely matched by the queue's text search. Relations carry no geometry of
     # their own, so they contribute their member ways and nodes instead.
     def source_refs(finding: ReviewFinding) -> tuple[set[str], set[str]]:
-        ways: set[str] = set()
-        nodes: set[str] = set()
-        for identifier in finding.source_ids:
-            if finding.source_type == "way":
-                ways.add(identifier)
-            elif finding.source_type == "node":
-                nodes.add(identifier)
-            else:
-                relation = snapshot.relations.get(identifier)
-                for member in relation.members if relation else ():
-                    if member.member_type == "way":
-                        ways.add(member.reference)
-                    elif member.member_type == "node":
-                        nodes.add(member.reference)
-        return ways, nodes
+        return _source_refs(finding, snapshot)
 
     source_way_ids = set(lanes_by_way)
     source_node_ids = {connector.junction_node_id for connector in model.connectors}
@@ -1710,6 +1779,12 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
         generation_fingerprint=fingerprint,
         coordinate_system_wkt=manifest["stage_1b"]["projection"]["local_crs_wkt"],
     )
+    # After every finding exists and, critically, after each one's evidence checksum
+    # was computed: location is derived from `source_ids`, which the checksum already
+    # covers, so keeping it out leaves decisions made before this field still valid.
+    for finding in findings:
+        finding.location = _finding_location(finding, snapshot)
+
     model = PreliminaryLaneModel(
         metadata=metadata,
         lanes=lanes,

@@ -12,6 +12,29 @@ export interface ReviewIdentity {
   generated_at: string;
 }
 
+/** A WGS84 position. Named keys so a GPS join cannot silently transpose them. */
+export interface GeoPoint {
+  lat: number;
+  lon: number;
+}
+
+/** One OSM feature a finding came from, with its geometry copied in. */
+export interface FindingSource {
+  /** `way:<id>` or `node:<id>`. */
+  ref: string;
+  coordinates: GeoPoint[];
+}
+
+/** Where a finding is, for matching against externally recorded positions. */
+export interface FindingLocation {
+  coordinate_system: "EPSG:4326";
+  lat: number;
+  lon: number;
+  /** [min_lon, min_lat, max_lon, max_lat] — a way-scoped finding has real extent. */
+  bbox: number[];
+  sources: FindingSource[];
+}
+
 export interface Finding {
   identifier: string;
   rule: string;
@@ -29,6 +52,8 @@ export interface Finding {
   evidence_checksum: string;
   /** Road class of the first affected lane, for bulk scoping. Null when unknown. */
   road_class: string | null;
+  /** Null when the source is a graph edge, which has no OSM geometry to resolve. */
+  location: FindingLocation | null;
 }
 
 export interface LaneSummary {
@@ -95,6 +120,14 @@ export interface Decision {
    * than silently reusing it.
    */
   evidence_checksum: string;
+  /**
+   * Copied from the finding so an exported review stands on its own against a GPS
+   * track, without needing preliminary.json beside it. Absent in files exported
+   * before submission_version 2.
+   */
+  location?: FindingLocation | null;
+  source_type?: string;
+  source_ids?: string[];
 }
 
 export interface Readiness {
@@ -106,7 +139,8 @@ export interface Readiness {
 }
 
 export interface ReviewSubmission {
-  submission_version: 1;
+  /** 2 adds per-decision location; a version 1 file is one without it. */
+  submission_version: 1 | 2;
   exported_at: string;
   identity: ReviewIdentity;
   decisions: Decision[];

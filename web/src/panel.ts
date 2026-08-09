@@ -1,7 +1,14 @@
 // The review side panel: filters, the finding queue, and the structured controls
 // that turn a finding into a decision.
 
-import { controlFor, supportsBulk, type OverrideField } from "./controls.js";
+import {
+  CLEAR_EFFECT,
+  controlFor,
+  NOT_APPLICABLE_EFFECT,
+  supportsBulk,
+  type ControlSpec,
+  type OverrideField,
+} from "./controls.js";
 import type { FeatureIndex } from "./details.js";
 import { chip, definitionRow, element } from "./dom.js";
 import { DecisionError, type ReviewState } from "./state.js";
@@ -494,6 +501,15 @@ export class ReviewPanel {
     if (ends.exit.length) {
       definitionRow(evidence, "Exit lane", this.chipRow(ends.exit, undefined, "exit"));
     }
+    if (finding.location) {
+      // Shown so a coordinate can be checked against external footage without
+      // opening the JSON. Six decimals is roughly 0.1 m — finer is noise here.
+      definitionRow(
+        evidence,
+        "Location",
+        `${finding.location.lat.toFixed(6)}, ${finding.location.lon.toFixed(6)}`,
+      );
+    }
     definitionRow(evidence, "Proposed", JSON.stringify(finding.proposed_value));
     definitionRow(evidence, "State", STATUS_LABEL[status]);
     node.append(evidence);
@@ -558,5 +574,24 @@ export class ReviewPanel {
 
     form.append(reason, notApplicable, clear, error);
     node.append(form);
+    node.append(this.renderEffects(spec));
+  }
+
+  /**
+   * What each button actually does to the reviewed map.
+   *
+   * Always visible rather than behind a tooltip: a reviewer working through 138
+   * blockers should never have to guess whether "Remove this movement" means the
+   * turn stops existing.
+   */
+  private renderEffects(spec: ControlSpec): HTMLElement {
+    const box = element("dl", "effects");
+    definitionRow(box, spec.acceptLabel, spec.acceptEffect);
+    if (spec.overrideLabel && spec.overrideEffect) {
+      definitionRow(box, spec.overrideLabel, spec.overrideEffect);
+    }
+    definitionRow(box, "Not applicable", NOT_APPLICABLE_EFFECT);
+    definitionRow(box, "Clear decision", CLEAR_EFFECT);
+    return box;
   }
 }

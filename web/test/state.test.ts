@@ -13,12 +13,17 @@ describe("recording a decision", () => {
   it("keeps the evidence checksum the decision was made against", () => {
     const review = state();
     review.decide("f1", { status: "accepted" });
+    // Compared whole rather than field by field, so a field added to a decision
+    // has to be a deliberate change here too.
     expect(review.decision("f1")).toEqual({
       finding_id: "f1",
       rule: "speed_default",
       status: "accepted",
       decided_at: clock(),
       evidence_checksum: "evidence-1",
+      location: finding().location,
+      source_type: "way",
+      source_ids: ["776021091"],
     });
   });
 
@@ -77,11 +82,31 @@ describe("readiness", () => {
       finding({ identifier: "b", severity: "blocker", rule: "ambiguous_connector" }),
     ]);
     expect(review.readiness()).toMatchObject({ blockers_unresolved: 1, ready: false });
-    expect(() => review.toSubmission()).toThrow(DecisionError);
+
+    // An unfinished review still exports, carrying the truth about how unfinished it
+    // is. Stage 4 is the promotion gate; refusing to write the file only stranded
+    // work that the reviewer had already done.
+    const partial = review.toSubmission();
+    expect(partial.readiness.ready).toBe(false);
+    expect(partial.readiness.blockers_unresolved).toBe(1);
+    expect(partial.decisions).toEqual([]);
 
     review.decide("b", { status: "accepted" });
     expect(review.readiness()).toMatchObject({ blockers_unresolved: 0, ready: true });
     expect(review.toSubmission().decisions).toHaveLength(1);
+  });
+
+  it("carries the finding's location onto the decision it exports", () => {
+    // The exported answers are joined against a GPS track on their own, so they have
+    // to place themselves rather than sending the reader back to preliminary.json.
+    const located = finding({ identifier: "b", severity: "blocker" });
+    const review = state([located]);
+    review.decide("b", { status: "accepted" });
+
+    const submission = review.toSubmission();
+    expect(submission.submission_version).toBe(2);
+    expect(submission.decisions[0]?.location).toEqual(located.location);
+    expect(submission.decisions[0]?.source_ids).toEqual(located.source_ids);
   });
 });
 

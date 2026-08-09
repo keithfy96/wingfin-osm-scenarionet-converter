@@ -11,6 +11,9 @@ export interface DraftStore {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
   removeItem(key: string): void;
+  /** Enumeration, for finding drafts left behind by an earlier generation. */
+  readonly length: number;
+  key(index: number): string | null;
 }
 
 export interface Draft {
@@ -59,6 +62,39 @@ export function loadDraft(store: DraftStore, identity: ReviewIdentity): Draft | 
 
 export function clearDraft(store: DraftStore, identity: ReviewIdentity): void {
   store.removeItem(draftKey(identity));
+}
+
+/**
+ * Drafts left behind by an earlier generation of the same map, newest first.
+ *
+ * Regenerating moves the generation fingerprint, which is part of the draft key, so
+ * a review in progress silently stops being offered. That is not a reason to widen
+ * the key: a draft from a different generation genuinely is a draft about different
+ * geometry. It is a reason to offer it back, through the same evidence-checksum
+ * migration an imported review goes through, so nothing is restored blindly.
+ *
+ * The workspace and the source checksum still have to match exactly. A different
+ * source OSM is a different map, not a stale draft of this one.
+ */
+export function findRecoverableDrafts(store: DraftStore, identity: ReviewIdentity): Draft[] {
+  const current = draftKey(identity);
+  const prefix = [PREFIX, identity.workspace, identity.source_checksum, ""].join("|");
+  const drafts: Draft[] = [];
+  for (let index = 0; index < store.length; index += 1) {
+    const key = store.key(index);
+    if (key === null || key === current || !key.startsWith(prefix)) continue;
+    const raw = store.getItem(key);
+    if (raw === null) continue;
+    try {
+      const parsed = JSON.parse(raw) as Draft;
+      if (parsed && Array.isArray(parsed.decisions) && parsed.decisions.length) {
+        drafts.push(parsed);
+      }
+    } catch {
+      // A corrupt leftover is not worth reporting; it was never authoritative.
+    }
+  }
+  return drafts.sort((a, b) => b.saved_at.localeCompare(a.saved_at));
 }
 
 /** Coalesce rapid decision changes into one write. */

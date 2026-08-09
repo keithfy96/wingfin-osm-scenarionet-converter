@@ -14,6 +14,47 @@ class Point2D(BaseModel):
     y: float
 
 
+class GeoPoint(BaseModel):
+    """A WGS84 position.
+
+    Named keys rather than a `[lon, lat]` pair: these are joined against GPS tracks
+    from drive footage, where a silent transposition is both easy and expensive.
+    Distinct from :class:`Point2D`, which is the projected CRS the geometry uses.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    lat: float
+    lon: float
+
+
+class FindingSource(BaseModel):
+    """One OSM feature a finding came from, with its geometry copied in.
+
+    Copied rather than referenced by id so a single finding is enough to place it on
+    a map, at the cost of repeating a way's nodes across the findings that share it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    ref: str
+    coordinates: list[GeoPoint]
+
+
+class FindingLocation(BaseModel):
+    """Where a finding is, for matching against externally recorded positions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    coordinate_system: Literal["EPSG:4326"] = "EPSG:4326"
+    lat: float
+    lon: float
+    # [min_lon, min_lat, max_lon, max_lat]. A way-scoped finding covers a length of
+    # road, so its extent has to be stated rather than implied by the point.
+    bbox: list[float]
+    sources: list[FindingSource]
+
+
 class LaneBoundary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -108,6 +149,11 @@ class ReviewFinding(BaseModel):
     confidence: Literal["high", "medium", "low"]
     reason: str
     evidence_checksum: str
+    # Assigned after `evidence_checksum` is computed, and deliberately absent from it:
+    # location is derived from `source_ids`, which the checksum already covers, so a
+    # decision made before this field existed stays valid. `None` when `source_type`
+    # is `edge`, whose ids name graph edges with no OSM geometry to resolve.
+    location: FindingLocation | None = None
 
 
 class GenerationMetadata(BaseModel):
