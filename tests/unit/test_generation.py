@@ -45,6 +45,7 @@ from osm_scenario.lane_model import (
     ReviewFinding,
 )
 from osm_scenario.normalization import normalize_workspace
+from osm_scenario.osm_source import read_osm_snapshot
 from osm_scenario.topology import MovementCandidate
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "osm" / "tiny.osm"
@@ -1290,6 +1291,29 @@ def test_generate_lane_model_writes_deterministic_stage_2_artifacts(tmp_path: Pa
     mapped = [f for f in payload["findings"] if f["source_geometry_ids"]]
     assert mapped
     assert all(key in source_keys for f in mapped for key in f["source_geometry_ids"])
+
+    # Searching an OSM id must highlight it even when Stage 2 drew nothing from it —
+    # that is the case a reviewer is checking when the id produced no geometry, and it
+    # used to highlight nothing and say nothing. So the index covers the whole snapshot,
+    # not just the ways lanes came from and the nodes movements were built at.
+    snapshot = read_osm_snapshot(workspace / "source" / "map.osm")
+    index = payload["search_index"]
+    drawable = {way_id for way_id, way in snapshot.ways.items() if len(way.node_ids) >= 2}
+    assert set(index["ways"]) == drawable
+    assert set(index["nodes"]) == set(snapshot.nodes)
+    assert {f"way:{key}" for key in index["ways"]} | {
+        f"node:{key}" for key in index["nodes"]
+    } >= source_keys
+    undrawn = {f"way:{key}" for key in index["ways"]} - source_keys
+    assert undrawn, "fixture must keep a way Stage 2 drew nothing from, or this proves nothing"
+    assert all(len(way["line"]) >= 2 for way in index["ways"].values())
+    assert all(len(node["point"]) == 2 for node in index["nodes"].values())
+    # The highlight is drawn into its own pane rather than restyling the layer already
+    # on the map: source ways sit at the bottom of the z-order, so a restyled way went
+    # yellow underneath the lane and connector geometry covering it.
+    assert "createPane('focus')" in html and "function drawFocus" in html
+    # An id that matches nothing has to say so; silence reads as a typo.
+    assert "in source/map.osm" in html
     report = json.loads(report_path.read_text())
     assert report["feature_counts"]["connectors"] == len(first.connectors)
     assert report["feature_counts"]["stop_lines"] == len(first.stop_lines)
