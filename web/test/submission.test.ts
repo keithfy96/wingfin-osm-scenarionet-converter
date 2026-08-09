@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { clearDraft, draftKey, loadDraft, saveDraft } from "../src/persistence.js";
 import { ReviewState } from "../src/state.js";
 import { compareIdentity, parseSubmission, serializeSubmission, SubmissionError } from "../src/submission.js";
-import { finding, IDENTITY, memoryStore, payload } from "./fixtures.js";
+import { finding, IDENTITY, payload } from "./fixtures.js";
 
 const clock = () => "2026-08-08T12:00:00+00:00";
 
@@ -117,29 +116,3 @@ describe("round trip", () => {
   });
 });
 
-describe("draft persistence", () => {
-  it("keys on workspace, source checksum and generation fingerprint together", () => {
-    const other = { ...IDENTITY, generation_fingerprint: "fingerprint-bbb" };
-    expect(draftKey(IDENTITY)).not.toBe(draftKey(other));
-  });
-
-  it("does not offer a draft saved against a different generation", () => {
-    const store = memoryStore();
-    saveDraft(store, IDENTITY, [], clock);
-    expect(loadDraft(store, IDENTITY)).not.toBeNull();
-    expect(loadDraft(store, { ...IDENTITY, generation_fingerprint: "fingerprint-bbb" })).toBeNull();
-  });
-
-  it("drops a corrupt draft instead of blocking the review", () => {
-    const store = memoryStore();
-    store.setItem(draftKey(IDENTITY), "{not json");
-    expect(loadDraft(store, IDENTITY)).toBeNull();
-  });
-
-  it("clears on request", () => {
-    const store = memoryStore();
-    saveDraft(store, IDENTITY, [], clock);
-    clearDraft(store, IDENTITY);
-    expect(loadDraft(store, IDENTITY)).toBeNull();
-  });
-});

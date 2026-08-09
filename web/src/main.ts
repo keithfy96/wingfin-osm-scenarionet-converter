@@ -4,14 +4,8 @@
 import styles from "./style.css";
 import { buildPopup, FeatureIndex } from "./details.js";
 import { buildOverlays, clearFocus, focusFeatures, type OverlayIndex } from "./overlays.js";
+import { purgeLegacyDrafts } from "./legacy-drafts.js";
 import { ReviewPanel } from "./panel.js";
-import {
-  clearDraft,
-  debounce,
-  findRecoverableDrafts,
-  loadDraft,
-  saveDraft,
-} from "./persistence.js";
 import { ReviewState } from "./state.js";
 import { compareIdentity, parseSubmission, serializeSubmission, SubmissionError } from "./submission.js";
 import type { Finding, ReviewPayload } from "./types.js";
@@ -75,11 +69,6 @@ function boot(): void {
   const draftStatus = document.createElement("p");
   draftStatus.className = "draft-status muted";
 
-  const persist = debounce(() => {
-    saveDraft(window.localStorage, payload.identity, state.allDecisions());
-    draftStatus.textContent = `Draft saved locally at ${new Date().toLocaleTimeString()}. Drafts are not authoritative — export to hand to Stage 4.`;
-  }, 400);
-
   panel = new ReviewPanel(app, state, payload, features, {
     onFocus(finding: Finding) {
       clearFocus(index, focused);
@@ -96,7 +85,12 @@ function boot(): void {
     },
     onFocusFeature: focusFeature,
     onChanged() {
-      persist();
+      // Nothing is written anywhere, so the only thing worth saying after a decision
+      // is how much would be lost by closing the tab.
+      const decided = state.allDecisions().length;
+      draftStatus.textContent =
+        `${decided} decision(s) held in this tab only — nothing is saved. ` +
+        "Export before you close it.";
     },
   });
 
@@ -168,38 +162,25 @@ function boot(): void {
 
   const resetButton = document.createElement("button");
   resetButton.className = "ghost";
-  resetButton.textContent = "Reset draft";
+  resetButton.textContent = "Clear all decisions";
   resetButton.addEventListener("click", () => {
-    if (!window.confirm("Discard every decision recorded in this browser?")) return;
+    if (!window.confirm("Discard every decision made in this tab?")) return;
     state.reset();
-    clearDraft(window.localStorage, payload.identity);
-    draftStatus.textContent = "Draft cleared.";
+    draftStatus.textContent = "Cleared. Every finding is back to unresolved.";
   });
 
   toolbar.append(exportButton, importButton, resetButton, importInput, draftStatus);
   app.append(toolbar);
 
-  const draft = loadDraft(window.localStorage, payload.identity);
-  if (draft?.decisions.length) {
-    const summary = state.loadDecisions(draft.decisions);
-    draftStatus.textContent = `Restored ${summary.carried} decision(s) from a local draft saved ${draft.saved_at}.`;
-  } else {
-    // Nothing for this generation. A draft from an earlier one is still this map's
-    // work, so it is offered back rather than left stranded by a regenerate — but
-    // through loadDecisions, which drops anything whose evidence has moved.
-    const [recoverable] = findRecoverableDrafts(window.localStorage, payload.identity);
-    if (recoverable) {
-      const summary = state.loadDecisions(recoverable.decisions);
-      draftStatus.textContent =
-        `Recovered a draft saved ${recoverable.saved_at}, from an earlier generation of ` +
-        `this map: ${summary.carried} decision(s) carried over, ` +
-        `${summary.invalidated} invalidated by changed evidence, ` +
-        `${summary.unknown} for findings that no longer exist.`;
-    } else {
-      draftStatus.textContent =
-        "No local draft yet. Every decision autosaves to this browser as you make it.";
-    }
-  }
+  // The review starts empty, every time. Decisions enter it one of two ways: made
+  // here, or imported from a review.json — never restored from the browser. Older
+  // builds autosaved drafts to localStorage and read them back on boot, which is
+  // how a stale review could reappear over a freshly generated model.
+  const purged = purgeLegacyDrafts(window.localStorage);
+  draftStatus.textContent =
+    `${payload.findings.length} finding(s), none decided. Nothing is saved between ` +
+    "visits — load a review.json to bring decisions in, and export to take them out." +
+    (purged ? ` (Removed ${purged} leftover draft(s) from an older build.)` : "");
 }
 
 if (document.readyState === "loading") {

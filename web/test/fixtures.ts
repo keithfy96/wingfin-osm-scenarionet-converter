@@ -1,4 +1,4 @@
-import type { DraftStore } from "../src/persistence.js";
+import type { DraftStore } from "../src/legacy-drafts.js";
 import type { Finding, ReviewIdentity, ReviewPayload } from "../src/types.js";
 
 export const IDENTITY: ReviewIdentity = {
