@@ -150,7 +150,8 @@ side's lane of the approach, as described under lane-to-lane mapping below.
   there, and the ambiguity it creates is reported rather than resolved.
 - A balanced approach or merge emits no `lane_transition_count_mismatch`. Its
   lanes are apportioned across destinations, not lost, so the count difference
-  across any one destination is not a mismatch.
+  across any one destination is not a mismatch. Since v16 nothing emits that
+  finding on a count difference alone — see below.
 - Generated lane indices run centre-out. Index `0` is the lane against the road
   centreline, the **offside** lane, and index `count - 1` is the lane against the
   kerb, the **nearside** lane. With left-hand traffic the nearside lane is the
@@ -188,8 +189,11 @@ side's lane of the approach, as described under lane-to-lane mapping below.
 - Equal lane counts preserve lane order.
 - Different lane counts use proportional centre-out lane-index mapping when the
   movement carries no side.
-- A lane-count change emits `lane_transition_count_mismatch` because the
-  proportional mapping is an inference that may require Stage 3 review.
+- `lane_transition_count_mismatch` is emitted once every movement is settled,
+  and only where the mapping put **more approach lanes than destination lanes**
+  — several streams of traffic handed one lane. A difference between the two
+  ways' lane counts is not itself a mismatch: two roads meeting at a turn have
+  unrelated widths.
 - Explicit `turn:lanes` permissions then remove incompatible movement
   candidates.
 

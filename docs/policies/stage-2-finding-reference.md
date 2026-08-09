@@ -224,31 +224,41 @@ the node in `source_ids`, connector in `affected_feature_ids`, and proposed
 
 ## `lane_transition_count_mismatch`
 
-**Meaning and current scale.** This warning records a directional continuation
-where incoming and outgoing lane counts differ. The snapshot contains **141
-findings (4.4%) across 78 nodes**. One node can yield multiple findings for
-different source-way/target-way directions. Unordered count pairs are 44
-between one and two lanes, 63 between one and three, 25 between two and three,
-and nine involving four lanes.
+> The counts in this section, like every other count in this file, predate
+> `direct-osm-stage2-v16`, which narrowed the rule to what is described below.
+> Junction-1 emits **one** of these findings under v16, against 19 under v15.
 
-**Trigger, mapping, and unit.** At a direct continuation, Stage 2 maps lane
-order proportionally: when both sides have multiple lanes, source index `i`
-maps to `round(i * (target_count - 1) / (source_count - 1))`; otherwise the
-index is clamped to the available target. This preserves outer positions and
-distributes intermediate lanes centre-out. A finding is emitted once per
-node/source-way/target-way direction when the counts differ. It represents a
-**directional transition**, and its affected IDs contain the source lane and
-the mapped target lane or lanes.
+**Meaning.** This warning records a transition at a node where the lane mapping
+put **more approach lanes than destination lanes** — two or more streams of
+traffic handed the same lane. It is measured from the links that survived, so
+every lane it names is an end of a real movement.
 
-The mapping is deterministic but is not evidence of real merge/split behavior,
-the side on which a lane begins or ends, or lane continuity. It is therefore a
-medium-confidence warning rather than a blocker. Inspect merge direction,
-added or dropped lane side, turn pockets, lane continuity, and whether several
-generated transitions describe one physical change. Accepting approves the
-proportional mapping; rejecting requires a corrected mapping or better source
-evidence. A mismatch is not automatically bad topology. Inspect the proposed
-incoming/outgoing counts and the affected lanes' `lane_index`, `lane_count`,
-neighbors, `entry_lanes`, `exit_lanes`, and source fields.
+**Trigger and unit.** After every movement has been filtered, restored,
+side-resolved and either kept or forbidden, links are grouped by
+`(node, approach edge, destination edge)`. Both kinds count: connectors whose
+status is `active` or `review_required`, and direct continuations. A
+`forbidden` connector is excluded — the movement does not exist. Within a
+group, `feeders` is the count of distinct approach lanes and `landed` the count
+of distinct destination lanes they reach; the finding is emitted when
+`feeders > landed`. The reverse cannot occur, because one approach lane yields
+at most one target per group. `affected_feature_ids` holds the feeders followed
+by the landed lanes, so the highlight and the counts always agree, and
+`proposed_value` carries `incoming_lane_count`, `outgoing_lane_count` and
+`destination_lane_count`.
+
+**What it does not cover.** The rule says nothing about a destination lane that
+no approach reaches. That is lane starvation, tracked separately. Before v16
+the rule compared the *ways'* lane counts rather than the movement's, so a
+one-lane turn peeling off a two-lane road was reported as a "2 to 1 lane
+change" — a statement about two unrelated carriageways. Eighteen of junction-1's
+nineteen findings were of that kind.
+
+The mapping is deterministic but is not evidence of real merge or split
+behaviour, so this stays a medium-confidence warning rather than a blocker.
+Inspect the destination's tagged lane count first: a collapse is usually either
+a genuinely narrower carriageway or a `turn:lanes` value that pushed two lanes
+onto the same side. Accepting approves the mapping; overriding writes a
+corrected outgoing lane count into `reviewed.osm` and the mapping is redone.
 
 ## `inferred_stop_line`
 

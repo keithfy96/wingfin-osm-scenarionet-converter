@@ -21,6 +21,7 @@ from osm_scenario.generation import (
     _directional_lane_count,
     _finding,
     _is_decision_node,
+    _lane_collapse_findings,
     _lane_offset,
     _mapped_lane_index,
     _merge_taper_plan,
@@ -720,6 +721,98 @@ def test_only_an_unambiguous_merge_is_dealt_as_one() -> None:
     assert not _balanced_merge_assignment(
         [road], _groups(_block("30", "n", "c", 2, 0.0)), driving_side="left"
     )
+
+
+def _collapse_lane(identifier: str, edge: list[str], index: int, count: int) -> LaneFeature:
+    return _approach(index, count).model_copy(
+        update={"identifier": identifier, "source_edge": edge, "lane_count": count}
+    )
+
+
+def _collapse_connector(source: str, target: str, status: str = "active") -> ConnectorFeature:
+    return _taper_connector(f"{source}->{target}", source, target, "through", status)
+
+
+def test_a_turn_off_a_wider_road_is_not_a_lane_count_change() -> None:
+    # Persiaran Perdana at node 474929865: two lanes arrive, the kerbside one turns left
+    # into a one-lane carriageway. Comparing the two roads' widths called this "2 to 1";
+    # the movement is one lane into one lane and there is nothing to review.
+    lookup = {
+        "approach_0": _collapse_lane("approach_0", ["a", "n", "0"], 0, 2),
+        "approach_1": _collapse_lane("approach_1", ["a", "n", "0"], 1, 2),
+        "ahead": _collapse_lane("ahead", ["b", "n", "0"], 0, 2),
+        "ahead_kerb": _collapse_lane("ahead_kerb", ["b", "n", "0"], 1, 2),
+        "turn": _collapse_lane("turn", ["c", "n", "0"], 0, 1),
+    }
+    connectors = [
+        _collapse_connector("approach_0", "ahead"),
+        _collapse_connector("approach_1", "ahead_kerb"),
+        _collapse_connector("approach_1", "turn"),
+    ]
+    assert _lane_collapse_findings(connectors, [], lookup) == []
+
+
+def test_two_lanes_landing_on_one_names_every_lane_it_counts() -> None:
+    # Way 756118314 is tagged `turn:lanes=right|right`, so both lanes are labelled
+    # offside and collide on one target, leaving the destination's other lane starved.
+    lookup = {
+        "left_lane": _collapse_lane("left_lane", ["a", "n", "0"], 0, 2),
+        "right_lane": _collapse_lane("right_lane", ["a", "n", "0"], 1, 2),
+        "target": _collapse_lane("target", ["b", "n", "0"], 0, 2),
+        "starved": _collapse_lane("starved", ["b", "n", "0"], 1, 2),
+    }
+    connectors = [
+        _collapse_connector("left_lane", "target"),
+        _collapse_connector("right_lane", "target"),
+    ]
+    (finding,) = _lane_collapse_findings(connectors, [], lookup)
+
+    # The count and the highlight have to agree: every lane the numbers speak for is
+    # named, so a reviewer sees two approach lanes when it says two.
+    assert finding.affected_feature_ids == ["left_lane", "right_lane", "target"]
+    assert finding.proposed_value == {
+        "incoming_lane_count": 2,
+        "outgoing_lane_count": 1,
+        "destination_lane_count": 2,
+    }
+    assert finding.severity == "warning"
+
+
+def test_a_forbidden_movement_cannot_collapse_a_lane_onto_another() -> None:
+    # A restriction removed the movement, so no traffic takes it. Counting it would put
+    # a reviewer in front of two lanes with nothing between them.
+    lookup = {
+        "left_lane": _collapse_lane("left_lane", ["a", "n", "0"], 0, 2),
+        "right_lane": _collapse_lane("right_lane", ["a", "n", "0"], 1, 2),
+        "target": _collapse_lane("target", ["b", "n", "0"], 0, 1),
+    }
+    connectors = [
+        _collapse_connector("left_lane", "target"),
+        _collapse_connector("right_lane", "target", status="forbidden"),
+    ]
+    assert _lane_collapse_findings(connectors, [], lookup) == []
+
+    # A movement held for review still exists on the map, so it still counts.
+    held = [
+        _collapse_connector("left_lane", "target"),
+        _collapse_connector("right_lane", "target", status="review_required"),
+    ]
+    assert len(_lane_collapse_findings(held, [], lookup)) == 1
+
+
+def test_a_continuation_collapses_lanes_just_as_a_connector_does() -> None:
+    # A continuation never becomes a movement candidate, so a carriageway that genuinely
+    # narrows between two ways would go unreported if only connectors were read.
+    lookup = {
+        "wide_0": _collapse_lane("wide_0", ["a", "n", "0"], 0, 2),
+        "wide_1": _collapse_lane("wide_1", ["a", "n", "0"], 1, 2),
+        "narrow": _collapse_lane("narrow", ["b", "n", "0"], 0, 1),
+    }
+    (finding,) = _lane_collapse_findings(
+        [], [("n", "wide_0", "narrow"), ("n", "wide_1", "narrow")], lookup
+    )
+    assert finding.source_ids == ["n"]
+    assert finding.proposed_value["incoming_lane_count"] == 2
 
 
 def test_sharp_movements_need_the_evidence_a_uturn_needs() -> None:

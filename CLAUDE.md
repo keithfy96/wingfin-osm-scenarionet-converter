@@ -212,6 +212,11 @@ The rule that would fix it: when a source block sends N lanes into one destinati
 that has room for them, the side picks where the block **starts**, not where every
 lane goes. Needs its own plan and its own change-log entry.
 
+Since v16 this collision is at least **reported**: it is the sole surviving
+`lane_transition_count_mismatch` in junction-1 (`58517fe255e27068`, node 1927184814,
+naming `027a3ef89e3e7b88` + `1831f85bcfe6bd84` → `86602054f094204a`). Reported, not
+fixed — the mapping still collides.
+
 Two cautions when re-measuring this. A previous version of this table also listed
 `776021087` idx0/2 `8caffc7049` at node 13946726031; under the criterion "no connector
 and no continuation names it as a target" that lane was **already fed at v9**, so it

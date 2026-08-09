@@ -100,10 +100,11 @@ const SPECS: Record<string, ControlSpec> = {
     ],
   },
   lane_transition_count_mismatch: {
-    question: "Does the carriageway really change lane count here?",
+    question: "Do these approach lanes really all feed the same destination lane?",
     acceptLabel: "Accept mapping",
     overrideLabel: "Set outgoing lanes",
-    acceptEffect: "Keeps the lane-order mapping the generator chose across the change.",
+    acceptEffect:
+      "Keeps the mapping: every highlighted approach lane feeds the one destination lane.",
     overrideEffect: "Writes the outgoing lane count into reviewed.osm; the mapping is redone.",
     fields: [{ kind: "number", key: "outgoing_lanes", label: "Outgoing lanes", min: 1, max: 12, step: 1 }],
   },

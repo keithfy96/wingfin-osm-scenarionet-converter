@@ -47,7 +47,7 @@ from osm_scenario.topology import (
     via_way_resolution,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v15"
+GENERATOR_VERSION = "direct-osm-stage2-v16"
 LANE_MODEL_SCHEMA_VERSION = 3
 
 # One outgoing carriageway at a node: its OSM way and the directed edge it leaves on.
@@ -771,6 +771,67 @@ def _finding(
     )
 
 
+def _lane_collapse_findings(
+    connectors: list[ConnectorFeature],
+    continuation_links: list[tuple[str, str, str]],
+    lane_lookup: dict[str, LaneFeature],
+) -> list[ReviewFinding]:
+    """Where the lane mapping put several approach lanes onto one destination lane.
+
+    Read from the links that survived, never from the way's `lanes` tag. Two roads
+    meeting at a turn have unrelated widths, and comparing them called a one-lane left
+    turn off a two-lane road a "2 to 1 lane change" — a statement about two different
+    carriageways rather than about the movement. What can actually go wrong is narrower:
+    `_mapped_lane_index` sending two lanes to the same target, so two streams of traffic
+    are handed one lane. That is what is counted here.
+
+    A `forbidden` connector is left out because the movement does not exist; the
+    reviewer would be shown lanes with nothing between them.
+    """
+    groups: dict[tuple[str, tuple[str, ...], tuple[str, ...]], tuple[set[str], set[str]]] = {}
+    links = [
+        (connector.junction_node_id, connector.from_lane_id, connector.to_lane_id)
+        for connector in connectors
+        if connector.status != "forbidden"
+    ]
+    links.extend(continuation_links)
+    for node_id, from_id, to_id in links:
+        source = lane_lookup[from_id]
+        target = lane_lookup[to_id]
+        key = (node_id, tuple(source.source_edge), tuple(target.source_edge))
+        feeders, landed = groups.setdefault(key, (set(), set()))
+        feeders.add(from_id)
+        landed.add(to_id)
+    findings: list[ReviewFinding] = []
+    for (node_id, _, target_edge), (feeders, landed) in sorted(groups.items()):
+        if len(feeders) <= len(landed):
+            continue
+        destination_lane_count = sum(
+            1 for lane in lane_lookup.values() if tuple(lane.source_edge) == target_edge
+        )
+        findings.append(
+            _finding(
+                rule="lane_transition_count_mismatch",
+                severity="warning",
+                source_type="node",
+                source_ids=[node_id],
+                affected_feature_ids=sorted(feeders) + sorted(landed),
+                proposed_value={
+                    "incoming_lane_count": len(feeders),
+                    "outgoing_lane_count": len(landed),
+                    "destination_lane_count": destination_lane_count,
+                },
+                confidence="medium",
+                reason=(
+                    f"proportional lane-order mapping collapses {len(feeders)} approach "
+                    f"lanes onto {len(landed)} destination lane"
+                    f"{'' if len(landed) == 1 else 's'}"
+                ),
+            )
+        )
+    return findings
+
+
 def _direction_arrow(centerline: list[Point2D], width: float) -> list[Point2D] | None:
     """Chevron at the midpoint of a lane centreline, pointing along direction of travel.
 
@@ -1295,7 +1356,10 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
     lane_lookup = {lane.identifier: lane for lane in lanes}
     movement_candidates: list[MovementCandidate] = []
     direct_continuations = 0
-    lane_mismatch_findings: set[tuple[str, str, str]] = set()
+    # Every link a lane keeps at a node, whichever kind. A continuation never becomes a
+    # movement candidate, so the two have to be gathered separately to see a transition
+    # whole; the lane-count check below reads both.
+    continuation_links: list[tuple[str, str, str]] = []
     restriction_nodes = {
         value
         for relation in snapshot.relations.values()
@@ -1406,36 +1470,10 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                     if allocation is not None
                     else targets[_mapped_lane_index(source, len(targets), side)]
                 )
-                # A balanced approach has not lost a lane, it has apportioned them, so
-                # the count difference across any one destination is not a mismatch.
-                if source.lane_count != len(targets) and allocation is None:
-                    mismatch_key = (
-                        node_id,
-                        source.source_way_ids[0],
-                        target.source_way_ids[0],
-                    )
-                    if mismatch_key not in lane_mismatch_findings:
-                        lane_mismatch_findings.add(mismatch_key)
-                        findings.append(
-                            _finding(
-                                rule="lane_transition_count_mismatch",
-                                severity="warning",
-                                source_type="node",
-                                source_ids=[node_id],
-                                affected_feature_ids=[
-                                    lane.identifier for lane in [source, *targets]
-                                ],
-                                proposed_value={
-                                    "incoming_lane_count": source.lane_count,
-                                    "outgoing_lane_count": len(targets),
-                                },
-                                confidence="medium",
-                                reason="proportional lane-order mapping crosses a lane-count change",
-                            )
-                        )
                 if is_continuation:
                     source.exit_lanes.append(target.identifier)
                     target.entry_lanes.append(source.identifier)
+                    continuation_links.append((node_id, source.identifier, target.identifier))
                     direct_continuations += 1
                     carries_straight_on = True
                     continue
@@ -1634,6 +1672,12 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                     ),
                 )
             )
+
+    # Only once every movement has been filtered, restored, side-resolved and either
+    # kept or forbidden is it known which lanes a transition really joins. Asked any
+    # earlier, the question is put about candidate pairs that the passes above go on to
+    # discard, and the reviewer is shown a turn that no vehicle can make.
+    findings.extend(_lane_collapse_findings(connectors, continuation_links, lane_lookup))
 
     # Geometry only. Every movement, angle and status above was decided from the
     # untapered OSM geometry and stays as it is: letting a taper change an angle would
