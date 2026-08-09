@@ -7,7 +7,7 @@
 // the detail pane all read from it rather than each inventing a label.
 
 import { chip, definitionRow, element, pill } from "./dom.js";
-import type { DecisionStatus, Finding, GeoJsonFeature } from "./types.js";
+import type { DecisionStatus, Finding, GeoJsonFeature, MovementRole } from "./types.js";
 
 type Properties = Record<string, unknown>;
 
@@ -34,6 +34,13 @@ export function laneSide(index: number, count: number): string {
   if (index === 0) return "offside";
   if (index === count - 1) return "nearside";
   return "middle";
+}
+
+/** ` way 756118314` for a lane that names one, and nothing at all otherwise. */
+function wayOf(properties: Properties): string {
+  const ways = properties.source_way_ids;
+  const first = Array.isArray(ways) ? ways[0] : undefined;
+  return typeof first === "string" && first ? ` way ${first}` : "";
 }
 
 function laneNumbers(properties: Properties): { index: number; count: number } | null {
@@ -89,13 +96,15 @@ export class FeatureIndex {
     return this.findingsByFeature.get(identifier) ?? [];
   }
 
-  /** `abc123 · lane 2/3 middle` — how a reviewer reads a lane off the map. */
+  /** `abc123 · way 756118314 lane 2/3 middle` — how a reviewer reads a lane off the map. */
   label(identifier: string): string {
     const properties = this.properties.get(identifier);
     if (!properties) return identifier;
     const lane = laneNumbers(properties);
     if (lane) {
-      return `${identifier} · lane ${lane.index + 1}/${lane.count} ${laneSide(lane.index, lane.count)}`;
+      // Two lanes at one node are routinely both "lane 1/2 offside" — on different ways.
+      // Without the way they are indistinguishable in a list of chips.
+      return `${identifier} ·${wayOf(properties)} lane ${lane.index + 1}/${lane.count} ${laneSide(lane.index, lane.count)}`;
     }
     if (isConnector(properties)) {
       return `${identifier} · ${String(properties.movement ?? "movement")}`;
@@ -104,10 +113,11 @@ export class FeatureIndex {
   }
 
   /** The same lane, short enough to sit either side of an arrow. */
-  private shortLabel(identifier: string): string {
+  shortLabel(identifier: string): string {
     const properties = this.properties.get(identifier);
     const lane = properties ? laneNumbers(properties) : null;
-    return lane ? `${identifier} lane ${lane.index + 1}/${lane.count}` : identifier;
+    if (!lane || !properties) return identifier;
+    return `${identifier}${wayOf(properties)} lane ${lane.index + 1}/${lane.count}`;
   }
 
   /**
@@ -156,9 +166,23 @@ export class FeatureIndex {
    *
    * A finding about a movement names only the connector, so "which lanes is this
    * about" has to be read off the connector's own ends. Ids that are not connectors
-   * contribute nothing rather than guessing a direction for them.
+   * contribute nothing rather than guessing a direction for them — which is why a
+   * finding that names lanes directly carries `movement_roles`, worked out by the
+   * generator from the links at the node. Prefer those: they are a statement, not an
+   * inference, and they cover a continuation, which has no connector to read.
    */
-  movementEnds(identifiers: string[]): { entry: string[]; exit: string[] } {
+  movementEnds(
+    identifiers: string[],
+    roles?: Record<string, MovementRole>,
+  ): { entry: string[]; exit: string[] } {
+    if (roles) {
+      const named = new Set(identifiers);
+      const of = (role: MovementRole): string[] =>
+        Object.entries(roles)
+          .filter(([identifier, value]) => value === role && named.has(identifier))
+          .map(([identifier]) => identifier);
+      return { entry: of("approach"), exit: of("destination") };
+    }
     const entry = new Set<string>();
     const exit = new Set<string>();
     for (const identifier of identifiers) {

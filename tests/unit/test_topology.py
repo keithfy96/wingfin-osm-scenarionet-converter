@@ -13,6 +13,7 @@ from osm_scenario.topology import (
     movement_side,
     side_lane_index,
     signed_turn_angle,
+    tagged_movement_side,
     uturn_evidence_status,
     via_way_resolution,
 )
@@ -79,6 +80,22 @@ def test_side_lane_index_is_centre_out() -> None:
     assert side_lane_index("offside", 3) == 0
     assert side_lane_index("nearside", 3) == 2
     assert side_lane_index("offside", 1) == side_lane_index("nearside", 1) == 0
+
+
+def test_a_tag_names_a_side_only_when_it_names_one_direction() -> None:
+    # The grouping of lanes that share a side reads the tag through this, so it must
+    # answer exactly what `movement_side` answers or the two would drift apart.
+    assert tagged_movement_side(["right"], "left") == "offside"
+    assert tagged_movement_side(["left"], "left") == "nearside"
+    assert tagged_movement_side(["right"], "right") == "nearside"
+
+    # `left;right` permits both, so it settles nothing and the geometry still decides.
+    assert tagged_movement_side(["left", "right"], "left") is None
+    assert tagged_movement_side(["through"], "left") is None
+    assert tagged_movement_side([], "left") is None
+
+    # A directional permission alongside `through` still names the side.
+    assert tagged_movement_side(["through", "right"], "left") == "offside"
 
 
 def test_movement_side_is_relative_to_the_driving_side() -> None:

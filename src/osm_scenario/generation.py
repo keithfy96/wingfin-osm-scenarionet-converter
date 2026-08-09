@@ -43,11 +43,12 @@ from osm_scenario.topology import (
     restriction_roles,
     side_lane_index,
     signed_turn_angle,
+    tagged_movement_side,
     uturn_evidence_status,
     via_way_resolution,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v16"
+GENERATOR_VERSION = "direct-osm-stage2-v17"
 LANE_MODEL_SCHEMA_VERSION = 3
 
 # One outgoing carriageway at a node: its OSM way and the directed edge it leaves on.
@@ -327,16 +328,61 @@ def _is_exact_reverse(source: LaneFeature, target: LaneFeature) -> bool:
     )
 
 
-def _mapped_lane_index(source: LaneFeature, target_count: int, side: str | None = None) -> int:
+def _tagged_side_block(
+    approach: list[LaneFeature], side: str, *, driving_side: str
+) -> list[LaneFeature]:
+    """The lanes of an approach that an explicit `turn:lanes` puts on `side`.
+
+    Only tagged lanes form a block. Where the approach carries no `turn:lanes`,
+    `_side_filtered_candidates` already leaves the side-most lane alone with the
+    movement, so treating its neighbours as part of a block would deal them into lanes
+    they never reach.
+    """
+    return [
+        lane
+        for lane in approach
+        if tagged_movement_side(lane.turn_permissions, driving_side) == side
+    ]
+
+
+def _side_block_offset(source: LaneFeature, side: str, block: list[LaneFeature]) -> int:
+    """How far inside the block's leading lane this lane sits, in lane widths.
+
+    A block is dealt from its side inward, so the ordering has to start at that side:
+    kerbside-first for a nearside block, centreline-first for an offside one.
+    """
+    ordered = sorted(block, key=lambda item: item.lane_index, reverse=side == "nearside")
+    for offset, lane in enumerate(ordered):
+        if lane.identifier == source.identifier:
+            return offset
+    return 0
+
+
+def _mapped_lane_index(
+    source: LaneFeature,
+    target_count: int,
+    side: str | None = None,
+    side_block: list[LaneFeature] | None = None,
+) -> int:
     """Choose which lane of the outgoing group a movement lands in.
 
     Indices run centre-out, so index 0 is the lane against the centreline (the offside
     lane) and `target_count - 1` is the kerbside one. A movement that leaves toward the
     kerb therefore enters the last index and one toward the centre enters index 0;
     without a side, lane order is preserved proportionally.
+
+    A side says where a block of lanes *starts*, not where every lane in it goes. Two
+    lanes both tagged `turn:lanes=right` are both offside-bound, and answering `0` for
+    each puts two streams of traffic in one lane and starves the one beside it. So the
+    side fixes the leading index and the rest of the block follows it inward, keeping
+    lane order. Where the destination has no room the clamp collapses them as before,
+    and `lane_transition_count_mismatch` reports the sharing rather than hiding it.
     """
     if side in {"nearside", "offside"}:
-        return side_lane_index(side, target_count)
+        start = side_lane_index(side, target_count)
+        offset = _side_block_offset(source, side, side_block) if side_block else 0
+        step = -1 if side == "nearside" else 1
+        return max(0, min(target_count - 1, start + step * offset))
     if source.lane_count > 1 and target_count > 1:
         return round(source.lane_index * (target_count - 1) / (source.lane_count - 1))
     return min(source.lane_index, target_count - 1)
@@ -878,6 +924,59 @@ def _direction_arrow(centerline: list[Point2D], width: float) -> list[Point2D] |
     ]
 
 
+def _links_by_node(model: PreliminaryLaneModel) -> dict[str, set[tuple[str, str]]]:
+    """Every lane-to-lane link the model keeps, indexed by the node it happens at.
+
+    Connectors and continuations both count; a `forbidden` connector does not, because
+    the movement does not exist and nothing travels between its two lanes.
+    """
+    lanes = {lane.identifier for lane in model.lanes}
+    links: dict[str, set[tuple[str, str]]] = {}
+    for connector in model.connectors:
+        if connector.status == "forbidden":
+            continue
+        links.setdefault(connector.junction_node_id, set()).add(
+            (connector.from_lane_id, connector.to_lane_id)
+        )
+    for lane in model.lanes:
+        for exit_id in lane.exit_lanes:
+            if exit_id in lanes:
+                links.setdefault(lane.source_edge[1], set()).add((lane.identifier, exit_id))
+    return links
+
+
+def _movement_roles(
+    finding: ReviewFinding, links_by_node: dict[str, set[tuple[str, str]]]
+) -> dict[str, str]:
+    """Which lanes a finding names are approached from, and which are arrived at.
+
+    A finding that names a connector already carries its two ends; one that names lanes
+    directly does not, and the reviewer is left with a set of identically coloured lanes
+    and no way to see which turns into which. The direction is not a guess: it is in the
+    links at the node, so read it from there.
+
+    Only node-scoped findings qualify. A finding about a whole way names lanes along it,
+    and consecutive edges of one way *are* joined by continuations, so orienting those
+    would chain dozens of lanes into a sequence that means nothing. Returns an empty
+    mapping when nothing orients, so a connector finding keeps its own path.
+    """
+    if finding.source_type != "node":
+        return {}
+    named = set(finding.affected_feature_ids)
+    approach: set[str] = set()
+    destination: set[str] = set()
+    for node_id in finding.source_ids:
+        for from_id, to_id in links_by_node.get(node_id, set()):
+            if from_id in named and to_id in named:
+                approach.add(from_id)
+                destination.add(to_id)
+    roles = {identifier: "approach" for identifier in approach - destination}
+    roles.update({identifier: "destination" for identifier in destination - approach})
+    # A lane that is both would be painted a colour that is only half true, so it keeps
+    # the plain highlight and says nothing it cannot support.
+    return dict(sorted(roles.items()))
+
+
 def build_review_payload(model: PreliminaryLaneModel, snapshot: OsmSnapshot) -> dict[str, Any]:
     """Projected features, findings and counts shared by the Stage 2 audit and Stage 3 review.
 
@@ -1055,6 +1154,8 @@ def build_review_payload(model: PreliminaryLaneModel, snapshot: OsmSnapshot) -> 
             }
         )
 
+    links_by_node = _links_by_node(model)
+
     findings = []
     for finding in model.findings:
         finding_data = finding.model_dump(mode="json")
@@ -1075,6 +1176,9 @@ def build_review_payload(model: PreliminaryLaneModel, snapshot: OsmSnapshot) -> 
             for key in [f"way:{item}" for item in ways] + [f"node:{item}" for item in nodes]
             if key in source_ids
         )
+        roles = _movement_roles(finding, links_by_node)
+        if roles:
+            finding_data["movement_roles"] = roles
         findings.append(finding_data)
 
     return {
@@ -1399,6 +1503,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
         # off is a question about the approach as a whole and cannot be answered one
         # lane at a time: asked separately, two destinations both claim the kerb.
         blocks = _approach_blocks(incoming, lane_lookup)
+        blocks_by_edge = {tuple(block[0].source_edge): block for block in blocks}
         approach_assignments: dict[tuple[str, ...], dict[GroupKey, dict[str, str]]] = {}
         for block in blocks:
             assignment = _balanced_approach_assignment(
@@ -1453,6 +1558,7 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                 # carriageway that merely bends past the side threshold is not a turn,
                 # and snapping its lanes to the kerb would shuffle the whole block.
                 side = None
+                side_block: list[LaneFeature] | None = None
                 if not is_continuation and allocation is None:
                     group_angle = signed_turn_angle(
                         source_line,
@@ -1465,10 +1571,19 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
                         turn_permissions=source.turn_permissions,
                         min_degrees=config.lane_selection.side_movement_min_degrees,
                     )
+                    if side is not None:
+                        # `turn:lanes=right|right` puts both lanes offside. The side says
+                        # where the block starts; without the block behind it every lane
+                        # of the block would be answered the same index.
+                        side_block = _tagged_side_block(
+                            blocks_by_edge[tuple(source.source_edge)],
+                            side,
+                            driving_side=manifest["driving_side"],
+                        )
                 target = (
                     lane_lookup[allocation[source.identifier]]
                     if allocation is not None
-                    else targets[_mapped_lane_index(source, len(targets), side)]
+                    else targets[_mapped_lane_index(source, len(targets), side, side_block)]
                 )
                 if is_continuation:
                     source.exit_lanes.append(target.identifier)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -23,11 +24,14 @@ from osm_scenario.generation import (
     _is_decision_node,
     _lane_collapse_findings,
     _lane_offset,
+    _links_by_node,
     _mapped_lane_index,
     _merge_taper_plan,
+    _movement_roles,
     _side_filtered_candidates,
     _speed_kph,
     _stranded_permission_fallback,
+    _tagged_side_block,
     _tapered_line,
     _turn_permissions,
     _unproven_sharp_movement,
@@ -38,6 +42,7 @@ from osm_scenario.lane_model import (
     LaneFeature,
     Point2D,
     PreliminaryLaneModel,
+    ReviewFinding,
 )
 from osm_scenario.normalization import normalize_workspace
 from osm_scenario.topology import MovementCandidate
@@ -162,6 +167,66 @@ def test_side_movements_select_the_kerbside_or_median_lane_of_the_target() -> No
     assert _mapped_lane_index(ramp, 3, "nearside") == 2
     # A single-lane target leaves nothing to choose.
     assert _mapped_lane_index(ramp, 1, "nearside") == 0
+
+
+def _side_lane(lane_index: int, lane_count: int, permissions: list[str]) -> LaneFeature:
+    return _approach(lane_index, lane_count, permissions).model_copy(
+        update={"identifier": f"lane-{lane_index}"}
+    )
+
+
+def test_a_side_says_where_a_block_starts_not_where_every_lane_goes() -> None:
+    # `turn:lanes=right|right` puts both lanes offside. Answering 0 for each hands two
+    # streams of traffic one lane and starves the one beside it — the Persiaran Meranti
+    # defect at node 1927184814.
+    block = [_side_lane(0, 2, ["right"]), _side_lane(1, 2, ["right"])]
+    assert [_mapped_lane_index(lane, 2, "offside", block) for lane in block] == [0, 1]
+
+    # Order is kept: the lane nearer the centreline stays nearer the centreline.
+    assert [_mapped_lane_index(lane, 3, "offside", block) for lane in block] == [0, 1]
+
+
+def test_a_nearside_block_is_dealt_inward_from_the_kerb() -> None:
+    # The mirror of the case above, and the one junction-1 cannot exercise: a left turn
+    # in left-hand traffic. The kerbside lane takes the kerbside destination lane and the
+    # block fills inward, so lateral order survives the turn.
+    block = [_side_lane(0, 2, ["left"]), _side_lane(1, 2, ["left"])]
+    assert [_mapped_lane_index(lane, 3, "nearside", block) for lane in block] == [1, 2]
+    assert [_mapped_lane_index(lane, 2, "nearside", block) for lane in block] == [0, 1]
+
+
+def test_a_block_with_no_room_still_collapses_rather_than_overflowing() -> None:
+    # Three lanes into a two-lane destination genuinely share. The clamp keeps every
+    # index inside the destination; `lane_transition_count_mismatch` reports the sharing.
+    # Listed in lane-index order, so idx0 is first and the kerbside lane last. The lane
+    # at the leading side gets its own destination lane and the overflow piles onto the
+    # far one, rather than every lane collapsing onto the leading index as before.
+    block = [_side_lane(index, 3, ["right"]) for index in range(3)]
+    assert [_mapped_lane_index(lane, 2, "offside", block) for lane in block] == [0, 1, 1]
+    kerb = [_side_lane(index, 3, ["left"]) for index in range(3)]
+    assert [_mapped_lane_index(lane, 2, "nearside", kerb) for lane in kerb] == [0, 0, 1]
+
+
+def test_a_block_of_one_maps_exactly_as_it_did_before() -> None:
+    # The change has to be a strict generalisation: with one lane on the side there is no
+    # block to deal, and every existing mapping must be untouched.
+    single = [_side_lane(1, 3, ["right"])]
+    assert _mapped_lane_index(single[0], 3, "offside", single) == 0
+    assert _mapped_lane_index(single[0], 3, "offside") == 0
+    # An untagged lane forms no block, so it keeps the plain side index even when it is
+    # handed the block of a neighbour that is tagged.
+    untagged = _side_lane(0, 2, [])
+    assert _mapped_lane_index(untagged, 3, "nearside", [_side_lane(1, 2, ["left"])]) == 2
+
+
+def test_only_an_explicit_turn_tag_puts_lanes_in_the_same_block() -> None:
+    approach = [_side_lane(0, 2, ["right"]), _side_lane(1, 2, [])]
+    block = _tagged_side_block(approach, "offside", driving_side="left")
+    assert [lane.identifier for lane in block] == ["lane-0"]
+
+    # `left;right` permits both, so it names no side and settles nothing.
+    both = [_side_lane(0, 2, ["left", "right"]), _side_lane(1, 2, ["left", "right"])]
+    assert _tagged_side_block(both, "offside", driving_side="left") == []
 
 
 def _candidate(to_lane_id: str, movement: str, angle: float) -> MovementCandidate:
@@ -813,6 +878,95 @@ def test_a_continuation_collapses_lanes_just_as_a_connector_does() -> None:
     )
     assert finding.source_ids == ["n"]
     assert finding.proposed_value["incoming_lane_count"] == 2
+
+
+def _roles_finding(source_type: str, node: str, affected: list[str]) -> ReviewFinding:
+    return _finding(
+        rule="turn_permission_geometry_conflict",
+        severity="blocker",
+        source_type=source_type,
+        source_ids=[node],
+        affected_feature_ids=affected,
+        proposed_value={},
+        confidence="low",
+        reason="",
+    )
+
+
+def test_a_finding_that_names_lanes_says_which_one_is_approached_from() -> None:
+    # Every named lane is painted the same colour without this, and the reviewer cannot
+    # see which lane turns into which — the whole question the finding asks.
+    links = {"n": {("lane-in", "lane-out")}}
+    assert _movement_roles(_roles_finding("node", "n", ["lane-in", "lane-out"]), links) == {
+        "lane-in": "approach",
+        "lane-out": "destination",
+    }
+
+    # A collapse names several approach lanes; each is an approach.
+    merge = {"n": {("lane-a", "lane-x"), ("lane-b", "lane-x")}}
+    assert _movement_roles(
+        _roles_finding("node", "n", ["lane-a", "lane-b", "lane-x"]), merge
+    ) == {"lane-a": "approach", "lane-b": "approach", "lane-x": "destination"}
+
+
+def test_a_way_scoped_finding_is_never_oriented() -> None:
+    # `speed_default` names every lane along a way, and consecutive edges of one way are
+    # joined by continuations. Orienting those would chain dozens of lanes into a
+    # sequence that says nothing about any movement.
+    links = {"n": {("lane-in", "lane-out")}}
+    assert _movement_roles(_roles_finding("way", "n", ["lane-in", "lane-out"]), links) == {}
+
+
+def test_a_lane_at_both_ends_of_a_chain_is_left_uncoloured() -> None:
+    # Either colour would be half true, so it keeps the plain highlight instead.
+    links = {"n": {("lane-a", "lane-b"), ("lane-b", "lane-c")}}
+    assert _movement_roles(
+        _roles_finding("node", "n", ["lane-a", "lane-b", "lane-c"]), links
+    ) == {"lane-a": "approach", "lane-c": "destination"}
+
+
+def test_nothing_is_oriented_without_a_link_between_two_named_lanes() -> None:
+    # A finding whose lanes have no movement between them must not be given a direction;
+    # the connector path is left to answer, or nothing is.
+    links = {"n": {("lane-in", "somewhere-else")}}
+    assert _movement_roles(_roles_finding("node", "n", ["lane-in", "lane-out"]), links) == {}
+
+
+def test_a_forbidden_movement_is_not_a_link_between_two_lanes() -> None:
+    # A restriction removed it, so nothing travels between those lanes. Counting it
+    # would colour one lane as feeding another it cannot reach.
+    def model(status: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            lanes=[
+                SimpleNamespace(identifier="lane-in", exit_lanes=[], source_edge=["n", "x", "0"]),
+                SimpleNamespace(identifier="lane-out", exit_lanes=[], source_edge=["x", "y", "0"]),
+            ],
+            connectors=[
+                SimpleNamespace(
+                    status=status,
+                    junction_node_id="x",
+                    from_lane_id="lane-in",
+                    to_lane_id="lane-out",
+                )
+            ],
+        )
+
+    assert _links_by_node(model("forbidden")) == {}  # type: ignore[arg-type]
+    assert _links_by_node(model("review_required")) == {  # type: ignore[arg-type]
+        "x": {("lane-in", "lane-out")}
+    }
+
+    # A continuation carries no connector, so it has to be read off the lane itself.
+    carries_on = SimpleNamespace(
+        lanes=[
+            SimpleNamespace(
+                identifier="lane-in", exit_lanes=["lane-out"], source_edge=["n", "x", "0"]
+            ),
+            SimpleNamespace(identifier="lane-out", exit_lanes=[], source_edge=["x", "y", "0"]),
+        ],
+        connectors=[],
+    )
+    assert _links_by_node(carries_on) == {"x": {("lane-in", "lane-out")}}  # type: ignore[arg-type]
 
 
 def test_sharp_movements_need_the_evidence_a_uturn_needs() -> None:

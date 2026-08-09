@@ -195,31 +195,30 @@ middle index**: for a 2-lane approach onto a 3-lane destination
 not close, a lane genuinely serves more than one movement, and the ambiguity is
 reported rather than resolved. Clean diverges and clean merges no longer go through it.
 
-**Still wrong — one lane, and for a third reason neither rule addresses:**
-
-| way | lane | at node | cause |
-|---|---|---|---|
-| 39619063 | idx1/2 `c0530c25fd` | 1927184814 | see below |
+**Fixed in v17 — the last diagnosed starved lane.** `39619063` idx1/2 `c0530c25fd` at
+node 1927184814 is now fed by `027a3ef89e3e7b88`.
 
 Way `756118314` is tagged `turn:lanes=right|right`, so both its lanes carry
 `turn_permissions=['right']`. An explicit `turn:lanes` value outranks geometry in
-`movement_side()`, so **both** lanes are labelled `offside` and
-`side_lane_index("offside", 2)` returns `0` for both — they collide on one target and
-`39619063` idx1 is fed by nothing. The approach is oversubscribed (2 lanes arriving,
-5 lanes of destination capacity at the node), so neither balanced rule reaches it.
+`movement_side()`, so **both** lanes are labelled `offside`, and
+`side_lane_index("offside", 2)` returned `0` for both — they collided on one target.
+The approach is oversubscribed (2 lanes arriving, 5 lanes of destination capacity at
+the node), so neither balanced rule reaches it and `_mapped_lane_index` decides.
 
-The rule that would fix it: when a source block sends N lanes into one destination
-that has room for them, the side picks where the block **starts**, not where every
-lane goes. Needs its own plan and its own change-log entry.
+`_mapped_lane_index` now takes the block of lanes an explicit tag puts on that side and
+deals them from the side inward, so a side says where a block **starts** rather than
+where every lane in it goes. A block of one is unchanged, so only a genuine collision
+moves. See
+`docs/mapping-algo-changes/2026-08-09-16:44:44-a-side-picks-where-a-block-starts.md`.
 
-Since v16 this collision is at least **reported**: it is the sole surviving
-`lane_transition_count_mismatch` in junction-1 (`58517fe255e27068`, node 1927184814,
-naming `027a3ef89e3e7b88` + `1831f85bcfe6bd84` → `86602054f094204a`). Reported, not
-fixed — the mapping still collides.
+Two blockers remain at that node, and correctly: `turn:lanes=right|right` names a right
+turn that is not available there, and that disagreement is Keith's to judge. **Never fix
+a tag-versus-geometry conflict by making the finding stop being raised** — fix the
+mapping and keep the review.
 
 Two cautions when re-measuring this. A previous version of this table also listed
 `776021087` idx0/2 `8caffc7049` at node 13946726031; under the criterion "no connector
 and no continuation names it as a target" that lane was **already fed at v9**, so it
 was either counted under a different criterion or listed in error. And `junction-1`
-still has **12** destination lanes fed by nothing at nodes with traffic arriving; only
-the row above is a diagnosed defect, and the other 11 have not been examined.
+still has **21** lanes fed by nothing; most are network-boundary lanes rather than
+defects, and none of the remainder has been diagnosed.

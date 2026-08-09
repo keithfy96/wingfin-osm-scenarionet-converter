@@ -43,6 +43,53 @@ describe("FeatureIndex", () => {
     expect(index.describe("lane-mid")).toBe("Lane lane-mid · lane 2/3 middle");
   });
 
+  it("names the way, because two lanes at a node are routinely both 'lane 1/2 offside'", () => {
+    const index = new FeatureIndex(
+      [
+        lane("lane-x", 0, 2, { source_way_ids: ["756118314"] }),
+        lane("lane-y", 0, 2, { source_way_ids: ["39619063"] }),
+      ],
+      [],
+    );
+    expect(index.label("lane-x")).toBe("lane-x · way 756118314 lane 1/2 offside");
+    expect(index.label("lane-y")).toBe("lane-y · way 39619063 lane 1/2 offside");
+    expect(index.label("lane-x")).not.toBe(index.label("lane-y"));
+    expect(index.shortLabel("lane-x")).toBe("lane-x way 756118314 lane 1/2");
+  });
+
+  it("takes the generator's word for which lane approaches and which is arrived at", () => {
+    // A finding that names lanes rather than a connector cannot be oriented by reading
+    // a from/to off the feature, so the payload states it and this must prefer that.
+    const index = new FeatureIndex(
+      [lane("lane-in", 1, 2), lane("lane-out", 1, 2)],
+      [],
+    );
+    const ends = index.movementEnds(["lane-in", "lane-out"], {
+      "lane-in": "approach",
+      "lane-out": "destination",
+    });
+    expect(ends).toEqual({ entry: ["lane-in"], exit: ["lane-out"] });
+  });
+
+  it("ignores a role for a lane the finding does not name", () => {
+    // Roles are keyed by id, so a stale or over-broad map must not light geometry the
+    // reviewer was never asked about.
+    const index = new FeatureIndex([lane("lane-in", 0, 1), lane("lane-out", 0, 1)], []);
+    const ends = index.movementEnds(["lane-in"], {
+      "lane-in": "approach",
+      "lane-out": "destination",
+    });
+    expect(ends).toEqual({ entry: ["lane-in"], exit: [] });
+  });
+
+  it("still reads a bare connector's own ends when no roles are given", () => {
+    const index = new FeatureIndex(
+      [lane("lane-a", 0, 1), lane("lane-b", 0, 1), connector("conn-1", "lane-a", "lane-b")],
+      [],
+    );
+    expect(index.movementEnds(["conn-1"])).toEqual({ entry: ["lane-a"], exit: ["lane-b"] });
+  });
+
   it("resolves a bare OSM id into whichever namespace was drawn", () => {
     const index = new FeatureIndex(
       [feature({ id: "way:776021091", kind: "source_way", osm_way_id: "776021091" })],

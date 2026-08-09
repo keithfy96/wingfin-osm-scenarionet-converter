@@ -86,7 +86,7 @@ function boot(): void {
       // `source_ids` are raw OSM ids; the drawn source geometry is keyed
       // `way:<id>` / `node:<id>`, which is what `source_geometry_ids` already holds.
       const generated = [...new Set([...finding.affected_feature_ids, ...finding.geometry_ids])];
-      const ends = features.movementEnds(generated);
+      const ends = features.movementEnds(generated, finding.movement_roles);
       focused = [...generated, ...finding.source_geometry_ids, ...ends.entry, ...ends.exit];
       return focusFeatures(map, index, {
         generated,

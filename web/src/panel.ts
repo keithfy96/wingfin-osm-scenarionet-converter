@@ -391,6 +391,16 @@ export class ReviewPanel {
     // repeat it. Everything else needs telling where it is.
     const movement = this.index.describeConnector(primary);
     if (movement) return `${movement}${more}`;
+    // A finding that names lanes rather than a connector still describes a movement
+    // when the generator could orient it. Reading "this lane into that one" off the
+    // queue is the whole question a reviewer opens the row to answer.
+    const ends = this.index.movementEnds(drawn, finding.movement_roles);
+    if (ends.entry.length && ends.exit.length) {
+      const from = ends.entry.map((id) => this.index.shortLabel(id)).join(" + ");
+      const to = ends.exit.map((id) => this.index.shortLabel(id)).join(" + ");
+      const node = finding.source_ids.length ? ` at node ${finding.source_ids.join(", ")}` : "";
+      return `${from} → ${to}${node}`;
+    }
     const at = finding.source_ids.length
       ? ` at ${finding.source_type} ${finding.source_ids.join(", ")}`
       : "";
@@ -588,15 +598,17 @@ export class ReviewPanel {
     );
     // A movement finding names only the connector. Naming its two ends, in the
     // colours they are painted on the map, is what makes it a picture.
-    const ends = this.index.movementEnds([
-      ...finding.affected_feature_ids,
-      ...finding.geometry_ids,
-    ]);
+    const ends = this.index.movementEnds(
+      [...finding.affected_feature_ids, ...finding.geometry_ids],
+      finding.movement_roles,
+    );
     if (ends.entry.length) {
-      definitionRow(evidence, "Entry lane", this.chipRow(ends.entry, undefined, "entry"));
+      const label = ends.entry.length > 1 ? "Entry lanes" : "Entry lane";
+      definitionRow(evidence, label, this.chipRow(ends.entry, undefined, "entry"));
     }
     if (ends.exit.length) {
-      definitionRow(evidence, "Exit lane", this.chipRow(ends.exit, undefined, "exit"));
+      const label = ends.exit.length > 1 ? "Exit lanes" : "Exit lane";
+      definitionRow(evidence, label, this.chipRow(ends.exit, undefined, "exit"));
     }
     if (finding.location) {
       // Shown so a coordinate can be checked against external footage without

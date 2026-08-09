@@ -91,17 +91,35 @@ def movement_side(
     to the left. The angle sign past `min_degrees` recovers that; an explicit
     `turn:lanes` value naming one direction outranks the geometry either way.
     """
-    tagged = {item for item in turn_permissions if item in {"left", "right"}}
+    tagged = tagged_movement_side(turn_permissions, driving_side)
+    if tagged is not None:
+        return tagged
     family = movement_family(movement)
-    if len(tagged) == 1:
-        turn = next(iter(tagged))
-    elif family in {"left", "right"}:
+    if family in {"left", "right"}:
         turn = family
     elif abs(angle) >= min_degrees:
         turn = "left" if angle > 0 else "right"
     else:
         return None
+    return _side_for_turn(turn, driving_side)
+
+
+def _side_for_turn(turn: str, driving_side: str) -> str:
+    """Which side of the destination a left or right turn lands on."""
     return "nearside" if (turn == "left") == (driving_side == "left") else "offside"
+
+
+def tagged_movement_side(turn_permissions: list[str], driving_side: str) -> str | None:
+    """The side an explicit `turn:lanes` value puts a lane on, or None if it does not.
+
+    Only a value naming exactly one of left or right is decisive: `left;right` permits
+    both and leaves the side to the geometry. Shared with `movement_side` so the tag's
+    reading cannot drift between deciding a side and grouping the lanes that share it.
+    """
+    turns = {item for item in turn_permissions if item in {"left", "right"}}
+    if len(turns) != 1:
+        return None
+    return _side_for_turn(next(iter(turns)), driving_side)
 
 
 def side_lane_index(side: str, lane_count: int) -> int:

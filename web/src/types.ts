@@ -54,7 +54,15 @@ export interface Finding {
   road_class: string | null;
   /** Null when the source is a graph edge, which has no OSM geometry to resolve. */
   location: FindingLocation | null;
+  /**
+   * Which named lanes a movement leaves and which it enters, when the generator could
+   * establish it. Absent on a finding that names a connector — that carries its own two
+   * ends — and on anything scoped to a whole way, where the direction means nothing.
+   */
+  movement_roles?: Record<string, MovementRole>;
 }
+
+export type MovementRole = "approach" | "destination";
 
 export interface LaneSummary {
   identifier: string;

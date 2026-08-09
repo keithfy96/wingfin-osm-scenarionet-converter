@@ -21,7 +21,7 @@ from osm_scenario.generation import build_review_payload
 from osm_scenario.lane_model import PreliminaryLaneModel
 from osm_scenario.osm_source import read_osm_snapshot
 
-PAYLOAD_VERSION = 1
+PAYLOAD_VERSION = 2
 CLIENT_ASSET = "review-client.js"
 
 _TEMPLATE = """<!doctype html>
