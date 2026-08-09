@@ -17,7 +17,16 @@ h2{font-size:15px;margin:0 0 4px}
 
 .bulk:not(:empty){display:flex;align-items:center;gap:8px;padding:8px 10px;background:#e7f5ff;border:1px solid #a5d8ff;border-radius:6px}
 
-.queue{display:flex;flex-direction:column;gap:4px;max-height:38vh;overflow:auto}
+/* `overflow:auto` makes a flex item's automatic min-height 0, so the list was free
+   to be squeezed to a single row by everything else in the column. It keeps its own
+   height instead, and the panel scrolls. */
+.queue-box{flex:0 0 auto;border:1px solid #dee2e6;border-radius:6px;background:#fff}
+.queue-box>summary{padding:7px 10px;font-size:12px;font-weight:600;color:#495057;
+  cursor:pointer;list-style-position:inside;user-select:none}
+.queue-box>summary:hover{background:#f1f3f5;border-radius:5px}
+.queue-box[open]>summary{border-bottom:1px solid #e9ecef;border-radius:5px 5px 0 0}
+.queue{display:flex;flex-direction:column;gap:4px;padding:6px;
+  min-height:180px;max-height:44vh;overflow:auto}
 .row{display:grid;grid-template-columns:1fr auto;gap:2px 8px;padding:7px 9px;text-align:left;font:inherit;color:inherit;background:#fff;border:1px solid #dee2e6;border-left-width:4px;border-radius:5px;cursor:pointer}
 .row:hover{background:#f8f9fa}
 .row-rule{font-weight:600}

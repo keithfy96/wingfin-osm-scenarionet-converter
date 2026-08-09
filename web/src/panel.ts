@@ -267,9 +267,17 @@ export class ReviewPanel {
     bulk.id = "bulk";
     this.root.append(bulk);
 
+    // Collapsible, because on a short window the list and the detail pane compete
+    // for the same column. Closing it is the reviewer's choice; anything that
+    // changes what the list says reopens it, so it can never be silently stale.
+    const queueBox = element("details", "queue-box");
+    queueBox.open = true;
+    const queueSummary = element("summary");
+    queueSummary.id = "queue-summary";
     const queue = element("div", "queue");
     queue.id = "queue";
-    this.root.append(queue);
+    queueBox.append(queueSummary, queue);
+    this.root.append(queueBox);
 
     const detail = element("div", "detail");
     detail.id = "detail";
@@ -382,6 +390,24 @@ export class ReviewPanel {
     node.textContent = `${focused}${visible} finding(s) match these filters.`;
   }
 
+  /**
+   * Reopen the list and say what is in it.
+   *
+   * Every caller of `renderQueue` is something that changed what the list shows — a
+   * filter, a decision, a selection made on the map. A collapsed list at that moment
+   * would be hiding the answer to what the reviewer just did.
+   */
+  private revealQueue(visible: Finding[]): void {
+    const box = this.root.querySelector<HTMLDetailsElement>(".queue-box");
+    const summary = this.root.querySelector<HTMLElement>("#queue-summary");
+    if (box) box.open = true;
+    if (!summary) return;
+    const unresolved = visible.filter(
+      (finding) => this.state.statusOf(finding.identifier) === "unresolved",
+    ).length;
+    summary.textContent = `${visible.length} finding(s) listed · ${unresolved} unresolved`;
+  }
+
   private renderQueue(): void {
     this.renderReadiness();
     const queue = this.root.querySelector<HTMLElement>("#queue");
@@ -395,6 +421,7 @@ export class ReviewPanel {
     }
     this.renderBulk(visible);
     this.renderNote(visible.length);
+    this.revealQueue(visible);
 
     queue.innerHTML = "";
     if (!visible.length) {
