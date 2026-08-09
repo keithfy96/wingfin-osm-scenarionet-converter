@@ -47,7 +47,7 @@ from osm_scenario.topology import (
     via_way_resolution,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v14"
+GENERATOR_VERSION = "direct-osm-stage2-v15"
 LANE_MODEL_SCHEMA_VERSION = 3
 
 # One outgoing carriageway at a node: its OSM way and the directed edge it leaves on.
@@ -1143,6 +1143,16 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
     findings: list[ReviewFinding] = []
     lanes_by_start: dict[str, list[str]] = {}
     lanes_by_end: dict[str, list[str]] = {}
+    # Lane count, width and speed are properties of a *way*, and a decision on one
+    # writes a tag onto that way. The loop below runs once per graph edge, so asking
+    # per edge put the same question to the reviewer once for every segment a road
+    # happens to be split into. Accumulate here and emit one finding per answer.
+    #
+    # The proposed value is part of the key, so two edges of a way that genuinely
+    # disagreed still produce two findings. Only identical questions are merged.
+    lane_count_findings: dict[tuple[tuple[str, ...], str, int, str, str], list[str]] = {}
+    width_findings: dict[tuple[tuple[str, ...], float], list[str]] = {}
+    speed_findings: dict[tuple[tuple[str, ...], float], list[str]] = {}
     for u, v, key, data in sorted(
         graph.edges(keys=True, data=True), key=lambda item: tuple(map(str, item[:3]))
     ):
@@ -1226,44 +1236,61 @@ def generate_lane_model(*, workspace: Path, config: ConverterConfig) -> Path:
             "explicit_total_oneway",
             "complementary_directional",
         }:
-            findings.append(
-                _finding(
-                    rule="lane_count_inference",
-                    severity="blocker" if count_confidence == "low" else "warning",
-                    source_type="way",
-                    source_ids=way_ids,
-                    affected_feature_ids=created,
-                    proposed_value={"direction": direction, "lane_count": count},
-                    confidence=count_confidence,
-                    reason=count_reason,
-                )
-            )
+            lane_count_findings.setdefault(
+                (tuple(way_ids), direction, count, count_reason, count_confidence), []
+            ).extend(created)
         if width_total is None:
-            findings.append(
-                _finding(
-                    rule="lane_width_default",
-                    severity="warning",
-                    source_type="way",
-                    source_ids=way_ids,
-                    affected_feature_ids=created,
-                    proposed_value=width,
-                    confidence="medium",
-                    reason="no usable explicit OSM width",
-                )
-            )
+            width_findings.setdefault((tuple(way_ids), width), []).extend(created)
         if _speed_kph(way.tags.get("maxspeed")) is None:
-            findings.append(
-                _finding(
-                    rule="speed_default",
-                    severity="warning",
-                    source_type="way",
-                    source_ids=way_ids,
-                    affected_feature_ids=created,
-                    proposed_value=speed,
-                    confidence="medium",
-                    reason="no usable explicit OSM maxspeed",
-                )
+            speed_findings.setdefault((tuple(way_ids), speed), []).extend(created)
+
+    # `deterministic_id` folds affected ids in positionally, so merge order must not
+    # decide the identifier: sort.
+    for (
+        count_way_ids,
+        direction,
+        count,
+        count_reason,
+        count_confidence,
+    ), affected in lane_count_findings.items():
+        findings.append(
+            _finding(
+                rule="lane_count_inference",
+                severity="blocker" if count_confidence == "low" else "warning",
+                source_type="way",
+                source_ids=list(count_way_ids),
+                affected_feature_ids=sorted(set(affected)),
+                proposed_value={"direction": direction, "lane_count": count},
+                confidence=count_confidence,
+                reason=count_reason,
             )
+        )
+    for (width_way_ids, width_value), affected in width_findings.items():
+        findings.append(
+            _finding(
+                rule="lane_width_default",
+                severity="warning",
+                source_type="way",
+                source_ids=list(width_way_ids),
+                affected_feature_ids=sorted(set(affected)),
+                proposed_value=width_value,
+                confidence="medium",
+                reason="no usable explicit OSM width",
+            )
+        )
+    for (speed_way_ids, speed_value), affected in speed_findings.items():
+        findings.append(
+            _finding(
+                rule="speed_default",
+                severity="warning",
+                source_type="way",
+                source_ids=list(speed_way_ids),
+                affected_feature_ids=sorted(set(affected)),
+                proposed_value=speed_value,
+                confidence="medium",
+                reason="no usable explicit OSM maxspeed",
+            )
+        )
 
     lane_lookup = {lane.identifier: lane for lane in lanes}
     movement_candidates: list[MovementCandidate] = []

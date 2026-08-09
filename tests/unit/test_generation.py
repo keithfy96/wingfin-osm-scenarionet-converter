@@ -788,6 +788,73 @@ def test_lane_model_rejects_numeric_identifier() -> None:
         )
 
 
+def test_a_way_is_asked_once_per_answer_not_once_per_lane(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    generate_lane_model(workspace=workspace, config=ConverterConfig(config_version=1))
+    model = PreliminaryLaneModel.model_validate_json(
+        (workspace / "lane-model" / "preliminary.json").read_bytes()
+    )
+
+    # Way 10 runs nodes 1-2-3-4, so it spans several graph edges and generates several
+    # lanes. Lane count, width and speed are properties of the way, and a decision on
+    # one writes a tag onto the way — so each is one question however long the road is.
+    for rule in ("lane_width_default", "speed_default"):
+        for way_id in {tuple(f.source_ids) for f in model.findings if f.rule == rule}:
+            matching = [
+                finding
+                for finding in model.findings
+                if finding.rule == rule and tuple(finding.source_ids) == way_id
+            ]
+            assert len(matching) == 1, f"{rule} asked {len(matching)} times for {way_id}"
+
+    # Lane count is per direction, so a two-way road is two questions and no more.
+    for way_id in {tuple(f.source_ids) for f in model.findings if f.rule == "lane_count_inference"}:
+        matching = [
+            finding
+            for finding in model.findings
+            if finding.rule == "lane_count_inference" and tuple(finding.source_ids) == way_id
+        ]
+        directions = [finding.proposed_value["direction"] for finding in matching]  # type: ignore[index]
+        assert len(directions) == len(set(directions))
+
+    # The merged finding still names every lane it covers, and names each one once.
+    lanes_of_way: dict[str, set[str]] = {}
+    for lane in model.lanes:
+        for way_id in lane.source_way_ids:
+            lanes_of_way.setdefault(way_id, set()).add(lane.identifier)
+    width = next(
+        finding for finding in model.findings if finding.rule == "lane_width_default"
+    )
+    assert width.affected_feature_ids == sorted(set(width.affected_feature_ids))
+    assert set(width.affected_feature_ids) == lanes_of_way[width.source_ids[0]]
+
+
+def test_edges_that_disagree_still_produce_separate_findings() -> None:
+    # The guard on the merge: only identical questions collapse. Two edges of one way
+    # proposing different lane counts are two different questions and stay two
+    # findings, because the proposed value is part of what identifies them.
+    shared = {
+        "rule": "lane_count_inference",
+        "severity": "blocker",
+        "source_type": "way",
+        "source_ids": ["10"],
+        "confidence": "low",
+        "reason": "default_single_lane",
+    }
+    one = _finding(
+        **shared,  # type: ignore[arg-type]
+        affected_feature_ids=["lane-a"],
+        proposed_value={"direction": "forward", "lane_count": 1},
+    )
+    two = _finding(
+        **shared,  # type: ignore[arg-type]
+        affected_feature_ids=["lane-b"],
+        proposed_value={"direction": "forward", "lane_count": 2},
+    )
+    assert one.identifier != two.identifier
+    assert one.evidence_checksum != two.evidence_checksum
+
+
 def test_findings_carry_the_wgs84_geometry_they_came_from(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     generate_lane_model(workspace=workspace, config=ConverterConfig(config_version=1))
