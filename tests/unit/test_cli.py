@@ -16,14 +16,11 @@ def test_top_level_help_lists_commands() -> None:
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
-    for command in ("fetch", "inspect"):
+    for command in ("fetch", "inspect", "convert"):
         assert command in result.stdout
-    for command in (
-        "generate-lanelet2",
-        "validate-lanelet2",
-        "convert",
-        "validate-scenario",
-    ):
+    # The lanelet2 route the converter no longer takes. `convert` was on this list until
+    # Stage 6 landed and gave the name a meaning again.
+    for command in ("generate-lanelet2", "validate-lanelet2", "validate-scenario"):
         assert command not in result.stdout
 
 
@@ -134,12 +131,34 @@ def test_apply_review_reports_a_stage_4_failure_as_one_line(tmp_path: Path) -> N
 
 
 def test_removed_downstream_commands_are_unknown() -> None:
-    for command in (
-        "generate-lanelet2",
-        "validate-lanelet2",
-        "convert",
-        "validate-scenario",
-    ):
+    for command in ("generate-lanelet2", "validate-lanelet2", "validate-scenario"):
         result = runner.invoke(app, [command])
         assert result.exit_code != 0
         assert "No such command" in result.output
+
+
+def test_validate_map_reports_a_stage_5_failure_as_one_line(tmp_path: Path) -> None:
+    """A workspace with no manifest at all, which is the case that used to print nothing.
+
+    Stage 5 borrows `_read_json` from Stage 4, so its "manifest not found" arrived as an
+    `ApplyReviewError` - a type this command has no reason to catch, and did not.
+    """
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = runner.invoke(app, ["validate-map", "--workspace", str(workspace)])
+
+    assert result.exit_code == 1
+    assert "Stage 5 failed:" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_convert_reports_a_stage_6_failure_as_one_line(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = runner.invoke(app, ["convert", "--workspace", str(workspace)])
+
+    assert result.exit_code == 1
+    assert "Stage 6 failed:" in result.output
+    assert "Traceback" not in result.output

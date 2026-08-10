@@ -37,7 +37,7 @@ from shapely.geometry import LineString, Polygon
 # `apply_review`: these are the exact routines the earlier stages use, and a Stage 5 copy
 # would be a second implementation to keep in step. `_sha256` in particular must match
 # what Stage 4 wrote into the manifest or every run reports a stale checksum.
-from osm_scenario.apply_review import _read_json, _sha256
+from osm_scenario.apply_review import ApplyReviewError, _read_json, _sha256
 from osm_scenario.config import ConverterConfig
 from osm_scenario.lane_model import PreliminaryLaneModel
 from osm_scenario.osm_source import read_osm_snapshot, way_terminus_nodes
@@ -62,6 +62,20 @@ _CONNECTOR_MEET_M = 0.05
 
 class ValidationError(RuntimeError):
     """Raised when the reviewed map cannot be validated."""
+
+
+def _read(path: Path, label: str) -> Any:
+    """`_read_json`, with its failures wearing this stage's name.
+
+    The reader is shared on purpose - one implementation of "missing or malformed JSON" -
+    but it raises `ApplyReviewError`, which is not in the Stage 5 CLI's except clause.
+    Without this, pointing `validate-map` at a workspace with no manifest printed nothing
+    at all and exited 1, which reads as a silent crash rather than as an answer.
+    """
+    try:
+        return _read_json(path, label)
+    except ApplyReviewError as error:
+        raise ValidationError(str(error)) from error
 
 
 def _issue(code: str, osm_id: str | None, reason: str, **extra: Any) -> dict[str, Any]:
@@ -94,7 +108,7 @@ def _check_stage_4(workspace: Path, model_path: Path) -> dict[str, Any]:
     Checked before any geometry, because a stale model makes every later answer describe a
     map nobody reviewed.
     """
-    manifest = _read_json(workspace / "source" / "manifest.json", "Stage 1 manifest")
+    manifest = _read(workspace / "source" / "manifest.json", "Stage 1 manifest")
     stage_4 = manifest.get("stage_4")
     if not isinstance(stage_4, dict) or stage_4.get("status") != "passed":
         raise ValidationError("Stage 4 has not passed; run apply-review first")
@@ -149,7 +163,7 @@ def _read_comparison(workspace: Path) -> dict[str, Any]:
     inference leaves the map unchanged, so the same question comes back on every
     regeneration. Stage 4 already did the join that tells the two apart.
     """
-    comparison = _read_json(
+    comparison = _read(
         workspace / "reports" / "reviewed-comparison.json", "Stage 4 comparison report"
     )
     if "findings_still_open" not in comparison:
@@ -679,7 +693,7 @@ def validate_map(*, workspace: Path, config: ConverterConfig) -> tuple[Path, Pat
     comparison = _read_comparison(workspace)
     still_open = list(comparison["findings_still_open"])
 
-    model = PreliminaryLaneModel.model_validate(_read_json(model_path, "reviewed lane model"))
+    model = PreliminaryLaneModel.model_validate(_read(model_path, "reviewed lane model"))
     terminus_nodes = _way_terminus_nodes(workspace / manifest["source"]["path"])
     boundary_issues, boundary_facts = _boundary_report(model, terminus_nodes)
 

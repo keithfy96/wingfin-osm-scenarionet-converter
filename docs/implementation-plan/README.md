@@ -185,6 +185,8 @@ show completed increments beneath it.
        forbidden movements, stale reviews, and unassociated signals fail.
 
 - [ ] **Stage 6 - Convert and validate the ScenarioNet dataset**
+  - Conversion is implemented; isolated ScenarioNet/MetaDrive validation is not.
+    See the Stage 6 implementation section for what has landed.
   - Outputs:
     - `scenario.pkl` - map-only ScenarioNet scenario.
     - `dataset_summary.pkl` and `dataset_mapping.pkl` - ScenarioNet dataset
@@ -373,8 +375,14 @@ before approval.
 ### Stage 6 - Convert to a Map-Only ScenarioNet Dataset
 
 - [ ] **Stage 6 exit criteria complete.**
-
-Add `osm-scenario convert --workspace ...`.
+  - [x] **`osm-scenario convert --workspace ...` implemented**
+    (`src/osm_scenario/conversion.py`). Gated on `stage_5.status == "passed"`
+    and the reviewed model's checksum. Writes `scenario.pkl`,
+    `dataset_summary.pkl` and `dataset_mapping.pkl` under
+    `<workspace>/scenarionet/`, plus `reports/scenario-conversion.json` and a
+    `stage_6` manifest record.
+  - [ ] **Isolated ScenarioNet/MetaDrive validation not started.** Nothing here
+    has been loaded by ScenarioNet or rendered by MetaDrive.
 
 - Convert the reviewed model directly into `ScenarioDescription.map_features`.
 - Include centerline, polygon, type, speed, boundaries, neighbors, and
@@ -389,6 +397,24 @@ Add `osm-scenario convert --workspace ...`.
   `ScenarioDescription.sanity_check()`, reload the serialized dataset,
   construct the MetaDrive map, and verify a route across representative
   junctions.
+
+Two things the implemented conversion decided that the list above does not say:
+
+- **`entry_lanes` / `exit_lanes` are resolved to lane ids.** The lane model
+  records a junction movement as a *connector* id and a continuation as a lane
+  id, and ScenarioNet accepts only the latter. Non-`active` connectors are
+  dropped rather than followed, so a movement the review forbade cannot
+  reappear as a drivable edge.
+- **The dataset carries reachability, not just `routing_components`.** Stage 5's
+  component sizes use *weakly* connected components, which ignore one-way
+  direction: `junction-1` is 6 pieces weakly and 274 strongly, and only 8% of
+  lane-to-lane journeys exist. `metadata.routing` names the best starting lane
+  and how far it reaches, which is the number step 4 above actually needs.
+
+Field names taken from the ScenarioNet format rather than from our own model
+cannot be checked while ScenarioNet is not installed. They are listed in
+`conversion._UNVERIFIED_FIELDS` and repeated in the conversion report, and are
+the first thing to confirm when the isolated environment lands.
 
 ## Interfaces and Artifacts
 

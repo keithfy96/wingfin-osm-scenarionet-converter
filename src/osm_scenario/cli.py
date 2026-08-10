@@ -10,6 +10,7 @@ import typer
 from osm_scenario.acquisition import AcquisitionError, acquire_osm
 from osm_scenario.apply_review import ApplyReviewError, apply_review
 from osm_scenario.config import ConverterConfig, load_config
+from osm_scenario.conversion import ConversionError, convert_scenario
 from osm_scenario.generation import GenerationError, generate_lane_model
 from osm_scenario.inspection import InspectionError, generate_inspection
 from osm_scenario.logging import configure_logging
@@ -201,6 +202,29 @@ def validate_map_command(
     # pipeline reads "wrote a report" as "the map is fit to convert".
     if status != "passed":
         raise typer.Exit(code=1)
+
+
+@app.command()
+def convert(
+    workspace: Workspace,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", exists=True, dir_okay=False, help="Versioned YAML config."),
+    ] = None,
+) -> None:
+    """Convert WORKSPACE's validated lane model into a map-only ScenarioNet dataset."""
+    try:
+        config = (
+            load_config(config_path)
+            if config_path is not None
+            else ConverterConfig(config_version=1)
+        )
+        scenario_path, _, _, report_path = convert_scenario(workspace=workspace, config=config)
+    except (ConversionError, ValueError, KeyError) as error:
+        typer.echo(f"Stage 6 failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    features = json.loads(report_path.read_text(encoding="utf-8"))["map_features"]
+    typer.echo(f"Stage 6 complete: {features} map features -> {scenario_path}")
 
 
 if __name__ == "__main__":

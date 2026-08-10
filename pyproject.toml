@@ -7,6 +7,7 @@ requires-python = ">=3.10,<3.11"
 dependencies = [
   "geopandas>=0.14,<2",
   "networkx>=3.2,<4",
+  "numpy>=1.26,<3",
   "osmnx>=2,<3",
   "pydantic>=2.8,<3",
   "pyproj>=3.6,<4",
