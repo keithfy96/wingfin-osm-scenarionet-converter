@@ -669,3 +669,66 @@ def test_a_tampered_source_osm_is_refused(tmp_path: Path) -> None:
     (workspace / "source" / "map.osm").write_text("<osm/>", encoding="utf-8")
     with pytest.raises(ApplyReviewError, match="checksum does not match"):
         apply_review(workspace=workspace, submission=submission, config=CONFIG)
+
+
+# --- not applicable, for any rule -----------------------------------------------------
+
+
+def test_not_applicable_is_recorded_whatever_rule_it_answers(tmp_path: Path) -> None:
+    """The state used to be scoped to `ambiguous_connector`, so a signal or lane-count
+    finding marked not applicable matched no branch: nothing applied, nothing recorded,
+    and the blocker came back looking untouched."""
+    workspace = _workspace(tmp_path)
+    model = _model(workspace)
+    target = next(f for f in model.findings if f.rule != "ambiguous_connector")
+    report = _apply(
+        workspace,
+        _submission(
+            workspace,
+            overrides={
+                target.identifier: {"status": "not_applicable", "reason": "edge of the extract"}
+            },
+        ),
+    )
+
+    applied = json.loads((workspace / "review" / "applied-decisions.json").read_text())
+    assert target.identifier in applied["non_osm_overrides"]["left_open_as_not_applicable"]
+    assert applied["non_osm_overrides"]["left_open_reasons"][target.identifier] == (
+        "edge of the extract"
+    )
+    assert "edge of the extract" in report.read_text(encoding="utf-8")
+
+
+def test_not_applicable_on_a_connector_still_leaves_it_review_required(tmp_path: Path) -> None:
+    """Hoisting the check above the rule dispatch must not change what it already did."""
+    workspace = _workspace(tmp_path)
+    model = _model(workspace)
+    target = next(f for f in model.findings if f.rule == "ambiguous_connector")
+    connector = target.affected_feature_ids[0]
+    _apply(
+        workspace,
+        _submission(workspace, overrides={target.identifier: {"status": "not_applicable"}}),
+    )
+
+    comparison = json.loads((workspace / "reports" / "reviewed-comparison.json").read_text())
+    assert target.identifier in comparison["left_open_as_not_applicable"]
+    assert connector not in comparison["connectors"]["forbidden_by_review"]
+    assert connector not in comparison["connectors"]["activated_by_review"]
+
+
+def test_a_finding_left_open_does_not_count_as_still_open(tmp_path: Path) -> None:
+    """What Stage 5 gates on. Not applicable is an answer, so it closes the blocker -
+    reported under its own heading rather than folded into the open count."""
+    workspace = _workspace(tmp_path)
+    model = _model(workspace)
+    target = next(f for f in model.findings if f.severity == "blocker")
+    _apply(
+        workspace,
+        _submission(workspace, overrides={target.identifier: {"status": "not_applicable"}}),
+    )
+
+    comparison = json.loads((workspace / "reports" / "reviewed-comparison.json").read_text())
+    assert target.identifier not in comparison["findings_still_open"]
+    assert not [
+        item for item in comparison["finding_decisions"].values() if item["state"] == "undecided"
+    ]

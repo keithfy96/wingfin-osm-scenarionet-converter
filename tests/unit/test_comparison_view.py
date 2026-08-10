@@ -23,6 +23,7 @@ from osm_scenario.lane_model import (
     Point2D,
     PreliminaryLaneModel,
     ReviewFinding,
+    SignalAssociation,
 )
 
 
@@ -101,10 +102,20 @@ def _finding(
     )
 
 
+def _signal(node_id: str, *, status: str, lane_ids: list[str]) -> SignalAssociation:
+    return SignalAssociation(
+        identifier=f"signal-{node_id}",
+        source_node_id=node_id,
+        lane_ids=lane_ids,
+        status=status,  # type: ignore[arg-type]
+    )
+
+
 def _model(
     *,
     findings: list[ReviewFinding] | None = None,
     connectors: list[ConnectorFeature] | None = None,
+    signals: list[SignalAssociation] | None = None,
 ) -> PreliminaryLaneModel:
     return PreliminaryLaneModel(
         metadata=GenerationMetadata(
@@ -120,6 +131,7 @@ def _model(
         ),
         lanes=[_lane("lane-1")],
         connectors=connectors or [],
+        signals=signals or [],
         findings=findings or [],
     )
 
@@ -165,7 +177,8 @@ def test_every_finding_reaches_the_page() -> None:
 
     assert [item["id"] for item in _payload(html)["findings"]] == ["f-blocker", "f-warning"]
     assert html.count("class='frow'") == 2
-    assert "<h2>Blockers still in the model: 1</h2>" in html
+    # No review was supplied, so the blocker cannot be claimed as answered.
+    assert "<h2>Blockers still open: 1</h2>" in html
     assert "<summary>Warnings: 1</summary>" in html
 
 
@@ -261,7 +274,10 @@ def test_a_decided_blocker_says_what_was_approved_not_merely_that_it_was_decided
     html = _render(model, decisions=[_decision("f-1")])
 
     assert "accepted - 1 lane forward" in html
-    assert "All 1 were decided in your review" in html
+    # Answered and the map agrees, so it is not open - it is filed under the group that
+    # explains why it came back at all.
+    assert "<h2>Blockers still open: 0</h2>" in html
+    assert "Answered, re-asked by regeneration: 1" in html
     assert "<span class='badge no'>never decided</span>" not in html
 
 
@@ -297,8 +313,11 @@ def test_an_undecided_blocker_leads_the_list_and_says_so() -> None:
     html = _render(model, decisions=[_decision("a-decided")])
 
     assert [item["id"] for item in _payload(html)["findings"]] == ["z-undecided", "a-decided"]
-    assert "1 of 2 were never decided" in html
+    assert "<h2>Blockers still open: 1</h2>" in html
+    assert "1 was never decided" in html
     assert "<span class='badge no'>never decided</span>" in html
+    # The answered one is filed away rather than counted against the reader.
+    assert "Answered, re-asked by regeneration: 1" in html
 
 
 def test_no_review_supplied_badges_nothing_rather_than_crying_unreviewed() -> None:
@@ -310,3 +329,43 @@ def test_no_review_supplied_badges_nothing_rather_than_crying_unreviewed() -> No
     assert "<span class='badge no'>never decided</span>" not in html
     assert "class='badge" not in html
     assert "No review was supplied" in html
+
+
+def test_a_finding_left_open_as_not_applicable_is_not_counted_open() -> None:
+    """The whole point of the state: a finding that names no real defect here is closed
+    by judging it, not by counting it against the reader for ever."""
+    model = _model(findings=[_finding("f-1", rule="lane_count_inference", severity="blocker")])
+    html = _render(model, decisions=[_decision("f-1", status="not_applicable")])
+
+    assert "<h2>Blockers still open: 0</h2>" in html
+    assert "<h2>Left open as not applicable: 1</h2>" in html
+    # Reported under its own heading rather than folded into zero - closing a blocker
+    # should still cost a visible sentence.
+    assert "Judged not to describe a defect here" in html
+
+
+def test_an_unsatisfied_decision_is_open_and_says_why() -> None:
+    """A signal finding accepts a `proposed_value` of `[]`, so accepting it leaves the
+    association `review_required`. Answered is not the same as resolved."""
+    model = _model(
+        findings=[
+            _finding("f-1", rule="signal_lane_association", severity="blocker", source_id="900")
+        ],
+        signals=[_signal("900", status="review_required", lane_ids=[])],
+    )
+    html = _render(model, decisions=[_decision("f-1")])
+
+    assert "<h2>Blockers still open: 1</h2>" in html
+    assert "carry a decision the map does not reflect" in html
+
+
+def test_a_mapped_signal_is_satisfied_by_its_decision() -> None:
+    model = _model(
+        findings=[
+            _finding("f-1", rule="signal_lane_association", severity="blocker", source_id="900")
+        ],
+        signals=[_signal("900", status="mapped", lane_ids=["lane-1"])],
+    )
+    html = _render(model, decisions=[_decision("f-1")])
+
+    assert "<h2>Blockers still open: 0</h2>" in html

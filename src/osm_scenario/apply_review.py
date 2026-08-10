@@ -403,15 +403,27 @@ def _overrides_from(
     # {way id: {direction: lane count}}. Which tag each becomes is decided at write time
     # from the way's own `oneway`/`junction` tags, which are in the XML being edited.
     lane_counts: dict[str, dict[str, int]] = {}
-    # A blocker marked not_applicable says the *finding* is wrong, not the movement. There
-    # is no verdict to apply, so the connector stays review_required and the reviewed model
-    # asks again - which the comparison reports rather than hiding.
-    left_open: list[str] = []
+    # A finding marked not_applicable says the finding does not describe a defect *here*,
+    # not that the thing it names should change. There is no verdict to apply, so the
+    # feature keeps whatever status generation gave it and the reviewed model asks the
+    # question again - which the comparison reports rather than hiding.
+    #
+    # Checked before the rule dispatch, so it is available to every rule. A signal at the
+    # upstream edge of the extract can never have an approaching lane to associate, and
+    # the only honest answer to that finding is that it is not applicable; scoping this to
+    # connectors left such a decision matching no branch at all, applying nothing and
+    # recording nothing.
+    # {finding id: the reviewer's reason}. The reason is the whole value of this state -
+    # "not applicable" without one is indistinguishable from a finding nobody read.
+    left_open: dict[str, str] = {}
 
     for decision in decisions:
         finding = findings[decision["finding_id"]]
         status = decision.get("status")
         value = decision.get("value")
+        if status == "not_applicable":
+            left_open[finding.identifier] = str(decision.get("reason") or "")
+            continue
         if finding.rule == "ambiguous_connector":
             if status == "accepted" or (
                 status == "overridden" and isinstance(value, dict) and value.get("accepted")
@@ -419,8 +431,6 @@ def _overrides_from(
                 active.update(finding.affected_feature_ids)
             elif status == "overridden":
                 forbidden.update(finding.affected_feature_ids)
-            elif status == "not_applicable":
-                left_open.append(finding.identifier)
         elif finding.rule == "signal_lane_association" and status == "overridden":
             signal_associations[finding.identifier] = list(value["lane_ids"])
         elif finding.rule == "inferred_stop_line" and status == "accepted":
@@ -446,6 +456,7 @@ def _overrides_from(
         "signal_lane_associations": {k: v for k, v in sorted(signal_associations.items())},
         "accepted_stop_line_ids": sorted(accepted_stop_lines),
         "left_open_as_not_applicable": sorted(left_open),
+        "left_open_reasons": dict(sorted(left_open.items())),
         "lane_count_overrides": {
             way_id: dict(sorted(by_direction.items()))
             for way_id, by_direction in sorted(lane_counts.items())
@@ -523,10 +534,28 @@ def _regenerate(
     return model, counts, fingerprint, selection_audit
 
 
+def _decision_is_satisfied(finding: ReviewFinding, unmapped_signal_nodes: set[str]) -> bool:
+    """Does the reviewed model actually reflect the decision taken on this finding?
+
+    Answering a finding and resolving it are not the same act. Accepting an inference
+    leaves the map exactly as generated - that is what accepting *means* - so for almost
+    every rule a decision is satisfied the moment it is made.
+
+    `signal_lane_association` is the exception, and the reason this check exists.
+    Accepting it accepts a `proposed_value` of `[]`, because the finding only fires when
+    no approaching lane was found; the association stays `review_required` with no lanes.
+    Keying resolution on "a decision exists" would call that settled for ever.
+    """
+    if finding.rule != "signal_lane_association":
+        return True
+    return not any(node in unmapped_signal_nodes for node in finding.source_ids)
+
+
 def _decisions_by_reviewed_finding(
     before: dict[tuple[Any, ...], ReviewFinding],
     reviewed: list[ReviewFinding],
     decisions: list[dict[str, Any]],
+    unmapped_signal_nodes: set[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Which reviewed finding each decision answers, joined by question, not identifier.
 
@@ -540,7 +569,11 @@ def _decisions_by_reviewed_finding(
     question, `undecided` when none does. The third state - "we were not told" - is the
     empty map returned when no decisions are supplied at all, so an absent entry never
     reads as an unreviewed finding.
+
+    A decided entry also carries `satisfied`, which is whether the model agrees with the
+    decision. `decided` is about the reviewer; `satisfied` is about the map.
     """
+    unmapped = unmapped_signal_nodes or set()
     by_finding_id = {d["finding_id"]: d for d in decisions}
     joined: dict[str, dict[str, Any]] = {}
     for finding in reviewed:
@@ -554,6 +587,7 @@ def _decisions_by_reviewed_finding(
         joined[finding.identifier] = {
             "state": "decided",
             "status": decision["status"],
+            "satisfied": _decision_is_satisfied(finding, unmapped),
             "value": decision.get("value"),
             "proposed_value": decision.get("proposed_value", finding.proposed_value),
             "reason": decision.get("reason"),
@@ -579,12 +613,45 @@ def _comparison(
     after = {_question_key(f): f for f in reviewed.findings}
     created = [after[k] for k in after.keys() - before.keys()]
     resolved = [before[k] for k in before.keys() - after.keys()]
+    unmapped_signal_nodes = {
+        signal.source_node_id
+        for signal in reviewed.signals
+        if signal.status != "mapped" or not signal.lane_ids
+    }
     # Empty when no decisions were supplied, which is how a caller says "not told" rather
     # than "nothing was decided" - the page must not badge a finding as unreviewed on that.
     decided = (
-        _decisions_by_reviewed_finding(before, reviewed.findings, decisions)
+        _decisions_by_reviewed_finding(
+            before, reviewed.findings, decisions, unmapped_signal_nodes
+        )
         if decisions is not None
         else {}
+    )
+    # What Stage 5 gates on. A blocker is open when nobody answered it, or when the map
+    # still contradicts the answer. Not when it merely reappears: an accepted inference
+    # regenerates identically by design, so the same question comes back for ever.
+    #
+    # `not_applicable` is excluded because it *is* an answer - "this finding does not
+    # describe a defect here". It is reported separately under `left_open_as_not_applicable`
+    # rather than folded into zero, so closing a blocker still costs a visible sentence.
+    #
+    # With no decisions supplied at all, every blocker is open. "We were not told" cannot
+    # be reported as zero: an empty list reads as a claim however it is documented, and a
+    # map nobody reviewed must not look the same as one whose blockers were all answered.
+    still_open = sorted(
+        finding.identifier
+        for finding in reviewed.findings
+        if finding.severity == "blocker"
+        and (
+            decisions is None
+            or (
+                decided.get(finding.identifier, {}).get("status") != "not_applicable"
+                and (
+                    decided.get(finding.identifier, {}).get("state") == "undecided"
+                    or not decided.get(finding.identifier, {}).get("satisfied", True)
+                )
+            )
+        )
     )
 
     def by_rule(findings: list[ReviewFinding]) -> dict[str, dict[str, int]]:
@@ -661,6 +728,11 @@ def _comparison(
         # inference leaves the map unchanged, so the same question comes back. Unresolved
         # means `state == "undecided"`, not "a blocker exists".
         "finding_decisions": decided,
+        # The single list Stage 5 gates on, derived from the above: blockers nobody
+        # answered, plus blockers whose answer the map does not reflect. A blocker that
+        # merely reappears is not here, and neither is one judged not applicable - that
+        # one is reported under `left_open_as_not_applicable`, where it stays visible.
+        "findings_still_open": still_open,
         "lanes_left_without_an_exit": sorted(
             lane for lane in (stranded_after - stranded_before) if lane in reviewed_lanes
         ),
@@ -761,13 +833,19 @@ def _markdown(comparison: dict[str, Any], applied: dict[str, Any]) -> str:
 
     left_open = comparison["left_open_as_not_applicable"]
     if left_open:
+        reasons = applied.get("left_open_reasons", {})
         lines += [
             f"## Left open: {len(left_open)}",
             "",
-            "Marked not applicable, which says the finding is wrong rather than deciding "
-            "the movement, so nothing was applied and the reviewed model asks again.",
+            "Marked not applicable, which says the finding does not describe a defect "
+            "here rather than deciding what it names. Nothing was applied, and the "
+            "reviewed model asks the question again - deliberately, so a later reader "
+            "sees the judgement instead of a silence.",
             "",
-            *(f"- `{item}`" for item in left_open),
+            *(
+                f"- `{item}`" + (f" - {reasons[item]}" if reasons.get(item) else "")
+                for item in left_open
+            ),
             "",
         ]
     return "\n".join(lines)

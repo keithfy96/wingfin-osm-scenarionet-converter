@@ -272,6 +272,10 @@ def _findings(
                 # decided this" would raise a false alarm if they were the same state.
                 "decision_state": entry["state"] if entry else "unknown",
                 "decision": _decision_label(entry),
+                # The raw status, so the panel can separate "not applicable" - an answer -
+                # from the answers that leave the map as it was.
+                "decision_status": entry.get("status") if entry else None,
+                "decision_reason": entry.get("reason") if entry else None,
             }
         )
     # Undecided leads within each severity: whatever still needs attention should be the
@@ -313,38 +317,36 @@ def _finding_rows(findings: list[dict[str, Any]]) -> str:
     return "".join(out)
 
 
-def _blocker_verdict(blockers: list[dict[str, Any]]) -> str:
-    """Say whether the blockers still listed were reviewed - the question the count begs.
+def _blocker_verdict(still_open: list[dict[str, Any]]) -> str:
+    """Say *why* each open blocker is open - the question the count begs.
 
-    A blocker surviving into the reviewed model is not evidence of unfinished work.
-    Accepting a finding means the inference stands, so the map does not change, so the
-    regenerated model asks the same question of the same evidence and mints a fresh
-    finding for it. Without this paragraph the page reports 27 blockers and leaves the
-    reader to guess which of them anyone has looked at.
+    Only two things put a blocker in this list, and they need different work. Either
+    nobody answered it, or somebody did and the map still disagrees. Reporting one number
+    over both would send a reviewer back to Stage 3 for a question they already answered.
     """
-    undecided = [f for f in blockers if f["decision_state"] == "undecided"]
-    if all(f["decision_state"] == "unknown" for f in blockers):
-        verdict = "<p class='caption'>No review was supplied, so nothing here is marked decided.</p>"
-    elif undecided:
-        verdict = (
-            f"<p class='caption warn'>{len(undecided)} of {len(blockers)} were never "
-            "decided. They lead the list below, badged <b>never decided</b>. The rest "
-            "carry the decision that answered them.</p>"
+    undecided = [f for f in still_open if f["decision_state"] == "undecided"]
+    unsatisfied = [f for f in still_open if f["decision_state"] == "decided"]
+    if all(f["decision_state"] == "unknown" for f in still_open):
+        return "<p class='caption'>No review was supplied, so nothing here is marked decided.</p>"
+    parts = []
+    if undecided:
+        parts.append(
+            f"<p class='caption warn'>{len(undecided)} was never decided. "
+            "Answer it in Stage 3.</p>"
+            if len(undecided) == 1
+            else f"<p class='caption warn'>{len(undecided)} were never decided. "
+            "Answer them in Stage 3.</p>"
         )
-    else:
-        verdict = (
-            f"<p class='caption'><b>All {len(blockers)} were decided in your review</b> - "
-            "each row carries the decision that answered it, and nothing here is "
-            "unreviewed. They are still listed because accepting a finding leaves the map "
-            "unchanged, so the regenerated model asks the same question again.</p>"
+    if unsatisfied:
+        parts.append(
+            f"<p class='caption warn'>{len(unsatisfied)} carry a decision the map does not "
+            "reflect - the answer was recorded but nothing in the reviewed model changed "
+            "to match it. Accepting a finding that proposes nothing is the usual cause; "
+            "an override, or <b>not applicable</b> where the finding names no real defect, "
+            "is what closes it.</p>"
         )
-    return verdict + (
-        "<p class='caption'>To make one go away rather than come back: a "
-        "<code>lane_count_inference</code> blocker is answered by overriding the count in "
-        "Stage 3, which is written into <code>review/reviewed.osm</code> and leaves the "
-        "source untouched. The others still need an edit to <code>source/map.osm</code>, "
-        "which moves its checksum and does invalidate the review. Click a row to find it "
-        "on the map.</p>"
+    return "".join(parts) + (
+        "<p class='caption'>Click a row to find it on the map.</p>"
     )
 
 
@@ -365,6 +367,20 @@ def _side_panel(comparison: dict[str, Any], findings: list[dict[str, Any]]) -> s
     stranded = comparison["lanes_left_without_an_exit"]
     blockers = [finding for finding in findings if finding["severity"] == "blocker"]
     warnings = [finding for finding in findings if finding["severity"] != "blocker"]
+    # Partitioned on the same list `findings_still_open` was computed from, so the page and
+    # `reviewed-comparison.json` cannot disagree about which blockers are open.
+    open_ids = set(comparison.get("findings_still_open") or [])
+    still_open = [finding for finding in blockers if finding["id"] in open_ids]
+    left_open = [
+        finding
+        for finding in blockers
+        if finding["id"] not in open_ids and finding["decision_status"] == "not_applicable"
+    ]
+    answered = [
+        finding
+        for finding in blockers
+        if finding["id"] not in open_ids and finding["decision_status"] != "not_applicable"
+    ]
     blocking = "".join(
         f"<li><code>{item['rule']}</code> at {', '.join(item['source_ids'])}</li>"
         for item in created["blocking"]
@@ -399,11 +415,30 @@ def _side_panel(comparison: dict[str, Any], findings: list[dict[str, Any]]) -> s
             if created["blocking"]
             else "<p class='muted'>None of them block promotion.</p>"
         )
-        + f"<h2>Blockers still in the model: {len(blockers)}</h2>"
+        + f"<h2>Blockers still open: {len(still_open)}</h2>"
         + (
-            _blocker_verdict(blockers) + _finding_rows(blockers)
-            if blockers
-            else "<p class='muted'>None. Nothing blocks promotion.</p>"
+            _blocker_verdict(still_open) + _finding_rows(still_open)
+            if still_open
+            else "<p class='muted'>None. Every blocker in the model has been answered, "
+            "and the map agrees with the answer.</p>"
+        )
+        + (
+            f"<h2>Left open as not applicable: {len(left_open)}</h2>"
+            "<p class='caption'>Judged not to describe a defect here. Nothing was applied, "
+            "so the regenerated model asks again - deliberately, so the judgement stays "
+            "visible instead of becoming a silence.</p>" + _finding_rows(left_open)
+            if left_open
+            else ""
+        )
+        + (
+            f"<details><summary>Answered, re-asked by regeneration: {len(answered)}"
+            "</summary>"
+            "<p class='caption'>Accepting a finding leaves the map unchanged - that is what "
+            "accepting means - so the regenerated model asks the same question of the same "
+            "evidence. These are settled; they are not work.</p>"
+            f"{_finding_rows(answered)}</details>"
+            if answered
+            else ""
         )
         + (
             f"<details><summary>Warnings: {len(warnings)}</summary>"
