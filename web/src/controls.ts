@@ -54,10 +54,11 @@ export interface ControlSpec {
    * decisions are written into `review/reviewed.osm` as tags and which stay non-OSM
    * overrides in `review/applied-decisions.json`.
    *
-   * `apply-review` applies the non-OSM ones today and *refuses* any override whose
-   * effect is an OSM tag, naming the rule. So the `overrideEffect` strings below
-   * describe the intended contract rather than what runs now — keep them in step with
-   * `_OSM_NATIVE_RULES` in `src/osm_scenario/apply_review.py` as each is implemented.
+   * `apply-review` applies the non-OSM ones, plus `lane_count_inference`, which is the
+   * first tag write to land. It still *refuses* any other override whose effect is an OSM
+   * tag, naming the rule. So the remaining `overrideEffect` strings describe the intended
+   * contract rather than what runs now — keep them in step with `_OSM_NATIVE_RULES` in
+   * `src/osm_scenario/apply_review.py` as each is implemented.
    */
   acceptEffect: string;
   /** What overriding does. Null exactly when `overrideLabel` is null. */
@@ -91,17 +92,17 @@ const SPECS: Record<string, ControlSpec> = {
     fields: [{ kind: "number", key: "width_m", label: "Lane width", unit: "m", min: 1.5, max: 6, step: 0.1 }],
   },
   lane_count_inference: {
-    question: "How many lanes does this way carry, per direction?",
+    question: "How many lanes does this way carry, in the direction this finding names?",
     acceptLabel: "Accept inferred count",
-    overrideLabel: "Set lane counts",
+    overrideLabel: "Set lane count",
     acceptEffect: "Keeps the inferred count; the same lanes are generated for this way.",
     overrideEffect:
-      "Writes lanes / lanes:forward / lanes:backward into reviewed.osm; the way is re-laned.",
-    fields: [
-      { kind: "number", key: "lanes", label: "Total lanes", min: 1, max: 12, step: 1 },
-      { kind: "number", key: "lanes_forward", label: "Forward lanes", min: 0, max: 12, step: 1 },
-      { kind: "number", key: "lanes_backward", label: "Backward lanes", min: 0, max: 12, step: 1 },
-    ],
+      "Writes lanes (one-way) or lanes:<direction> into reviewed.osm; the way is re-laned.",
+    // One field, not three. The finding is already about a single direction — it carries
+    // `proposed_value.direction` — so `lanes` / `lanes:forward` / `lanes:backward` offered
+    // three ways to state one number and two ways to contradict both the other fields and
+    // the finding itself. Stage 4 picks the tag from the way's own oneway-ness.
+    fields: [{ kind: "number", key: "lane_count", label: "Lanes this direction", min: 1, max: 12, step: 1 }],
   },
   lane_transition_count_mismatch: {
     question: "Do these approach lanes really all feed the same destination lane?",

@@ -11,8 +11,9 @@ Two properties hold whatever the review says, and both are enforced rather than 
   changes lane ids, connector ids and findings downstream of them, and only running the
   generator again gets all of that right.
 
-Scope, deliberately: decisions that would become OSM tags are refused rather than half
-applied. See `_OSM_NATIVE_RULES`.
+Scope, deliberately: a decision that would become an OSM tag is applied only where the tag
+write has been built and proved. `lane_count_inference` is; the rest are refused by name
+rather than half applied. See `_OSM_NATIVE_RULES`.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -37,8 +39,10 @@ from osm_scenario.config import ConverterConfig
 from osm_scenario.generation import (
     GENERATOR_VERSION,
     LANE_MODEL_SCHEMA_VERSION,
+    OPPOSITE_DIRECTION,
     ReviewOverrides,
     _canonical_checksum,
+    _carries_whole_carriageway,
     build_lane_model,
 )
 from osm_scenario.lane_model import PreliminaryLaneModel, ReviewFinding
@@ -47,22 +51,30 @@ from osm_scenario.osm_source import read_osm_snapshot, select_public_driving_gra
 
 APPLIED_DECISIONS_VERSION = 1
 
-# Rules whose override writes a tag into the reviewed OSM. None of them is implemented
-# yet, so an override on one is refused by name rather than silently dropped - a review
-# that appears to have been applied but was not is worse than a run that stops.
+# Rules whose override writes a tag into the reviewed OSM and which are *not* implemented.
+# An override on one is refused by name rather than silently dropped - a review that
+# appears to have been applied but was not is worse than a run that stops.
 #
-# When these are built: `width` must invert generation.py's
-# `width_total / (lanes tag or directional count)` and be proved by regenerating and
-# reading the lane back, and `turn:lanes` must be pinned against `_turn_permissions`,
-# which already encodes the kerbside-first ordering under left-hand traffic.
+# `lane_count_inference` was the first to land and is no longer listed: see
+# `_lane_count_tag`. It set the standard the rest have to meet - the tag written must
+# invert what generation.py reads, and the override must be proved by regenerating and
+# reading the lane back, not merely by the tag appearing in the file.
+#
+# When the rest are built: `width` must invert generation.py's
+# `width_total / (lanes tag or directional count)`, and `turn:lanes` must be pinned against
+# `_turn_permissions`, which already encodes the kerbside-first ordering under left-hand
+# traffic.
 _OSM_NATIVE_RULES = {
     "speed_default": "maxspeed",
     "lane_width_default": "width",
-    "lane_count_inference": "lanes / lanes:forward / lanes:backward",
     "lane_transition_count_mismatch": "lanes on the destination way",
     "turn_permission_geometry_conflict": "turn:lanes",
     "restriction_effect_review": "the turn restriction relation",
 }
+
+# The largest lane count an override may claim. Matches the Stage 3 control's `max`, so a
+# value the browser would not let a reviewer type cannot arrive by a hand-edited file.
+_MAX_OVERRIDE_LANES = 12
 
 # How to identify the *question* a finding asks, as opposed to the answer it proposes.
 #
@@ -235,7 +247,57 @@ def _check_submission(
     return decisions
 
 
+def _override_lane_count(finding: ReviewFinding, value: Any) -> int:
+    """The lane count a `lane_count_inference` override asks for, or a refusal by name.
+
+    One key, `lane_count`, for the one direction the finding is about. Stage 3 offered
+    `lanes` / `lanes:forward` / `lanes:backward` before this rule was implemented, which
+    could state the number three ways and contradict itself two of them; a file carrying
+    that shape is refused rather than guessed at, because guessing which of three fields
+    the reviewer meant is exactly the silent misapplication Gate 5 exists to prevent.
+    """
+    count = value.get("lane_count") if isinstance(value, dict) else None
+    # bool is an int in Python, and `{"lane_count": true}` is not a lane count.
+    if isinstance(count, bool) or not isinstance(count, int):
+        raise ApplyReviewError(
+            f"lane_count_inference override on {finding.identifier} needs "
+            '{"lane_count": <whole number of lanes in this finding\'s direction>}'
+        )
+    if not 1 <= count <= _MAX_OVERRIDE_LANES:
+        raise ApplyReviewError(
+            f"lane_count_inference override on {finding.identifier} asks for {count} "
+            f"lanes; the permitted range is 1 to {_MAX_OVERRIDE_LANES}"
+        )
+    return count
+
+
+def _override_direction(finding: ReviewFinding) -> str:
+    """Which direction of the way the finding is about.
+
+    Read from the finding's own proposal, not from the override: the reviewer answers the
+    question that was asked, and the question names one direction.
+    """
+    proposed = finding.proposed_value
+    direction = proposed.get("direction") if isinstance(proposed, dict) else None
+    if direction not in OPPOSITE_DIRECTION:
+        raise ApplyReviewError(
+            f"lane_count_inference finding {finding.identifier} proposes no direction, "
+            "so an override on it cannot be written to a tag"
+        )
+    return str(direction)
+
+
 def _check_override_value(finding: ReviewFinding, value: Any, lane_ids: set[str]) -> None:
+    if finding.rule == "lane_count_inference":
+        _override_lane_count(finding, value)
+        _override_direction(finding)
+        if len(finding.source_ids) != 1:
+            raise ApplyReviewError(
+                f"lane_count_inference override on {finding.identifier} names "
+                f"{len(finding.source_ids)} source ways; a lane count is written onto "
+                "exactly one way"
+            )
+        return
     if finding.rule == "ambiguous_connector":
         if not isinstance(value, dict) or not isinstance(value.get("accepted"), bool):
             raise ApplyReviewError(
@@ -263,6 +325,72 @@ def _check_override_value(finding: ReviewFinding, value: Any, lane_ids: set[str]
     )
 
 
+def _write_reviewed_osm(
+    source_path: Path, reviewed_osm: Path, lane_counts: dict[str, dict[str, int]]
+) -> dict[str, dict[str, str]]:
+    """Write the reviewed OSM and return the tags the review materialised onto it.
+
+    With nothing to write the source is copied byte for byte. That is not merely an
+    optimisation: a review that changed no tag must produce a reviewed OSM identical to
+    the one it was made against, and byte identity is a property a test can check, which
+    round-tripping every run through an XML writer would quietly give up.
+
+    Which tag a lane count becomes is decided per way, from that way's own tags, so that
+    what lands is idiomatic OSM and so it inverts `_directional_lane_count` exactly:
+
+    * a way carrying the whole carriageway (`oneway`, or a roundabout) takes `lanes`,
+      which that function reads as `explicit_total_oneway`;
+    * any other way takes `lanes:<direction>`, read as `explicit_directional`.
+
+    Both are its highest-confidence branches and both short-circuit the inference, so the
+    reviewed model reports the reviewer's number rather than re-deriving one.
+    """
+    if not lane_counts:
+        shutil.copy2(source_path, reviewed_osm)
+        return {}
+
+    tree = ET.parse(source_path)
+    root = tree.getroot()
+    materialised: dict[str, dict[str, str]] = {}
+    for way in root.findall("way"):
+        wanted = lane_counts.get(way.get("id") or "")
+        if not wanted:
+            continue
+        tags = {
+            tag.get("k") or "": tag.get("v") or ""
+            for tag in way.findall("tag")
+            if tag.get("k")
+        }
+        whole = _carries_whole_carriageway(tags)
+        written: dict[str, str] = {}
+        for direction, count in sorted(wanted.items()):
+            key = "lanes" if whole else f"lanes:{direction}"
+            written[key] = str(count)
+        # A one-way way has one direction, so two overrides on one cannot both be right;
+        # the check above only catches two answers for the same direction.
+        if whole and len(wanted) > 1:
+            raise ApplyReviewError(
+                f"way {way.get('id')} carries the whole carriageway but the review sets a "
+                f"lane count for {len(wanted)} directions on it"
+            )
+        for key, value in written.items():
+            existing = next((t for t in way.findall("tag") if t.get("k") == key), None)
+            if existing is not None:
+                existing.set("v", value)
+            else:
+                ET.SubElement(way, "tag", {"k": key, "v": value})
+        materialised[way.get("id") or ""] = written
+
+    missing = sorted(set(lane_counts) - set(materialised))
+    if missing:
+        raise ApplyReviewError(
+            "the review sets a lane count on ways that are not in the source OSM: "
+            f"{', '.join(missing[:5])}"
+        )
+    tree.write(reviewed_osm, encoding="utf-8", xml_declaration=True)
+    return materialised
+
+
 def _overrides_from(
     decisions: list[dict[str, Any]], model: PreliminaryLaneModel
 ) -> tuple[ReviewOverrides, dict[str, Any]]:
@@ -272,6 +400,9 @@ def _overrides_from(
     active: set[str] = set()
     signal_associations: dict[str, list[str]] = {}
     accepted_stop_lines: list[str] = []
+    # {way id: {direction: lane count}}. Which tag each becomes is decided at write time
+    # from the way's own `oneway`/`junction` tags, which are in the XML being edited.
+    lane_counts: dict[str, dict[str, int]] = {}
     # A blocker marked not_applicable says the *finding* is wrong, not the movement. There
     # is no verdict to apply, so the connector stays review_required and the reviewed model
     # asks again - which the comparison reports rather than hiding.
@@ -294,6 +425,20 @@ def _overrides_from(
             signal_associations[finding.identifier] = list(value["lane_ids"])
         elif finding.rule == "inferred_stop_line" and status == "accepted":
             accepted_stop_lines.extend(finding.affected_feature_ids)
+        elif finding.rule == "lane_count_inference" and status == "overridden":
+            # Accepting changes nothing by design: the inferred count already stands, and
+            # the decision records which number that was. Only an override moves a tag.
+            way_id = finding.source_ids[0]
+            direction = _override_direction(finding)
+            count = _override_lane_count(finding, value)
+            existing = lane_counts.setdefault(way_id, {}).get(direction)
+            if existing is not None and existing != count:
+                raise ApplyReviewError(
+                    f"two overrides disagree about the {direction} lane count on way "
+                    f"{way_id}: {existing} and {count}. Re-open Stage 3 and settle it; "
+                    "applying either one silently would discard the other."
+                )
+            lane_counts[way_id][direction] = count
 
     applied = {
         "forbidden_connector_ids": sorted(forbidden),
@@ -301,6 +446,10 @@ def _overrides_from(
         "signal_lane_associations": {k: v for k, v in sorted(signal_associations.items())},
         "accepted_stop_line_ids": sorted(accepted_stop_lines),
         "left_open_as_not_applicable": sorted(left_open),
+        "lane_count_overrides": {
+            way_id: dict(sorted(by_direction.items()))
+            for way_id, by_direction in sorted(lane_counts.items())
+        },
     }
     overrides = ReviewOverrides(
         forbidden_connector_ids=frozenset(forbidden),
@@ -379,6 +528,10 @@ def _comparison(
     preliminary: PreliminaryLaneModel,
     reviewed: PreliminaryLaneModel,
     applied: dict[str, Any],
+    # Defaults to nothing retagged, which is the shape of every review that overrides no
+    # lane count - the common case, and the one where reviewed.osm is a byte copy.
+    retagged: dict[str, dict[str, str]] | None = None,
+    decisions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     def ids(items: list[Any]) -> set[str]:
         return {item.identifier for item in items}
@@ -387,6 +540,7 @@ def _comparison(
     after = {_question_key(f): f for f in reviewed.findings}
     created = [after[k] for k in after.keys() - before.keys()]
     resolved = [before[k] for k in before.keys() - after.keys()]
+    decided = _decisions_by_reviewed_finding(preliminary, after, decisions or [])
 
     def by_rule(findings: list[ReviewFinding]) -> dict[str, dict[str, int]]:
         table: dict[str, dict[str, int]] = {}
@@ -456,7 +610,7 @@ def _comparison(
             "forbidden_by_review": applied["forbidden_connector_ids"],
             "activated_by_review": applied["activated_connector_ids"],
         },
-        "ways_retagged": {},
+        "ways_retagged": retagged or {},
         "lanes_left_without_an_exit": sorted(
             lane for lane in (stranded_after - stranded_before) if lane in reviewed_lanes
         ),
@@ -589,10 +743,12 @@ def apply_review(*, workspace: Path, submission: Path, config: ConverterConfig) 
     review_dir = workspace / "review"
     review_dir.mkdir(parents=True, exist_ok=True)
     reviewed_osm = review_dir / "reviewed.osm"
-    # No rule writes tags yet, so the reviewed OSM is the source verbatim. Copying rather
-    # than round-tripping through an XML writer keeps it byte-identical, which is a
-    # property the tests can check; tag application arrives with the deferred rules.
-    shutil.copy2(source_path, reviewed_osm)
+    # The reviewer's lane counts land here, on a derived file, and never on the source.
+    # That is what lets a lane count be corrected at all: editing `source/map.osm` to fix
+    # one would move its checksum and invalidate every decision in the review.
+    materialised_tags = _write_reviewed_osm(
+        source_path, reviewed_osm, applied["lane_count_overrides"]
+    )
 
     reviewed, counts, fingerprint, selection_audit = _regenerate(
         reviewed_osm=reviewed_osm, manifest=manifest, config=config, overrides=overrides
@@ -610,7 +766,12 @@ def apply_review(*, workspace: Path, submission: Path, config: ConverterConfig) 
         encoding="utf-8",
     )
 
-    comparison = _comparison(preliminary=preliminary, reviewed=reviewed, applied=applied)
+    comparison = _comparison(
+        preliminary=preliminary,
+        reviewed=reviewed,
+        applied=applied,
+        retagged=materialised_tags,
+    )
     comparison_json = reports_dir / "reviewed-comparison.json"
     comparison_json.write_text(
         json.dumps(comparison, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -634,7 +795,10 @@ def apply_review(*, workspace: Path, submission: Path, config: ConverterConfig) 
                 "applied_at": datetime.now(timezone.utc).isoformat(),
                 "submission": payload,
                 "non_osm_overrides": applied,
-                "materialised_osm_tags": {},
+                # What the review actually wrote into reviewed.osm, per way. Empty when
+                # no override moved a tag, which is what makes the reviewed OSM a byte
+                # copy of the source.
+                "materialised_osm_tags": materialised_tags,
             },
             indent=2,
             sort_keys=True,

@@ -24,6 +24,9 @@ describe("recording a decision", () => {
       location: finding().location,
       source_type: "way",
       source_ids: ["776021091"],
+      // Carried even though nothing was overridden: this is the value the reviewer
+      // approved, and without it "accepted" says nothing about what was accepted.
+      proposed_value: { maxspeed_kph: 50 },
     });
   });
 
@@ -96,17 +99,31 @@ describe("readiness", () => {
     expect(review.toSubmission().decisions).toHaveLength(1);
   });
 
-  it("carries the finding's location onto the decision it exports", () => {
-    // The exported answers are joined against a GPS track on their own, so they have
-    // to place themselves rather than sending the reader back to preliminary.json.
+  it("carries the finding's location and proposed value onto the decision it exports", () => {
+    // The exported answers are read on their own — joined against a GPS track, or asked
+    // what lane count was approved — so they have to place themselves and state what they
+    // agreed to, rather than sending the reader back to preliminary.json for either.
     const located = finding({ identifier: "b", severity: "blocker" });
     const review = state([located]);
     review.decide("b", { status: "accepted" });
 
     const submission = review.toSubmission();
-    expect(submission.submission_version).toBe(3);
+    expect(submission.submission_version).toBe(4);
     expect(submission.decisions[0]?.location).toEqual(located.location);
     expect(submission.decisions[0]?.source_ids).toEqual(located.source_ids);
+    expect(submission.decisions[0]?.proposed_value).toEqual(located.proposed_value);
+  });
+
+  it("keeps an override's own value distinct from what was proposed", () => {
+    // Both are recorded, because a number the generator inferred and a number the
+    // reviewer typed are not the same record even when they are the same number.
+    const target = finding({ identifier: "c", rule: "lane_count_inference" });
+    const review = state([target]);
+    review.decide("c", { status: "overridden", value: { lane_count: 3 } });
+
+    const decision = review.toSubmission().decisions[0];
+    expect(decision?.value).toEqual({ lane_count: 3 });
+    expect(decision?.proposed_value).toEqual(target.proposed_value);
   });
 });
 

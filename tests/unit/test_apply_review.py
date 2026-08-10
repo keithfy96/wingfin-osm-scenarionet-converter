@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
@@ -122,6 +123,12 @@ def _apply(workspace: Path, submission: dict[str, Any]) -> Path:
 
 def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _way_tags(osm: Path, way_id: str) -> dict[str, str]:
+    root = ET.parse(osm).getroot()
+    way = next(w for w in root.findall("way") if w.get("id") == way_id)
+    return {t.get("k") or "": t.get("v") or "" for t in way.findall("tag")}
 
 
 def _reviewed(workspace: Path) -> PreliminaryLaneModel:
@@ -270,7 +277,7 @@ def test_the_source_osm_is_never_written(tmp_path: Path) -> None:
     assert _sha(source) == before
 
 
-def test_the_reviewed_osm_is_a_faithful_copy_while_no_rule_writes_tags(
+def test_the_reviewed_osm_is_a_faithful_copy_when_no_override_writes_a_tag(
     tmp_path: Path,
 ) -> None:
     workspace = _workspace(tmp_path)
@@ -278,6 +285,119 @@ def test_the_reviewed_osm_is_a_faithful_copy_while_no_rule_writes_tags(
     assert (workspace / "review" / "reviewed.osm").read_bytes() == (
         workspace / "source" / "map.osm"
     ).read_bytes()
+    applied = json.loads((workspace / "review" / "applied-decisions.json").read_text())
+    assert applied["materialised_osm_tags"] == {}
+
+
+def _lane_count_override(
+    workspace: Path, *, count: int, direction: str = "forward"
+) -> tuple[dict[str, Any], str]:
+    """A review that sets one way's lane count, and the way it lands on."""
+    finding = next(
+        f
+        for f in _model(workspace).findings
+        if f.rule == "lane_count_inference"
+        and isinstance(f.proposed_value, dict)
+        and f.proposed_value.get("direction") == direction
+    )
+    submission = _submission(
+        workspace,
+        overrides={
+            finding.identifier: {"status": "overridden", "value": {"lane_count": count}}
+        },
+    )
+    return submission, finding.source_ids[0]
+
+
+def test_a_lane_count_override_reaches_the_regenerated_model(tmp_path: Path) -> None:
+    # The point of the whole path: not that the tag appears in the file, but that the
+    # generator reads it back and the reviewed model holds the count the reviewer asked
+    # for. A tag written but not read would be a review that looks applied and is not.
+    workspace = _workspace(tmp_path)
+    submission, way_id = _lane_count_override(workspace, count=3)
+
+    def forward_lanes(model: PreliminaryLaneModel) -> set[int]:
+        return {
+            lane.lane_count
+            for lane in model.lanes
+            if way_id in lane.source_way_ids and lane.direction == "forward"
+        }
+
+    assert forward_lanes(_model(workspace)) != {3}
+    _apply(workspace, submission)
+    assert forward_lanes(_reviewed(workspace)) == {3}
+
+    # The tag is whichever of the two the way's own oneway-ness calls for, and both are
+    # branches `_directional_lane_count` reads as explicit rather than inferring from.
+    written = json.loads((workspace / "review" / "applied-decisions.json").read_text())[
+        "materialised_osm_tags"
+    ][way_id]
+    assert written in ({"lanes:forward": "3"}, {"lanes": "3"})
+    assert _way_tags(workspace / "review" / "reviewed.osm", way_id) | written == _way_tags(
+        workspace / "review" / "reviewed.osm", way_id
+    )
+    comparison = json.loads((workspace / "reports" / "reviewed-comparison.json").read_text())
+    assert comparison["ways_retagged"][way_id] == written
+
+
+def test_an_overridden_lane_count_stops_being_inferred(tmp_path: Path) -> None:
+    # An explicit count is evidence, so the finding that asked for one is answered rather
+    # than asked again. The other direction's finding is untouched.
+    workspace = _workspace(tmp_path)
+    submission, way_id = _lane_count_override(workspace, count=2)
+    _apply(workspace, submission)
+
+    def directions(model: PreliminaryLaneModel) -> set[str]:
+        return {
+            str(f.proposed_value["direction"])
+            for f in model.findings
+            if f.rule == "lane_count_inference"
+            and way_id in f.source_ids
+            and isinstance(f.proposed_value, dict)
+        }
+
+    assert "forward" in directions(_model(workspace))
+    assert "forward" not in directions(_reviewed(workspace))
+
+
+def test_the_source_osm_is_untouched_even_when_a_tag_is_written(tmp_path: Path) -> None:
+    # The whole reason the tag goes to a derived file: correcting a lane count by editing
+    # source/map.osm would move its checksum and invalidate every decision in the review.
+    workspace = _workspace(tmp_path)
+    submission, _ = _lane_count_override(workspace, count=2)
+    before = _sha(workspace / "source" / "map.osm")
+    _apply(workspace, submission)
+    assert _sha(workspace / "source" / "map.osm") == before
+
+
+def test_a_lane_count_override_in_the_old_three_field_shape_is_refused(
+    tmp_path: Path,
+) -> None:
+    # Stage 3 offered `lanes` / `lanes:forward` / `lanes:backward` before this rule was
+    # implemented. Which of the three the reviewer meant is not recoverable, so a file
+    # carrying that shape stops the run rather than having one of them guessed at.
+    workspace = _workspace(tmp_path)
+    finding = next(f for f in _model(workspace).findings if f.rule == "lane_count_inference")
+    submission = _submission(
+        workspace,
+        overrides={
+            finding.identifier: {
+                "status": "overridden",
+                "value": {"lanes": 2, "lanes_forward": 2},
+            }
+        },
+    )
+    with pytest.raises(ApplyReviewError, match="needs"):
+        _apply(workspace, submission)
+
+
+def test_a_lane_count_override_outside_the_permitted_range_is_refused(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    submission, _ = _lane_count_override(workspace, count=99)
+    with pytest.raises(ApplyReviewError, match="permitted range"):
+        _apply(workspace, submission)
 
 
 def test_applied_decisions_do_not_collide_with_the_stage_3_export(tmp_path: Path) -> None:

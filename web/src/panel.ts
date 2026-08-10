@@ -76,7 +76,21 @@ export function applyFilters(findings: Finding[], filters: Filters, statusOf: (i
   });
 }
 
-function fieldInput(field: OverrideField, laneOptions: string[]): HTMLElement {
+/**
+ * What the generator proposed for one override field, when it proposed anything.
+ *
+ * Only a keyed proposal can pre-fill: `lane_count_inference` proposes
+ * `{direction, lane_count}` and the field is keyed `lane_count`, so it matches, while
+ * `speed_default` proposes a bare scalar and matches nothing. A rule that proposes a
+ * shape the field cannot name simply starts blank rather than guessing.
+ */
+function proposedFor(field: OverrideField, proposed: unknown): string | null {
+  if (!proposed || typeof proposed !== "object" || Array.isArray(proposed)) return null;
+  const value = (proposed as Record<string, unknown>)[field.key];
+  return typeof value === "number" || typeof value === "string" ? String(value) : null;
+}
+
+function fieldInput(field: OverrideField, laneOptions: string[], proposed: unknown): HTMLElement {
   if (field.kind === "number") {
     const input = element("input");
     input.type = "number";
@@ -84,6 +98,11 @@ function fieldInput(field: OverrideField, laneOptions: string[]): HTMLElement {
     if (field.min !== undefined) input.min = String(field.min);
     if (field.max !== undefined) input.max = String(field.max);
     if (field.step !== undefined) input.step = String(field.step);
+    // Pre-filled with the inferred value, so overriding means changing a number rather
+    // than retyping the one already on screen — and so a reviewer who meant to keep the
+    // count but wanted it stated explicitly does not have to remember what it was.
+    const start = proposedFor(field, proposed);
+    if (start !== null) input.value = start;
     return input;
   }
   if (field.kind === "choice") {
@@ -641,7 +660,7 @@ export class ReviewPanel {
       const label = element("label");
       const unit = field.kind === "number" ? field.unit : undefined;
       label.append(element("span", undefined, unit ? `${field.label} (${unit})` : field.label));
-      label.append(fieldInput(field, this.laneIds));
+      label.append(fieldInput(field, this.laneIds, finding.proposed_value));
       fieldWrap.append(label);
     }
     if (spec.fields.length) form.append(fieldWrap);

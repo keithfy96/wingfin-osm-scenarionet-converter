@@ -106,10 +106,14 @@ export class ReviewState {
       decided_at: this.clock(),
       evidence_checksum: finding.evidence_checksum,
       // Copied from the finding so an exported review can be lined up against a GPS
-      // track on its own, without preliminary.json beside it.
+      // track on its own, without preliminary.json beside it. `proposed_value` is here
+      // for the same reason: without it an accepted lane count reads as "accepted" and
+      // nothing else, and the number it approved is only recoverable by joining the
+      // finding back to the model it came from.
       location: finding.location,
       source_type: finding.source_type,
       source_ids: finding.source_ids,
+      proposed_value: finding.proposed_value,
     };
     if (input.value !== undefined) decision.value = input.value;
     if (input.reason !== undefined && input.reason.trim()) decision.reason = input.reason.trim();
@@ -174,7 +178,7 @@ export class ReviewState {
   toSubmission(): ReviewSubmission {
     const readiness = this.readiness();
     return {
-      submission_version: 3,
+      submission_version: 4,
       exported_at: this.clock(),
       identity: this.identity,
       decisions: this.allDecisions(),

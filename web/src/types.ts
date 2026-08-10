@@ -129,6 +129,18 @@ export interface Decision {
   status: DecisionStatus;
   /** Present only when status is `overridden`. Shape depends on the rule. */
   value?: unknown;
+  /**
+   * What the generator proposed, copied from the finding. Present whatever the status,
+   * because it is what stands unless `value` replaces it — so a reader takes `value` if
+   * present and `proposed_value` otherwise, and never has to join back to
+   * preliminary.json to learn which lane count was approved.
+   *
+   * Kept separate from `value` rather than folded into it: a number the generator
+   * inferred and a number the reviewer typed are not the same record, the same way
+   * `accepted` and `ignored` are the same map but not the same record. Absent in files
+   * exported before submission_version 4.
+   */
+  proposed_value?: unknown;
   /** Required when status is `not_applicable`. */
   reason?: string;
   decided_at: string;
@@ -160,11 +172,11 @@ export interface Readiness {
 
 export interface ReviewSubmission {
   /**
-   * 2 adds per-decision location; 3 adds the `ignored` status. A reader written
-   * against 2 knows four statuses and would mishandle a fifth, so the bump is what
-   * tells it to stop rather than guess.
+   * 2 adds per-decision location; 3 adds the `ignored` status; 4 adds per-decision
+   * `proposed_value`. A reader written against 2 knows four statuses and would mishandle
+   * a fifth, so the bump is what tells it to stop rather than guess.
    */
-  submission_version: 1 | 2 | 3;
+  submission_version: 1 | 2 | 3 | 4;
   exported_at: string;
   identity: ReviewIdentity;
   decisions: Decision[];

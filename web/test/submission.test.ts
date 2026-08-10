@@ -28,9 +28,18 @@ describe("parsing a submission", () => {
   });
 
   it("rejects a future submission_version rather than guessing at its shape", () => {
-    expect(() => parseSubmission(JSON.stringify({ ...valid, submission_version: 4 }))).toThrow(
+    expect(() => parseSubmission(JSON.stringify({ ...valid, submission_version: 5 }))).toThrow(
       SubmissionError,
     );
+  });
+
+  it("still loads a version 3 review, whose decisions carry no proposed value", () => {
+    // The version people already have in hand. It has to keep loading, and keep applying:
+    // a schema bump that stranded a finished review would cost a whole re-review.
+    const older = { ...valid, submission_version: 3 };
+    const parsed = parseSubmission(JSON.stringify(older));
+    expect(parsed.decisions[0]?.proposed_value).toBeUndefined();
+    expect(parsed.decisions[0]?.status).toBe("accepted");
   });
 
   it("accepts an ignored decision, which only version 3 can carry", () => {
