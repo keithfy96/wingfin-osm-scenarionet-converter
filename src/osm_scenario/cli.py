@@ -1,5 +1,6 @@
 """Top-level command-line interface."""
 
+import json
 from enum import Enum
 from pathlib import Path
 from typing import Annotated
@@ -13,6 +14,7 @@ from osm_scenario.generation import GenerationError, generate_lane_model
 from osm_scenario.inspection import InspectionError, generate_inspection
 from osm_scenario.logging import configure_logging
 from osm_scenario.normalization import NormalizationError, normalize_workspace
+from osm_scenario.validation import ValidationError, validate_map
 
 app = typer.Typer(
     name="osm-scenario",
@@ -172,6 +174,33 @@ def apply_review_command(
         typer.echo(f"Stage 4 failed: {error}", err=True)
         raise typer.Exit(code=1) from error
     typer.echo(f"Stage 4 complete: {report_path}")
+
+
+@app.command("validate-map")
+def validate_map_command(
+    workspace: Workspace,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", exists=True, dir_okay=False, help="Versioned YAML config."),
+    ] = None,
+) -> None:
+    """Validate WORKSPACE's reviewed lane model and write the Stage 5 reports."""
+    try:
+        config = (
+            load_config(config_path)
+            if config_path is not None
+            else ConverterConfig(config_version=1)
+        )
+        report_path, _ = validate_map(workspace=workspace, config=config)
+    except (ValidationError, ValueError, KeyError) as error:
+        typer.echo(f"Stage 5 failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    status = json.loads(report_path.read_text(encoding="utf-8"))["status"]
+    typer.echo(f"Stage 5 {status}: {report_path}")
+    # A failed validation is a result, not a crash - but the exit code has to say so, or a
+    # pipeline reads "wrote a report" as "the map is fit to convert".
+    if status != "passed":
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":
