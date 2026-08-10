@@ -7,12 +7,12 @@ suppressing one for the sake of an embedded HTML template.
 The report says what changed; this says *where*. A count of forbidden connectors is hard
 to judge, but a junction with every movement struck through is obvious at a glance.
 
-The page also lists the findings the reviewed model still carries. Stage 4 refuses any
-decision whose effect is an OSM tag - see `_OSM_NATIVE_RULES` in `apply_review` - so the
-blockers left here are the ones that can only be answered by editing the source OSM, and
-that edit invalidates the whole Stage 3 review. They have to be readable in one place
-before that trade is worth making. The list is deliberately read-only: Stage 4 has no
-channel to apply a decision made on this page.
+The page also lists the findings the reviewed model still carries. Stage 4 writes the tag
+for some rules and refuses the rest by name - see `_OSM_NATIVE_RULES` in `apply_review` -
+so the blockers left here are the ones that can only be answered by editing the source
+OSM, and that edit invalidates the whole Stage 3 review. They have to be readable in one
+place before that trade is worth making. The list is deliberately read-only: Stage 4 has
+no channel to apply a decision made on this page.
 """
 
 from __future__ import annotations

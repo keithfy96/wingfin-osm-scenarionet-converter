@@ -127,21 +127,26 @@ with the same name is a mistake waiting to be made.
   inferred stop-line placement — stay live in `applied-decisions.json` and are
   handed to the generator as `ReviewOverrides`.
 
-**Only `lane_count_inference` writes a tag today.** The other five rules in
-`_OSM_NATIVE_RULES` are **refused by name**, not half-applied:
+**Two rules write a tag today**, and both had to clear the same bar: the tag
+written must **invert what `generation.py` reads**, and the override must be
+proved by regenerating and reading the lane back — not by the tag appearing in
+the file.
+
+| Rule | Tag written | How the round trip is guaranteed |
+| --- | --- | --- |
+| `lane_count_inference` | `lanes` (whole carriageway) or `lanes:<direction>` | Both are `_directional_lane_count`'s explicit branches, which short-circuit the inference |
+| `turn_permission_geometry_conflict` | `turn:lanes` or `turn:lanes:<direction>` | The reviewer's movement is set into the same `\|`-split slot `_turn_permissions` indexes, so the kerbside-first ordering is never reimplemented |
+
+The remaining four in `_OSM_NATIVE_RULES` are **refused by name**, not
+half-applied — a review that appears to have been applied but was not is worse
+than a run that stops:
 
 | Rule | Tag it would need to write |
 | --- | --- |
 | `speed_default` | `maxspeed` |
 | `lane_width_default` | `width` |
 | `lane_transition_count_mismatch` | `lanes` on the destination way |
-| `turn_permission_geometry_conflict` | `turn:lanes` |
 | `restriction_effect_review` | the turn restriction relation |
-
-A review that appears to have been applied but was not is worse than a run that
-stops. The bar `lane_count_inference` set: the tag written must **invert what
-`generation.py` reads**, and the override must be proved by regenerating and
-reading the lane back — not by the tag appearing in the file.
 
 ### Regenerated, never patched
 

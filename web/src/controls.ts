@@ -54,10 +54,11 @@ export interface ControlSpec {
    * decisions are written into `review/reviewed.osm` as tags and which stay non-OSM
    * overrides in `review/applied-decisions.json`.
    *
-   * `apply-review` applies the non-OSM ones, plus `lane_count_inference`, which is the
-   * first tag write to land. It still *refuses* any other override whose effect is an OSM
-   * tag, naming the rule. So the remaining `overrideEffect` strings describe the intended
-   * contract rather than what runs now — keep them in step with `_OSM_NATIVE_RULES` in
+   * `apply-review` applies the non-OSM ones, plus `lane_count_inference` and
+   * `turn_permission_geometry_conflict`, the two tag writes that have landed. It still
+   * *refuses* any other override whose effect is an OSM tag, naming the rule. So the
+   * remaining `overrideEffect` strings describe the intended contract rather than what
+   * runs now — keep them in step with `_OSM_NATIVE_RULES` in
    * `src/osm_scenario/apply_review.py` as each is implemented.
    */
   acceptEffect: string;

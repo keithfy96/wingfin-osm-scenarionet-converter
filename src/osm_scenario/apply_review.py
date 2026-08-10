@@ -12,8 +12,9 @@ Two properties hold whatever the review says, and both are enforced rather than 
   generator again gets all of that right.
 
 Scope, deliberately: a decision that would become an OSM tag is applied only where the tag
-write has been built and proved. `lane_count_inference` is; the rest are refused by name
-rather than half applied. See `_OSM_NATIVE_RULES`.
+write has been built and proved. `lane_count_inference` and
+`turn_permission_geometry_conflict` are; the rest are refused by name rather than half
+applied. See `_OSM_NATIVE_RULES`.
 """
 
 from __future__ import annotations
@@ -55,22 +56,42 @@ APPLIED_DECISIONS_VERSION = 1
 # An override on one is refused by name rather than silently dropped - a review that
 # appears to have been applied but was not is worse than a run that stops.
 #
-# `lane_count_inference` was the first to land and is no longer listed: see
-# `_lane_count_tag`. It set the standard the rest have to meet - the tag written must
-# invert what generation.py reads, and the override must be proved by regenerating and
-# reading the lane back, not merely by the tag appearing in the file.
+# `lane_count_inference` was the first to land and is no longer listed. It set the standard
+# the rest have to meet - the tag written must invert what generation.py reads, and the
+# override must be proved by regenerating and reading the lane back, not merely by the tag
+# appearing in the file.
+#
+# `turn_permission_geometry_conflict` is the second. It writes `turn:lanes` by editing the
+# very string `_turn_permissions` indexes into, so the round trip is exact by construction
+# rather than by a second implementation of the kerbside-first ordering. See
+# `_turn_lane_slot` and `_write_reviewed_osm`.
 #
 # When the rest are built: `width` must invert generation.py's
-# `width_total / (lanes tag or directional count)`, and `turn:lanes` must be pinned against
-# `_turn_permissions`, which already encodes the kerbside-first ordering under left-hand
-# traffic.
+# `width_total / (lanes tag or directional count)`.
 _OSM_NATIVE_RULES = {
     "speed_default": "maxspeed",
     "lane_width_default": "width",
     "lane_transition_count_mismatch": "lanes on the destination way",
-    "turn_permission_geometry_conflict": "turn:lanes",
     "restriction_effect_review": "the turn restriction relation",
 }
+
+# What a `turn_permission_geometry_conflict` override may name. These are the six values
+# the Stage 3 dropdown offers (`web/src/controls.ts` `TURN_OPTIONS`), and every one is both
+# a valid OSM `turn:lanes` token and a key `topology.movement_matches` understands - the
+# two ends this value has to satisfy at once.
+#
+# `none` is deliberately absent although OSM allows it: `movement_matches("none", ...)` is
+# false for every movement, so writing it would strand the lane the override was meant to
+# free. An empty slot, which parses to no permissions at all, is how "unrestricted" is
+# said here.
+_TURN_LANE_MOVEMENTS = (
+    "through",
+    "left",
+    "right",
+    "slight_left",
+    "slight_right",
+    "reverse",
+)
 
 # The largest lane count an override may claim. Matches the Stage 3 control's `max`, so a
 # value the browser would not let a reviewer type cannot arrive by a hand-edited file.
@@ -287,6 +308,55 @@ def _override_direction(finding: ReviewFinding) -> str:
     return str(direction)
 
 
+def _override_movement(finding: ReviewFinding, value: Any) -> str:
+    """The movement a `turn_permission_geometry_conflict` override names.
+
+    One key, `movement`, holding one of the six values Stage 3 offers. A list is refused
+    rather than joined with `;`: the control cannot produce one, so a file carrying it was
+    hand-written to mean something this stage has not been proved to do.
+    """
+    movement = value.get("movement") if isinstance(value, dict) else None
+    if movement not in _TURN_LANE_MOVEMENTS:
+        raise ApplyReviewError(
+            f"turn_permission_geometry_conflict override on {finding.identifier} needs "
+            '{"movement": <one of ' + ", ".join(_TURN_LANE_MOVEMENTS) + ">}"
+        )
+    return str(movement)
+
+
+def _turn_lane_slot(
+    finding: ReviewFinding, lanes: dict[str, Any], driving_side: str
+) -> tuple[str, str, int, int]:
+    """Which way, direction and `turn:lanes` slot this finding's approach lane occupies.
+
+    `affected_feature_ids` is `[approach lane, restored destination lane]`
+    (`generation.py`), and it is the *approach* whose tag rejected everything - the
+    destination is only where the restored movement landed. Overriding the destination's
+    tag would answer a question nobody asked.
+
+    The slot index inverts `generation._turn_permissions` exactly: under left-hand traffic
+    a `turn:lanes` value is written kerbside first, so lane `idx0` (which hugs the
+    centreline) is the *last* slot.
+    """
+    lane_id = finding.affected_feature_ids[0] if finding.affected_feature_ids else None
+    lane = lanes.get(lane_id or "")
+    if lane is None:
+        raise ApplyReviewError(
+            f"turn_permission_geometry_conflict override on {finding.identifier} names "
+            f"approach lane {lane_id}, which is not in the preliminary model"
+        )
+    if len(lane.source_way_ids) != 1:
+        raise ApplyReviewError(
+            f"turn_permission_geometry_conflict override on {finding.identifier} names a "
+            f"lane built from {len(lane.source_way_ids)} source ways; a turn:lanes value "
+            "is written onto exactly one way"
+        )
+    tag_index = (
+        lane.lane_count - 1 - lane.lane_index if driving_side == "left" else lane.lane_index
+    )
+    return lane.source_way_ids[0], lane.direction, tag_index, lane.lane_count
+
+
 def _check_override_value(finding: ReviewFinding, value: Any, lane_ids: set[str]) -> None:
     if finding.rule == "lane_count_inference":
         _override_lane_count(finding, value)
@@ -297,6 +367,9 @@ def _check_override_value(finding: ReviewFinding, value: Any, lane_ids: set[str]
                 f"{len(finding.source_ids)} source ways; a lane count is written onto "
                 "exactly one way"
             )
+        return
+    if finding.rule == "turn_permission_geometry_conflict":
+        _override_movement(finding, value)
         return
     if finding.rule == "ambiguous_connector":
         if not isinstance(value, dict) or not isinstance(value.get("accepted"), bool):
@@ -325,8 +398,58 @@ def _check_override_value(finding: ReviewFinding, value: Any, lane_ids: set[str]
     )
 
 
+def _turn_lanes_tag(
+    way_id: str, tags: dict[str, str], direction: str, wanted: dict[str, Any]
+) -> tuple[str, str]:
+    """The `turn:lanes` key and value one way's overrides become.
+
+    Built by editing the very string `generation._turn_permissions` indexes into, rather
+    than by composing a fresh value from the model. That is what makes the round trip
+    exact: the reader splits on `|` and takes slot `n`, so setting slot `n` of that same
+    split and rejoining is the inverse by construction, with no second implementation of
+    the kerbside-first ordering to drift out of step.
+
+    The key written is the one the reader will reach first. `_turn_permissions` reads
+    `turn:lanes:<direction>` before the bare `turn:lanes`, so writing the bare key while a
+    directional one exists would leave the override silently unread.
+    """
+    directional = f"turn:lanes:{direction}"
+    base = tags.get(directional) or tags.get("turn:lanes")
+    if base is None:
+        raise ApplyReviewError(
+            f"way {way_id} has no turn:lanes to correct, so the override on it cannot be "
+            "written; the finding it answers can only arise from a way that has one"
+        )
+    # A bare `turn:lanes` on a two-way way describes lanes in node order, covering both
+    # directions at once. Writing the directional key beside it would leave two tags
+    # disagreeing about the other direction, and rewriting the bare one would answer for a
+    # direction nobody reviewed. Neither is a guess this stage is entitled to make.
+    if directional not in tags and not _carries_whole_carriageway(tags):
+        raise ApplyReviewError(
+            f"way {way_id} carries a bare turn:lanes but not the whole carriageway, so a "
+            f"{direction} override cannot be written without restating the other "
+            "direction. Split the tag into turn:lanes:forward and turn:lanes:backward in "
+            "the source first."
+        )
+    key = directional if directional in tags else "turn:lanes"
+    slots = base.split("|")
+    lane_count = int(wanted["lane_count"])
+    if len(slots) != lane_count:
+        raise ApplyReviewError(
+            f"way {way_id} has a {key} with {len(slots)} slot(s) but the model built "
+            f"{lane_count} {direction} lane(s) from it, so the override cannot be placed. "
+            "Correct the tag in the source rather than guessing which lane it meant."
+        )
+    for slot, movement in wanted["slots"].items():
+        slots[int(slot)] = movement
+    return key, "|".join(slots)
+
+
 def _write_reviewed_osm(
-    source_path: Path, reviewed_osm: Path, lane_counts: dict[str, dict[str, int]]
+    source_path: Path,
+    reviewed_osm: Path,
+    lane_counts: dict[str, dict[str, int]],
+    turn_lanes: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, str]]:
     """Write the reviewed OSM and return the tags the review materialised onto it.
 
@@ -344,8 +467,11 @@ def _write_reviewed_osm(
 
     Both are its highest-confidence branches and both short-circuit the inference, so the
     reviewed model reports the reviewer's number rather than re-deriving one.
+
+    `turn:lanes` follows the same rule for the same reason - see `_turn_lanes_tag`.
     """
-    if not lane_counts:
+    turn_lanes = turn_lanes or {}
+    if not lane_counts and not turn_lanes:
         shutil.copy2(source_path, reviewed_osm)
         return {}
 
@@ -353,8 +479,10 @@ def _write_reviewed_osm(
     root = tree.getroot()
     materialised: dict[str, dict[str, str]] = {}
     for way in root.findall("way"):
-        wanted = lane_counts.get(way.get("id") or "")
-        if not wanted:
+        way_id = way.get("id") or ""
+        wanted = lane_counts.get(way_id)
+        wanted_turns = turn_lanes.get(way_id)
+        if not wanted and not wanted_turns:
             continue
         tags = {
             tag.get("k") or "": tag.get("v") or ""
@@ -363,28 +491,31 @@ def _write_reviewed_osm(
         }
         whole = _carries_whole_carriageway(tags)
         written: dict[str, str] = {}
-        for direction, count in sorted(wanted.items()):
+        for direction, count in sorted((wanted or {}).items()):
             key = "lanes" if whole else f"lanes:{direction}"
             written[key] = str(count)
         # A one-way way has one direction, so two overrides on one cannot both be right;
         # the check above only catches two answers for the same direction.
-        if whole and len(wanted) > 1:
+        if whole and len(wanted or {}) > 1:
             raise ApplyReviewError(
-                f"way {way.get('id')} carries the whole carriageway but the review sets a "
-                f"lane count for {len(wanted)} directions on it"
+                f"way {way_id} carries the whole carriageway but the review sets a "
+                f"lane count for {len(wanted or {})} directions on it"
             )
+        for direction, spec in sorted((wanted_turns or {}).items()):
+            key, value = _turn_lanes_tag(way_id, tags, direction, spec)
+            written[key] = value
         for key, value in written.items():
             existing = next((t for t in way.findall("tag") if t.get("k") == key), None)
             if existing is not None:
                 existing.set("v", value)
             else:
                 ET.SubElement(way, "tag", {"k": key, "v": value})
-        materialised[way.get("id") or ""] = written
+        materialised[way_id] = written
 
-    missing = sorted(set(lane_counts) - set(materialised))
+    missing = sorted((set(lane_counts) | set(turn_lanes)) - set(materialised))
     if missing:
         raise ApplyReviewError(
-            "the review sets a lane count on ways that are not in the source OSM: "
+            "the review retags ways that are not in the source OSM: "
             f"{', '.join(missing[:5])}"
         )
     tree.write(reviewed_osm, encoding="utf-8", xml_declaration=True)
@@ -392,10 +523,11 @@ def _write_reviewed_osm(
 
 
 def _overrides_from(
-    decisions: list[dict[str, Any]], model: PreliminaryLaneModel
+    decisions: list[dict[str, Any]], model: PreliminaryLaneModel, driving_side: str
 ) -> tuple[ReviewOverrides, dict[str, Any]]:
     """Split the decisions into what changes generation and what is merely recorded."""
     findings = {finding.identifier: finding for finding in model.findings}
+    lanes = {lane.identifier: lane for lane in model.lanes}
     forbidden: set[str] = set()
     active: set[str] = set()
     signal_associations: dict[str, list[str]] = {}
@@ -403,6 +535,13 @@ def _overrides_from(
     # {way id: {direction: lane count}}. Which tag each becomes is decided at write time
     # from the way's own `oneway`/`junction` tags, which are in the XML being edited.
     lane_counts: dict[str, dict[str, int]] = {}
+    # {way id: {direction: {slot index: movement}}}. One finding answers one lane, but
+    # `turn:lanes` is one string covering every lane of the way, so the slots are gathered
+    # here and joined at write time against the value that is actually in the file.
+    turn_lanes: dict[str, dict[str, dict[int, str]]] = {}
+    # {(way id, direction): lane count}, so the writer can refuse a tag whose slot count
+    # does not describe the lanes the model built from it.
+    turn_lane_counts: dict[tuple[str, str], int] = {}
     # A finding marked not_applicable says the finding does not describe a defect *here*,
     # not that the thing it names should change. There is no verdict to apply, so the
     # feature keeps whatever status generation gave it and the reviewed model asks the
@@ -449,6 +588,46 @@ def _overrides_from(
                     "applying either one silently would discard the other."
                 )
             lane_counts[way_id][direction] = count
+        elif finding.rule == "turn_permission_geometry_conflict" and status == "overridden":
+            # Accepting keeps the restored movement and leaves the tag alone, so - as with
+            # a lane count - only an override moves anything.
+            movement = _override_movement(finding, value)
+            way_id, direction, slot, lane_count = _turn_lane_slot(finding, lanes, driving_side)
+            lane = lanes[finding.affected_feature_ids[0]]
+            # The tag already says this. Writing it back regenerates an identical model and
+            # the same blocker returns, which reads as "the override was applied and did
+            # nothing" - the exact silent misapplication Gate 5 exists to prevent. Say so
+            # here, where the reviewer can still act on it.
+            if [movement] == list(lane.turn_permissions):
+                raise ApplyReviewError(
+                    f"turn_permission_geometry_conflict override on {finding.identifier} "
+                    f"sets way {way_id} lane idx{lane.lane_index}/{lane_count} to "
+                    f"'{movement}', which is what turn:lanes already says there. That "
+                    "changes nothing and the same blocker returns. Name the movement the "
+                    "lane can actually make, keep the restored movement, or correct the "
+                    "geometry in the source."
+                )
+            existing = turn_lanes.setdefault(way_id, {}).setdefault(direction, {}).get(slot)
+            if existing is not None and existing != movement:
+                raise ApplyReviewError(
+                    f"two overrides disagree about the {direction} turn:lanes value for "
+                    f"lane idx{lane.lane_index} of way {way_id}: '{existing}' and "
+                    f"'{movement}'. Re-open Stage 3 and settle it; applying either one "
+                    "silently would discard the other."
+                )
+            turn_lanes[way_id][direction][slot] = movement
+            turn_lane_counts[(way_id, direction)] = lane_count
+
+    # A re-laned way has a different number of `turn:lanes` slots, and the slots collected
+    # above were indexed against the preliminary count. Rather than guess where a movement
+    # lands in a value that is about to change arity, refuse the pair by name.
+    both = sorted(set(turn_lanes) & set(lane_counts))
+    if both:
+        raise ApplyReviewError(
+            "these ways carry both a lane-count override and a turn:lanes override: "
+            f"{', '.join(both[:5])}. Changing the lane count changes which slot each "
+            "movement occupies, so apply them in separate reviews."
+        )
 
     applied = {
         "forbidden_connector_ids": sorted(forbidden),
@@ -460,6 +639,18 @@ def _overrides_from(
         "lane_count_overrides": {
             way_id: dict(sorted(by_direction.items()))
             for way_id, by_direction in sorted(lane_counts.items())
+        },
+        # Slot indices are stringified because this is written to JSON, where an integer
+        # key would come back as a string anyway and silently stop matching.
+        "turn_lane_overrides": {
+            way_id: {
+                direction: {
+                    "lane_count": turn_lane_counts[(way_id, direction)],
+                    "slots": {str(slot): movement for slot, movement in sorted(slots.items())},
+                }
+                for direction, slots in sorted(by_direction.items())
+            }
+            for way_id, by_direction in sorted(turn_lanes.items())
         },
     }
     overrides = ReviewOverrides(
@@ -534,7 +725,9 @@ def _regenerate(
     return model, counts, fingerprint, selection_audit
 
 
-def _decision_is_satisfied(finding: ReviewFinding, unmapped_signal_nodes: set[str]) -> bool:
+def _decision_is_satisfied(
+    finding: ReviewFinding, unmapped_signal_nodes: set[str], status: str | None = None
+) -> bool:
     """Does the reviewed model actually reflect the decision taken on this finding?
 
     Answering a finding and resolving it are not the same act. Accepting an inference
@@ -545,7 +738,16 @@ def _decision_is_satisfied(finding: ReviewFinding, unmapped_signal_nodes: set[st
     Accepting it accepts a `proposed_value` of `[]`, because the finding only fires when
     no approaching lane was found; the association stays `review_required` with no lanes.
     Keying resolution on "a decision exists" would call that settled for ever.
+
+    `turn_permission_geometry_conflict` is the second exception, and only when overridden.
+    An override writes a `turn:lanes` the reviewer says is correct; if the conflict were
+    resolved the finding would not be in the reviewed model to ask about. Still being here
+    means the new tag permits nothing the geometry offers either - a different wrong
+    answer, not a settled one. Accepting is unaffected: it means "keep the restored
+    movement", which regenerates identically by design.
     """
+    if finding.rule == "turn_permission_geometry_conflict":
+        return status != "overridden"
     if finding.rule != "signal_lane_association":
         return True
     return not any(node in unmapped_signal_nodes for node in finding.source_ids)
@@ -587,7 +789,7 @@ def _decisions_by_reviewed_finding(
         joined[finding.identifier] = {
             "state": "decided",
             "status": decision["status"],
-            "satisfied": _decision_is_satisfied(finding, unmapped),
+            "satisfied": _decision_is_satisfied(finding, unmapped, decision["status"]),
             "value": decision.get("value"),
             "proposed_value": decision.get("proposed_value", finding.proposed_value),
             "reason": decision.get("reason"),
@@ -831,6 +1033,25 @@ def _markdown(comparison: dict[str, Any], applied: dict[str, Any]) -> str:
             "",
         ]
 
+    retagged = comparison["ways_retagged"]
+    if retagged:
+        lines += [
+            f"## Ways retagged in reviewed.osm: {len(retagged)}",
+            "",
+            "The only edits this review made to the OSM itself. `source/map.osm` is "
+            "unchanged; these landed on `review/reviewed.osm`, and the reviewed model was "
+            "regenerated from them rather than patched.",
+            "",
+            "| way | tag | value |",
+            "| --- | --- | --- |",
+            *(
+                f"| `{way_id}` | `{key}` | `{value}` |"
+                for way_id, written in sorted(retagged.items())
+                for key, value in sorted(written.items())
+            ),
+            "",
+        ]
+
     left_open = comparison["left_open_as_not_applicable"]
     if left_open:
         reasons = applied.get("left_open_reasons", {})
@@ -866,7 +1087,7 @@ def apply_review(*, workspace: Path, submission: Path, config: ConverterConfig) 
     report = _read_json(workspace / "reports" / "lane-model-generation.json", "Stage 2 report")
     payload = _read_json(submission, "review submission")
     decisions = _check_submission(payload, preliminary, report, workspace.name)
-    overrides, applied = _overrides_from(decisions, preliminary)
+    overrides, applied = _overrides_from(decisions, preliminary, manifest["driving_side"])
 
     review_dir = workspace / "review"
     review_dir.mkdir(parents=True, exist_ok=True)
@@ -875,7 +1096,10 @@ def apply_review(*, workspace: Path, submission: Path, config: ConverterConfig) 
     # That is what lets a lane count be corrected at all: editing `source/map.osm` to fix
     # one would move its checksum and invalidate every decision in the review.
     materialised_tags = _write_reviewed_osm(
-        source_path, reviewed_osm, applied["lane_count_overrides"]
+        source_path,
+        reviewed_osm,
+        applied["lane_count_overrides"],
+        applied["turn_lane_overrides"],
     )
 
     reviewed, counts, fingerprint, selection_audit = _regenerate(

@@ -46,6 +46,191 @@ Warnings mark deterministic, usable proposals whose real-world correctness
 still needs inspection. Blockers mark low-confidence or legally ambiguous
 proposals that Stage 3 must resolve before acceptance as validated map facts.
 
+## `turn_permission_geometry_conflict`
+
+Placed first because it sorts first in the reviewer's queue (`REVIEW_PRIORITY`,
+`web/src/panel.ts:19-29`, index `0` — hardest judgement first). It is absent
+from the mosque table above, which predates the rule.
+
+**Meaning and current scale.** A lane's `turn:lanes` tag permits **no movement
+the geometry offers at that node**, so obeying the tag literally would leave the
+lane with no exit at all. Rather than cut the drivable network, Stage 2 restores
+the straightest rejected movement and raises this blocker. In `junction-1`
+(`direct-osm-stage2-v17`, fingerprint `af457dfc…`) there are **3** of these among
+140 findings: two at node `1927184814` on way `756118314`, one at node
+`13946726034` on way `1530245742`.
+
+**This finding is the tag being obeyed, not ignored.** That is the single most
+common misreading, and it changes what the buttons mean.
+
+**Trigger.** All three conditions must hold together
+(`_stranded_permission_fallback`, `generation.py:566-583`):
+
+1. no candidate movement out of the lane survived the `turn:lanes` filter;
+2. at least one candidate was rejected **by the tag** (not by geometry, a
+   restriction, or a side rule);
+3. the lane carries no continuation — a lane that runs straight on already has
+   somewhere to go, so it is not stranded.
+
+Restored movement is `min(rejected, key=(abs(angle), to_lane_id))` — the
+straightest rejected candidate, lane id as a deterministic tie-break.
+
+**What is compared.** `turn_permissions` is the parsed `turn:lanes` value for
+that one lane (`generation.py:308-322`; note the kerbside-first inversion under
+left-hand traffic, and that `turn:lanes:<direction>` outranks the bare tag). The
+movement class is *inferred* by binning `signed_turn_angle` (`classify_movement`,
+`topology.py:47-55`: `≤35°` through, `35-70°` slight, `70-145°` left/right,
+`≥145°` reverse). The two are joined by `movement_matches`
+(`topology.py:58-65`), which treats `right` as covering `right`, `slight_right`,
+`sharp_right`. So "the tag and the angle disagree" concretely means: no tag
+token matched the angle bin of **any** available movement. This is the standing
+principle in `CLAUDE.md` — a surveyed tag outranks an inferred angle, but the tag
+must never be the reason a lane loses its only exit. Reverse movements bypass the
+permission test entirely, so a dropped U-turn is never this rule.
+
+**What the generator has already done.** The restored connector **exists in the
+model** (`candidates_for_lane = [restored]`, `generation.py:1736`). It carries
+its **geometric** movement class, deliberately not relabelled to the tagged one:
+relabelling would feed a fabricated movement into `movement_side`, ambiguity
+counting and restriction matching. The tag is recorded in the finding instead —
+see
+[`2026-08-07-12:03:07-turn-lanes-must-not-strand-a-lane`](../mapping-algo-changes/2026-08-07-12:03:07-turn-lanes-must-not-strand-a-lane.md).
+
+`proposed_value` carries `turn_permissions` (what the tag said),
+`restored_movement` and `restored_angle_degrees` (what was put back), and
+`rejected_movements` (every class the tag refused). `affected_feature_ids` is
+`[approach lane, restored destination lane]`, so re-targeting the movement
+changes the finding's identifier.
+
+### The reviewer's options
+
+Control spec at `web/src/controls.ts:127-134`; question line:
+*"The turn tag and the measured angle disagree — which one is right?"*
+
+| Button | Status written | What it does |
+| --- | --- | --- |
+| `Keep restored movement` | `accepted` | Keeps the connector the generator restored, with its geometric class. The OSM tag is left untouched; the model simply does not obey it at this node. |
+| `Set movement` ▾ | `overridden` | A single-select `Movement` dropdown — `through`, `left`, `right`, `slight left`, `slight right`, `reverse / U-turn` — writing `{"movement": "<value>"}`. Stage 4 writes that value into **this lane's slot** of the way's `turn:lanes` in `review/reviewed.osm`, then regenerates, so the movement is reclassified against the corrected tag. |
+| `Not applicable` | `not_applicable` | Requires a typed reason. Says the *finding* is wrong, not the value. |
+| `Clear decision` | `unresolved` | Returns it to the queue and blocks export. |
+
+`Ignore` is **not offered**: the rule is always emitted `severity="blocker"`
+(`generation.py:1739`), and `web/src/panel.ts:706` shows that button for warnings
+only.
+
+Two things the screen does not tell you:
+
+- **`Set movement` corrects the tag; it does not filter the lane's exits.** It
+  says what `turn:lanes` *should have said* for this lane, and the movements are
+  re-derived from that. It cannot take the restored exit away — leaving the lane
+  with no exit is the thing the fallback exists to prevent, so no control in
+  Stage 3 means "this lane may exit only to the right". The tag already said
+  that; this finding is the report that saying it stranded the lane.
+- **Naming the movement the tag already carries is refused.** It would write the
+  value back unchanged, regenerate an identical model and return the same
+  blocker — an override that looks applied and did nothing. Stage 4 stops with
+  *"which is what turn:lanes already says there"* rather than let that pass
+  (`apply_review.py`, `_overrides_from`).
+
+Stage 4 will also refuse an override that names a movement outside the six the
+dropdown offers, one on a way whose `turn:lanes` has a different number of slots
+than the model built lanes, one on a way that also carries a lane-count override
+(re-laning moves every slot), and a bare `turn:lanes` on a two-way way — there
+the value covers both directions at once, and correcting one would restate the
+other by guess. Each names what to fix.
+
+**What each choice commits you to.** Overriding says the tag was wrong and states
+what it should have said; the corrected value lands on `review/reviewed.osm`,
+`source/map.osm` is untouched, and the finding goes away only if the new value
+permits something the geometry actually offers. If it does not, the conflict is
+reported again and the decision is marked `satisfied: false`, so Stage 5 still
+sees the blocker — answering is not the same as resolving. Accepting says the
+geometry is right and the tag is describing something else: the map keeps a
+movement the tag does not permit, the OSM is left alone, and the same question
+returns on every regeneration by design. Marking it not applicable says the
+question itself is malformed; the reason is kept in the audit record, and Stage 5
+downgrades re-derived issues on that feature to dispositioned warnings rather
+than errors. Never resolve this by making the rule stop firing.
+
+### Worked example — `junction-1` node `1927184814`
+
+Way `756118314` (*Persiaran Meranti*, tertiary, oneway, `lanes=2`) is tagged
+`turn:lanes=right|right`, so both its lanes carry `turn_permissions=['right']`.
+At its end node the geometry offers a `through` at +5.82° and a `left` onto
+*Persiaran Perdana*. Neither matches `right`, so both were rejected and the
+`through` was restored — twice, once per lane.
+
+```
+ node 1927184814             + = left turn · − = right turn · left-hand traffic
+ lane indices run centre-out: idx0 hugs the centreline (offside), idx(n−1) is kerbside
+
+   APPROACHES                          ┊  DESTINATION — way 39619063 "Persiaran Meranti"
+   (arriving at the node)              ┊  2 lanes · also tagged turn:lanes=right|right
+                                       ┊
+ ═════════════════════════════════════ ┊ ═══════════════════════════════════ KERB ══
+
+   756118314  idx1/2   +5.82° ────────────────►  idx1/2  c0530c25fd  nearside
+     Meranti · turn:lanes=right|right  ┊                               1 feed
+     tag permits ......... right       ┊         ✗  0 EXITS — THIS LANE DEAD-ENDS  ✗
+     geometry offers ..... through, left
+     ► RESTORED as through  ·  blocker 31f7cfe441cbb146
+                                       ┊
+ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┊─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+
+   756118314  idx0/2   +5.82° ──┐      ┊
+     ► RESTORED as through      │      ┊
+       blocker 989b411397bffef2 ├─────────────►  idx0/2  86602054f0  offside
+   777160373  idx0/3  −88.62° ──┘      ┊                    2 feeds — SHARED
+     Perdana · no turn:lanes           ┊         ✗  0 EXITS — THIS LANE DEAD-ENDS  ✗
+     a genuine right turn              ┊
+ ═════════════════════════════════════ ┊ ════════════════════════════ CENTRELINE ══
+
+   travel direction ──────────────────────────────────────────────────────────►
+
+   REJECTED BY THE TAG — no channel drawn above, because it has none:
+     756118314 idx0/2 and idx1/2  ──►  way 776021089 "Persiaran Perdana"  (left)
+     that left is the ONLY other movement the geometry offers at this node.
+     There is no right-hand branch here at all — nothing for `right` to select.
+```
+
+`turn:lanes` describes what the lanes do at the **end of the way it is tagged
+on**. Meranti is split in two at `1927184814` and both halves carry the identical
+tag, which is why the upstream half raises blockers:
+
+```
+   1928630073            1927184814                        474928793
+   ─────●───────────────────●───────────────────────────────────●
+        │   756118314       │      39619063                     │
+        │   Meranti         │      Meranti                      │
+        │   turn:lanes=     │      turn:lanes=                  │
+        │   right|right     │      right|right                  │
+        │                   │                                   │
+        │  at THIS way's end:                 at THIS way's end:
+        │  +5.82°, straight on into 39619063   −91.65° RIGHT onto 777160375
+        │  no right branch exists here         a genuine right turn — but
+        │  → the two blockers above            ✗ forbidden, relation 10421009
+        │                                        no_u_turn, 777160373 via 39619063
+```
+
+The far-end right turn being `forbidden` is why both destination lanes above
+show **0 exits**: the restored `through` gives each lane an exit into a corridor
+that currently terminates. The restriction was written to stop
+`Perdana → Meranti → Perdana`, and its `reason` is
+`prohibited via-way suffix removed`.
+
+So the reviewer's real question at this node is which of two source facts to
+correct: the `turn:lanes` on `756118314`, which describes a turn one junction
+downstream, or the via-way restriction that removes the turn for everyone.
+
+Note what the buttons can and cannot do about it. `Set movement → right` is
+refused, because that is what the tag already says — it would write the same
+value back and return the same blocker. `Set movement → through` states that this
+half of Meranti carries straight on, which is what the geometry shows, and
+resolves both blockers. `Keep restored movement` leaves the tag standing and the
+disagreement on the record. The via-way restriction is out of reach of this
+finding either way: no `turn:lanes` value can give back a movement a relation
+forbids.
+
 ## `lane_width_default`
 
 For the complete selection formula, parser behavior, geometry construction,

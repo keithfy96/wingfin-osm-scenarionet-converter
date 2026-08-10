@@ -15,6 +15,7 @@ from osm_scenario.apply_review import (
     ApplyReviewError,
     _comparison,
     _question_key,
+    _turn_lanes_tag,
     apply_review,
 )
 from osm_scenario.config import ConverterConfig
@@ -29,6 +30,11 @@ from osm_scenario.lane_model import (
 from osm_scenario.normalization import normalize_workspace
 
 JUNCTION = Path(__file__).parents[1] / "fixtures" / "osm" / "junction.osm"
+# The same T junction, with one arm made a two-lane one-way tagged for a turn the
+# junction does not offer. Kept separate so the plain fixture stays free of the conflict.
+TURN_LANES_CONFLICT = (
+    Path(__file__).parents[1] / "fixtures" / "osm" / "turn-lanes-conflict.osm"
+)
 CONFIG = ConverterConfig(config_version=1)
 
 
@@ -440,6 +446,215 @@ def test_a_lane_count_override_outside_the_permitted_range_is_refused(
     submission, _ = _lane_count_override(workspace, count=99)
     with pytest.raises(ApplyReviewError, match="permitted range"):
         _apply(workspace, submission)
+
+
+def _conflict_workspace(tmp_path: Path) -> Path:
+    """A workspace whose approach is tagged for a turn its junction does not offer.
+
+    Way `200` is a two-lane one-way arm of the T tagged `turn:lanes=left|left`, and the
+    junction offers only a through and a right. Both its lanes therefore lose every
+    movement to the tag, and both get one back from `_stranded_permission_fallback` - the
+    shape `turn_permission_geometry_conflict` exists to report.
+    """
+    workspace = tmp_path / "conflict"
+    acquire_osm(workspace=workspace, driving_side="left", osm_file=TURN_LANES_CONFLICT)
+    normalize_workspace(workspace=workspace, config=CONFIG)
+    generate_lane_model(workspace=workspace, config=CONFIG)
+    return workspace
+
+
+def _conflict_finding(workspace: Path, *, lane_index: int) -> ReviewFinding:
+    """The conflict finding whose *approach* lane sits at `lane_index`."""
+    model = _model(workspace)
+    lanes = {lane.identifier: lane for lane in model.lanes}
+    return next(
+        f
+        for f in model.findings
+        if f.rule == "turn_permission_geometry_conflict"
+        and lanes[f.affected_feature_ids[0]].lane_index == lane_index
+    )
+
+
+def _turn_permissions(model: PreliminaryLaneModel, way_id: str) -> dict[int, list[str]]:
+    return {
+        lane.lane_index: list(lane.turn_permissions)
+        for lane in model.lanes
+        if way_id in lane.source_way_ids and lane.direction == "forward"
+    }
+
+
+def test_a_turn_lanes_override_reaches_the_regenerated_model(tmp_path: Path) -> None:
+    # The same bar the lane count had to clear: not that the tag appears in the file, but
+    # that the generator reads it back, the movement is reclassified, and the conflict the
+    # finding reported is gone from the reviewed model.
+    workspace = _conflict_workspace(tmp_path)
+    # Each lane is given the movement it can actually make: the offside lane turns right,
+    # the nearside one carries straight on.
+    submission = _submission(
+        workspace,
+        overrides={
+            _conflict_finding(workspace, lane_index=0).identifier: {
+                "status": "overridden",
+                "value": {"movement": "right"},
+            },
+            _conflict_finding(workspace, lane_index=1).identifier: {
+                "status": "overridden",
+                "value": {"movement": "through"},
+            },
+        },
+    )
+    assert _turn_permissions(_model(workspace), "200") == {0: ["left"], 1: ["left"]}
+
+    _apply(workspace, submission)
+
+    assert _way_tags(workspace / "review" / "reviewed.osm", "200")["turn:lanes"] == (
+        "through|right"
+    )
+    reviewed = _reviewed(workspace)
+    assert _turn_permissions(reviewed, "200") == {0: ["right"], 1: ["through"]}
+    assert not [f for f in reviewed.findings if f.rule == "turn_permission_geometry_conflict"]
+    comparison = json.loads((workspace / "reports" / "reviewed-comparison.json").read_text())
+    assert comparison["findings_still_open"] == []
+    # Nothing lost its way out: the point of the fallback is that the lane keeps an exit,
+    # and correcting the tag must not take it back.
+    assert comparison["lanes_left_without_an_exit"] == []
+
+
+def test_a_turn_lanes_override_writes_the_slot_its_own_lane_occupies(
+    tmp_path: Path,
+) -> None:
+    """The kerbside-first inversion, which is the whole difficulty of this tag.
+
+    Under left-hand traffic `turn:lanes` is written kerbside first, so the *offside* lane
+    `idx0` is the **last** slot. Overriding it must move the right-hand end of the value
+    and leave the nearside lane's slot exactly as the source had it - a naive
+    `slots[lane_index]` would silently retag the other lane instead, and both lanes
+    reading back a plausible value is what makes that kind of slip survive review.
+    """
+    workspace = _conflict_workspace(tmp_path)
+    submission = _submission(
+        workspace,
+        overrides={
+            _conflict_finding(workspace, lane_index=0).identifier: {
+                "status": "overridden",
+                "value": {"movement": "right"},
+            }
+        },
+    )
+    _apply(workspace, submission)
+
+    assert _way_tags(workspace / "review" / "reviewed.osm", "200")["turn:lanes"] == "left|right"
+    assert _turn_permissions(_reviewed(workspace), "200") == {0: ["right"], 1: ["left"]}
+
+
+def test_an_override_that_restates_the_tag_is_refused(tmp_path: Path) -> None:
+    # Answering "which one is right?" with the value already in the file writes nothing,
+    # regenerates an identical model and brings the same blocker back. That reads as an
+    # override that was applied and did nothing, so it stops the run instead.
+    workspace = _conflict_workspace(tmp_path)
+    submission = _submission(
+        workspace,
+        overrides={
+            _conflict_finding(workspace, lane_index=0).identifier: {
+                "status": "overridden",
+                "value": {"movement": "left"},
+            }
+        },
+    )
+    with pytest.raises(ApplyReviewError, match="already says"):
+        _apply(workspace, submission)
+
+
+def test_an_override_naming_a_movement_stage_3_cannot_offer_is_refused(
+    tmp_path: Path,
+) -> None:
+    # `none` is valid OSM and is exactly the value that would strand the lane again:
+    # `movement_matches` is false against it for every movement.
+    workspace = _conflict_workspace(tmp_path)
+    submission = _submission(
+        workspace,
+        overrides={
+            _conflict_finding(workspace, lane_index=0).identifier: {
+                "status": "overridden",
+                "value": {"movement": "none"},
+            }
+        },
+    )
+    with pytest.raises(ApplyReviewError, match="needs"):
+        _apply(workspace, submission)
+
+
+def test_an_override_that_does_not_resolve_the_conflict_stays_open(tmp_path: Path) -> None:
+    """`satisfied` is about the map, not the reviewer, and this is where the two part.
+
+    The nearside lane can only carry straight on. Told it turns right, the reviewed model
+    rejects that movement too and asks the same question again. A decision exists, so
+    nothing here is undecided - but the map does not agree with it, and Stage 5 must still
+    see the blocker.
+    """
+    workspace = _conflict_workspace(tmp_path)
+    finding = _conflict_finding(workspace, lane_index=1)
+    submission = _submission(
+        workspace,
+        overrides={
+            finding.identifier: {"status": "overridden", "value": {"movement": "right"}}
+        },
+    )
+    _apply(workspace, submission)
+
+    comparison = json.loads((workspace / "reports" / "reviewed-comparison.json").read_text())
+    still_open = comparison["findings_still_open"]
+    assert still_open, "an override the map does not reflect must not read as resolved"
+    decided = comparison["finding_decisions"][still_open[0]]
+    assert decided["state"] == "decided"
+    assert decided["satisfied"] is False
+
+
+def test_an_accepted_conflict_reappears_without_being_open(tmp_path: Path) -> None:
+    # Accepting means "keep the restored movement", which leaves the OSM alone, so the
+    # same question comes back on every regeneration. That is not unreviewed work.
+    workspace = _conflict_workspace(tmp_path)
+    _apply(workspace, _submission(workspace))
+
+    reviewed = _reviewed(workspace)
+    assert [f for f in reviewed.findings if f.rule == "turn_permission_geometry_conflict"]
+    comparison = json.loads((workspace / "reports" / "reviewed-comparison.json").read_text())
+    assert comparison["findings_still_open"] == []
+
+
+def test_the_turn_lanes_key_written_is_the_one_generation_reads() -> None:
+    """`_turn_permissions` reads `turn:lanes:<direction>` before the bare `turn:lanes`.
+
+    Writing the bare key while a directional one exists would leave the override in the
+    file and unread - the silent misapplication this stage refuses everywhere else.
+    """
+    wanted = {"lane_count": 2, "slots": {"1": "right"}}
+    oneway = {"oneway": "yes", "turn:lanes": "left|left"}
+    assert _turn_lanes_tag("200", oneway, "forward", wanted) == ("turn:lanes", "left|right")
+
+    directional = {"turn:lanes:forward": "left|left", "turn:lanes": "through|through"}
+    assert _turn_lanes_tag("200", directional, "forward", wanted) == (
+        "turn:lanes:forward",
+        "left|right",
+    )
+
+
+def test_a_bare_turn_lanes_on_a_two_way_way_is_refused() -> None:
+    # A bare value on a bidirectional way describes lanes in node order, covering both
+    # directions at once. Writing the directional key beside it leaves two tags
+    # disagreeing about the other direction; rewriting the bare one answers for a
+    # direction nobody reviewed.
+    tags = {"oneway": "no", "turn:lanes": "left|left"}
+    with pytest.raises(ApplyReviewError, match="whole carriageway"):
+        _turn_lanes_tag("200", tags, "forward", {"lane_count": 2, "slots": {"1": "right"}})
+
+
+def test_a_turn_lanes_value_that_does_not_describe_the_lanes_is_refused() -> None:
+    # Three slots for two lanes: which lane the reviewer's movement belongs to is not
+    # recoverable, so the run stops rather than placing it by guess.
+    tags = {"oneway": "yes", "turn:lanes": "left|left|left"}
+    with pytest.raises(ApplyReviewError, match="slot"):
+        _turn_lanes_tag("200", tags, "forward", {"lane_count": 2, "slots": {"1": "right"}})
 
 
 def test_applied_decisions_do_not_collide_with_the_stage_3_export(tmp_path: Path) -> None:

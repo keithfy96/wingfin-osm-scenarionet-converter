@@ -128,11 +128,14 @@ show completed increments beneath it.
        evidence checksum still match.
 
 - [ ] **Stage 4 - Apply decisions and regenerate automatically**
-  - Implemented so far: the spine. Decisions that resolve a movement are applied
-    and the model is regenerated from them. Decisions whose effect is an **OSM
-    tag are refused by name**, not half-applied - see `_OSM_NATIVE_RULES` in
-    `src/osm_scenario/apply_review.py`. Until those land, `review/reviewed.osm`
-    is the source verbatim.
+  - Implemented so far: the spine, plus two of the tag writes. Decisions that
+    resolve a movement are applied and the model is regenerated from them;
+    `lane_count_inference` writes `lanes`/`lanes:<direction>` and
+    `turn_permission_geometry_conflict` writes `turn:lanes`. Every **other**
+    decision whose effect is an OSM tag is **refused by name**, not half-applied
+    - see `_OSM_NATIVE_RULES` in `src/osm_scenario/apply_review.py`. A review
+    that moves no tag still leaves `review/reviewed.osm` a byte copy of the
+    source.
   - Outputs:
     - `review/reviewed.osm` - OSM-native reviewed corrections, leaving
       `source/map.osm` unchanged. The source is checksummed before and after
