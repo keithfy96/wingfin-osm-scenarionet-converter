@@ -28,6 +28,7 @@ from osm_scenario.validation import (
     _restriction_issues,
     _signal_issues,
 )
+from osm_scenario.validation_view import render_validation_html
 
 WIDTH = 4.0
 
@@ -113,6 +114,19 @@ def _model(**update: Any) -> PreliminaryLaneModel:
 
 def _codes(issues: list[dict[str, Any]]) -> set[str]:
     return {item["code"] for item in issues}
+
+
+def _issue_row(code: str, osm_id: str, **extra: Any) -> dict[str, Any]:
+    return {"code": code, "osm_id": osm_id, "reason": "test", **extra}
+
+
+def _page_payload(html: str) -> dict[str, Any]:
+    import json
+    import re
+
+    match = re.search(r"const DATA = (\{.*?\});", html, re.S)
+    assert match is not None
+    return json.loads(match.group(1).replace("<\\/", "</"))
 
 
 # --- geometry ---------------------------------------------------------------------------
@@ -360,3 +374,88 @@ def test_a_condition_merely_accepted_is_not_dispositioned() -> None:
     comparison = {"finding_decisions": {"f-1": {"state": "decided", "status": "accepted"}}}
 
     assert _dispositioned_osm_ids(model, comparison) == {}
+
+
+# --- what the report says it examined -------------------------------------------------
+
+
+def _report(model: PreliminaryLaneModel, **update: Any) -> dict[str, Any]:
+    report = {
+        "status": "passed",
+        "validated_lane_model": {"sha256": "0" * 64},
+        "checked": {
+            "lanes": len(model.lanes),
+            "connectors": len(model.connectors),
+            "restrictions": len(model.restrictions),
+            "signals": len(model.signals),
+            "stop_lines": len(model.stop_lines),
+            "checks": [
+                "geometry",
+                "references",
+                "connectors",
+                "restrictions",
+                "signals",
+                "boundary",
+            ],
+        },
+        "errors": [],
+        "warnings": [],
+        "boundary": {
+            "lanes_without_exit": 1,
+            "lanes_without_entry": 1,
+            "lanes_at_the_extract_edge": 2,
+            "lane_ids_at_the_extract_edge": ["a", "b"],
+            "routing_components": [2],
+        },
+    }
+    report.update(update)
+    return report
+
+
+def test_the_page_colours_a_lane_by_what_validation_made_of_it() -> None:
+    model = _model()
+    report = _report(
+        model,
+        status="failed",
+        errors=[_issue_row("non_finite_geometry", "200", lane_id="a")],
+    )
+    payload = _page_payload(
+        render_validation_html(model=model, report=report, boundary_lane_ids={"b"})
+    )
+    roles = {feature["id"]: feature["role"] for feature in payload["features"]}
+
+    assert roles["a"] == "error"
+    assert roles["b"] == "boundary"
+
+
+def test_a_boundary_lane_is_drawn_as_such_not_as_a_defect() -> None:
+    """junction-1 has 39 of these. If they drew red the page would say the map is broken."""
+    model = _model()
+    payload = _page_payload(
+        render_validation_html(model=model, report=_report(model), boundary_lane_ids={"a", "b"})
+    )
+
+    assert {feature["role"] for feature in payload["features"]} == {"boundary"}
+
+
+def test_an_issue_with_no_drawn_feature_is_marked_rather_than_dead() -> None:
+    """A signal is not drawn, so its row cannot fly anywhere. Saying so beats a click that
+    silently does nothing."""
+    model = _model()
+    report = _report(
+        model, warnings=[_issue_row("unassociated_signal", "900", signal_id="s1")]
+    )
+    html = render_validation_html(model=model, report=report, boundary_lane_ids=set())
+
+    assert "no drawn feature" in html
+    assert "frow flat" in html
+
+
+def test_rendering_the_same_report_twice_is_byte_identical() -> None:
+    """The page is checksummed into the Stage 5 manifest."""
+    model = _model()
+    report = _report(model)
+    first = render_validation_html(model=model, report=report, boundary_lane_ids={"a"})
+    second = render_validation_html(model=model, report=_report(model), boundary_lane_ids={"a"})
+
+    assert first == second

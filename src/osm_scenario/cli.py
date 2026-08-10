@@ -191,12 +191,12 @@ def validate_map_command(
             if config_path is not None
             else ConverterConfig(config_version=1)
         )
-        report_path, _ = validate_map(workspace=workspace, config=config)
+        report_path, _, html_path = validate_map(workspace=workspace, config=config)
     except (ValidationError, ValueError, KeyError) as error:
         typer.echo(f"Stage 5 failed: {error}", err=True)
         raise typer.Exit(code=1) from error
     status = json.loads(report_path.read_text(encoding="utf-8"))["status"]
-    typer.echo(f"Stage 5 {status}: {report_path}")
+    typer.echo(f"Stage 5 {status}: {html_path}")
     # A failed validation is a result, not a crash - but the exit code has to say so, or a
     # pipeline reads "wrote a report" as "the map is fit to convert".
     if status != "passed":

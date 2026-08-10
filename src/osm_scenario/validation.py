@@ -42,6 +42,7 @@ from osm_scenario.apply_review import _read_json, _sha256
 from osm_scenario.config import ConverterConfig
 from osm_scenario.lane_model import PreliminaryLaneModel
 from osm_scenario.stage1b_data_audit import _write_text_atomic
+from osm_scenario.validation_view import render_validation_html
 
 REPORT_VERSION = 1
 
@@ -601,6 +602,10 @@ def _boundary_report(
         "lanes_without_exit": len(without_exit),
         "lanes_without_entry": len(without_entry),
         "lanes_at_the_extract_edge": len(boundary_lanes),
+        # Listed, not just counted. This is the one verdict Stage 5 reaches by judgement
+        # rather than measurement, so the ids have to be checkable against the map by
+        # someone who does not trust the rule.
+        "lane_ids_at_the_extract_edge": sorted(boundary_lanes),
         "routing_components": sorted((len(item) for item in components), reverse=True),
     }
     return issues, facts
@@ -611,6 +616,7 @@ def _boundary_report(
 
 def _markdown_report(report: dict[str, Any]) -> str:
     boundary = report["boundary"]
+    checked = report["checked"]
     errors = report["errors"]
     warnings = report["warnings"]
 
@@ -634,6 +640,10 @@ def _markdown_report(report: dict[str, Any]) -> str:
         f"- Generation fingerprint: `{report['validated_lane_model']['generation_fingerprint']}`",
         f"- Errors: {len(errors)}",
         f"- Warnings: {len(warnings)}",
+        f"- Checked: {checked['lanes']} lanes, {checked['connectors']} connectors, "
+        f"{checked['restrictions']} restrictions, {checked['signals']} signals, "
+        f"{checked['stop_lines']} stop lines, across {len(checked['checks'])} checks "
+        f"(`{'`, `'.join(checked['checks'])}`)",
         "",
         "## Errors",
         "",
@@ -663,7 +673,7 @@ def _markdown_report(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def validate_map(*, workspace: Path, config: ConverterConfig) -> tuple[Path, Path]:
+def validate_map(*, workspace: Path, config: ConverterConfig) -> tuple[Path, Path, Path]:
     """Validate WORKSPACE's reviewed lane model and write the Stage 5 reports."""
     workspace = workspace.resolve()
     model_path = workspace / "lane-model" / "reviewed.json"
@@ -675,16 +685,30 @@ def validate_map(*, workspace: Path, config: ConverterConfig) -> tuple[Path, Pat
     terminus_nodes = _way_terminus_nodes(workspace / manifest["source"]["path"])
     boundary_issues, boundary_facts = _boundary_report(model, terminus_nodes)
 
+    # Named so the report can say which checks ran. "0 errors" is not a claim until it
+    # comes with a denominator: a validator that silently skipped its lane loop would
+    # otherwise write a report byte-identical to one that cleared all 285 lanes.
+    checks = {
+        "geometry": _geometry_issues,
+        "references": _reference_issues,
+        "connectors": _connector_issues,
+        "restrictions": _restriction_issues,
+        "signals": _signal_issues,
+    }
     found: list[dict[str, Any]] = []
-    for check in (
-        _geometry_issues,
-        _reference_issues,
-        _connector_issues,
-        _restriction_issues,
-        _signal_issues,
-    ):
+    for check in checks.values():
         found.extend(check(model))
     found.extend(boundary_issues)
+    checked = {
+        "lanes": len(model.lanes),
+        "connectors": len(model.connectors),
+        "restrictions": len(model.restrictions),
+        "signals": len(model.signals),
+        "stop_lines": len(model.stop_lines),
+        # Built from the same mapping the loop above iterates, plus the boundary pass that
+        # runs separately because it needs the source OSM. The two cannot drift.
+        "checks": [*checks, "boundary"],
+    }
     if still_open:
         found.append(
             _issue(
@@ -722,21 +746,33 @@ def validate_map(*, workspace: Path, config: ConverterConfig) -> tuple[Path, Pat
             "sha256": _sha256(model_path),
             "generation_fingerprint": model.metadata.generation_fingerprint,
         },
+        "checked": checked,
         "errors": errors,
         "warnings": warnings,
         "boundary": boundary_facts,
     }
 
     reports_dir = workspace / "reports"
+    inspection_dir = workspace / "inspection"
     json_path = reports_dir / "map-validation.json"
     markdown_path = reports_dir / "map-validation.md"
+    html_path = inspection_dir / "stage-5-validation.html"
     _write_text_atomic(json_path, json.dumps(report, indent=2, sort_keys=True) + "\n")
     _write_text_atomic(markdown_path, _markdown_report(report))
+    _write_text_atomic(
+        html_path,
+        render_validation_html(
+            model=model,
+            report=report,
+            boundary_lane_ids=set(boundary_facts["lane_ids_at_the_extract_edge"]),
+        ),
+    )
 
     artifacts = {}
     for name, path in (
         ("validation_json", json_path),
         ("validation_markdown", markdown_path),
+        ("validation_html", html_path),
     ):
         artifacts[name] = {
             "path": path.relative_to(workspace).as_posix(),
@@ -745,6 +781,7 @@ def validate_map(*, workspace: Path, config: ConverterConfig) -> tuple[Path, Pat
         }
     manifest["stage_5"] = {
         "status": report["status"],
+        "checked": checked,
         "validated_lane_model": report["validated_lane_model"],
         "issue_counts": {"errors": len(errors), "warnings": len(warnings)},
         "boundary": boundary_facts,
@@ -753,4 +790,4 @@ def validate_map(*, workspace: Path, config: ConverterConfig) -> tuple[Path, Pat
     (workspace / "source" / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    return json_path, markdown_path
+    return json_path, markdown_path, html_path
