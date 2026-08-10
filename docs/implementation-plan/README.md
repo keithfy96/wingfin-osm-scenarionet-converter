@@ -377,13 +377,19 @@ before approval.
 - [ ] **Stage 6 exit criteria complete.**
   - [x] **`osm-scenario convert --workspace ...` implemented**
     (`src/osm_scenario/conversion.py`). Gated on `stage_5.status == "passed"`
-    and the reviewed model's checksum. Writes `scenario.pkl`,
+    and the reviewed model's checksum. Writes `sd_<dataset>_<version>_<id>.pkl`,
     `dataset_summary.pkl` and `dataset_mapping.pkl` under
     `<workspace>/scenarionet/`, plus `reports/scenario-conversion.json` and a
     `stage_6` manifest record.
   - [x] **`ScenarioDescription.sanity_check()` passes**, and the dataset satisfies
     every assertion `read_dataset_summary` makes. Both are run against MetaDrive
     0.4.3's own source, not a reading of it — see the schema note below.
+  - [x] **`inspection/stage-6-reachability.html`** — pick any lane and see every
+    lane a car can reach from it, coloured by how many lanes it has to cross,
+    and the same search run backwards. Written by `convert` from the same
+    resolved graph the dataset is built from, so the page cannot show a network
+    the pickle does not contain. It is what turns `metadata.routing`'s one
+    number into a route you can pick before spending GPU time on it.
   - [ ] **Not yet loaded in MetaDrive itself.** Nothing has been rendered, and no
     route has been driven. That needs panda3d and a GPU, so it belongs in the
     lockfile-pinned isolated environment rather than here.
@@ -413,7 +419,10 @@ Two things the implemented conversion decided that the list above does not say:
   component sizes use *weakly* connected components, which ignore one-way
   direction: `junction-1` is 6 pieces weakly and 274 strongly, and only 8% of
   lane-to-lane journeys exist. `metadata.routing` names the best starting lane
-  and how far it reaches, which is the number step 4 above actually needs.
+  and how far it reaches, which is the number step 4 above actually needs. The
+  Stage 6 page draws it, because the number alone still misleads: 285 lanes are
+  joined by 294 edges, so the best lane's 79 is a thread twelve steps long
+  before it branches at all, not a network.
 
 **The schema is pinned against MetaDrive's own source, without depending on it.**
 `test_the_scenario_passes_metadrives_own_sanity_check` loads

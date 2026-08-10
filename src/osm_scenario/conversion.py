@@ -44,6 +44,7 @@ import numpy as np
 from osm_scenario.apply_review import ApplyReviewError, _read_json, _sha256
 from osm_scenario.config import ConverterConfig
 from osm_scenario.lane_model import LaneFeature, PreliminaryLaneModel
+from osm_scenario.reachability_view import render_reachability_html
 from osm_scenario.stage1b_data_audit import _write_text_atomic
 
 REPORT_VERSION = 1
@@ -288,8 +289,13 @@ def _scenario(
     workspace_name: str,
     manifest: dict[str, Any],
     model_sha256: str,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """The scenario dict, and the reachability facts computed on the way."""
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, tuple[list[str], list[str]]]]:
+    """The scenario dict, the reachability facts, and the graph both were built from.
+
+    The graph comes back out so the Stage 6 page can be drawn from the same object rather
+    than a second resolution of the same references. A page that disagreed with the
+    dataset about which lanes join would be worse than no page.
+    """
     neighbours = _lane_neighbours(model)
     features = _map_features(model, neighbours)
 
@@ -354,12 +360,12 @@ def _scenario(
             },
         },
     }
-    return scenario, routing
+    return scenario, routing, neighbours
 
 
 def convert_scenario(
     *, workspace: Path, config: ConverterConfig
-) -> tuple[Path, Path, Path, Path]:
+) -> tuple[Path, Path, Path, Path, Path]:
     """Convert WORKSPACE's validated lane model into a map-only ScenarioNet dataset.
 
     `config` is accepted for symmetry with the other stage entry points; conversion is a
@@ -371,7 +377,7 @@ def convert_scenario(
     model_sha256 = _sha256(model_path)
 
     model = PreliminaryLaneModel.model_validate(_read(model_path, "reviewed lane model"))
-    scenario, routing = _scenario(
+    scenario, routing, neighbours = _scenario(
         model=model,
         workspace_name=workspace.name,
         manifest=manifest,
@@ -395,11 +401,22 @@ def convert_scenario(
         mapping_path, pickle.dumps({file_name: ""}, protocol=_PICKLE_PROTOCOL)
     )
 
+    # Written after the pickles and from the same `neighbours`, so the page can only ever
+    # describe a dataset that exists. It goes in `inspection/` beside the other stages'
+    # pages rather than in the dataset directory, which MetaDrive reads and which must
+    # hold nothing but the dataset.
+    html_path = workspace / "inspection" / "stage-6-reachability.html"
+    _write_text_atomic(
+        html_path,
+        render_reachability_html(model=model, neighbours=neighbours, routing=routing),
+    )
+
     artifacts = {}
     for name, path in (
         ("scenario", scenario_path),
         ("dataset_summary", summary_path),
         ("dataset_mapping", mapping_path),
+        ("reachability_html", html_path),
     ):
         artifacts[name] = {
             "path": path.relative_to(workspace).as_posix(),
@@ -441,4 +458,4 @@ def convert_scenario(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
 
-    return scenario_path, summary_path, mapping_path, report_path
+    return scenario_path, summary_path, mapping_path, report_path, html_path

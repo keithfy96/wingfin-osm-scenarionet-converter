@@ -34,6 +34,7 @@ from osm_scenario.lane_model import (
     Point2D,
     PreliminaryLaneModel,
 )
+from osm_scenario.reachability_view import render_reachability_html
 
 WIDTH = 4.0
 
@@ -126,7 +127,7 @@ def _model(**update: Any) -> PreliminaryLaneModel:
 
 
 def _built(model: PreliminaryLaneModel) -> dict[str, Any]:
-    scenario, _ = _scenario(
+    scenario, _, _ = _scenario(
         model=model,
         workspace_name="test-workspace",
         manifest={"source": {"sha256": "src"}, "stage_5": {"status": "passed"}},
@@ -183,7 +184,7 @@ def test_conversion_refuses_a_model_edited_after_validation(tmp_path: Path) -> N
 
 def test_a_passing_workspace_converts_and_records_stage_6(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path, _model())
-    scenario_path, summary_path, mapping_path, report_path = convert_scenario(
+    scenario_path, summary_path, mapping_path, report_path, _ = convert_scenario(
         workspace=workspace, config=ConverterConfig(config_version=1)
     )
     scenario = pickle.loads(scenario_path.read_bytes())
@@ -377,7 +378,7 @@ def test_the_scenario_passes_metadrives_own_sanity_check(tmp_path: Path) -> None
     """
     schema = _load_metadrive_schema()
     workspace = _workspace(tmp_path, _model())
-    scenario_path, _, _, _ = convert_scenario(
+    scenario_path, _, _, _, _ = convert_scenario(
         workspace=workspace, config=ConverterConfig(config_version=1)
     )
     schema.sanity_check(pickle.loads(scenario_path.read_bytes()))
@@ -420,3 +421,104 @@ def test_one_way_lanes_are_not_counted_as_mutually_reachable() -> None:
     """
     routing = _reachability(_lane_neighbours(_model()))
     assert routing["components_respecting_direction"] == {"count": 3, "largest": 1}
+
+
+# --- the Stage 6 reachability page ---------------------------------------------------------
+
+
+def _payload(html: str) -> dict[str, Any]:
+    """The `DATA` object the page's search runs over, read back out of the rendered page.
+
+    Parsed rather than taken from the renderer's inputs, because what matters is what
+    reaches the browser - a payload that failed to serialise is the failure mode this
+    guards against.
+    """
+    start = html.index("const DATA = ") + len("const DATA = ")
+    end = html.index(";\n", start)
+    return json.loads(html[start:end].replace("<\\/", "</"))
+
+
+def _reached_in_the_browsers_search(payload: dict[str, Any], start: str) -> set[str]:
+    """The page's breadth-first search, rewritten line for line in Python.
+
+    There is no JavaScript test runner here, so the algorithm is pinned by keeping a twin
+    of it beside the real thing and holding both to the number the scenario reports.
+    """
+    graph = {lane["id"]: lane["exits"] for lane in payload["lanes"]}
+    seen = {start}
+    frontier = [start]
+    while frontier:
+        following = []
+        for lane_id in frontier:
+            for target in graph[lane_id]:
+                if target not in seen:
+                    seen.add(target)
+                    following.append(target)
+        frontier = following
+    return seen - {start}
+
+
+def test_the_page_carries_the_same_graph_the_scenario_does() -> None:
+    """The page must not be able to draw a network the dataset does not contain.
+
+    `convert_scenario` resolves the references once and hands the one result to both, so
+    this is really a check that nothing re-derives them along the way.
+    """
+    model = _model()
+    neighbours = _lane_neighbours(model)
+    payload = _payload(
+        render_reachability_html(
+            model=model, neighbours=neighbours, routing=_reachability(neighbours)
+        )
+    )
+    assert {lane["id"]: lane["exits"] for lane in payload["lanes"]} == {
+        lane_id: exits for lane_id, (_, exits) in neighbours.items()
+    }
+
+
+def test_the_pages_search_finds_what_the_scenarios_routing_metadata_claims() -> None:
+    model = _model()
+    neighbours = _lane_neighbours(model)
+    routing = _reachability(neighbours)
+    payload = _payload(
+        render_reachability_html(model=model, neighbours=neighbours, routing=routing)
+    )
+    assert payload["default_lane"] == routing["best_start_lane_id"]
+    reached = _reached_in_the_browsers_search(payload, routing["best_start_lane_id"])
+    assert len(reached) == routing["best_start_reaches"]
+
+
+def test_the_page_is_written_and_recorded_beside_the_dataset(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, _model())
+    *_, report_path, html_path = convert_scenario(
+        workspace=workspace, config=ConverterConfig(config_version=1)
+    )
+    assert html_path == workspace / "inspection" / "stage-6-reachability.html"
+    # In `inspection/`, not in `scenarionet/`: MetaDrive reads that directory and it must
+    # hold the dataset and nothing else.
+    assert not (workspace / "scenarionet" / html_path.name).exists()
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["artifacts"]["reachability_html"]["path"] == (
+        "inspection/stage-6-reachability.html"
+    )
+    manifest = json.loads((workspace / "source" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["stage_6"]["artifacts"]["reachability_html"] == (
+        report["artifacts"]["reachability_html"]
+    )
+
+
+def test_every_lane_is_drawn_with_a_line_and_a_way_to_name_it() -> None:
+    """A lane the page cannot draw is a lane a reader cannot click, and so cannot start on."""
+    model = _model()
+    neighbours = _lane_neighbours(model)
+    payload = _payload(
+        render_reachability_html(
+            model=model, neighbours=neighbours, routing=_reachability(neighbours)
+        )
+    )
+    assert len(payload["lanes"]) == len(model.lanes)
+    for lane in payload["lanes"]:
+        assert len(lane["line"]) >= 2
+        assert lane["ways"] and lane["label"] and lane["short"]
+    assert sum(way["lanes"] for way in payload["ways"]) == len(model.lanes)

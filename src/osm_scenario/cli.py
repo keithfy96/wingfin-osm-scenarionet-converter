@@ -219,12 +219,15 @@ def convert(
             if config_path is not None
             else ConverterConfig(config_version=1)
         )
-        scenario_path, _, _, report_path = convert_scenario(workspace=workspace, config=config)
+        scenario_path, _, _, report_path, html_path = convert_scenario(
+            workspace=workspace, config=config
+        )
     except (ConversionError, ValueError, KeyError) as error:
         typer.echo(f"Stage 6 failed: {error}", err=True)
         raise typer.Exit(code=1) from error
     features = json.loads(report_path.read_text(encoding="utf-8"))["map_features"]
     typer.echo(f"Stage 6 complete: {features} map features -> {scenario_path}")
+    typer.echo(f"Stage 6 reachability map: {html_path}")
 
 
 if __name__ == "__main__":
