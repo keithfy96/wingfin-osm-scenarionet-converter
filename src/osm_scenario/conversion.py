@@ -13,11 +13,13 @@ Two things about this stage are worth knowing before reading the code.
   swapped - exactly twice the 83 active connectors, which is the arithmetic that says the
   swap is complete.
 
-* **ScenarioNet is deliberately not a dependency.** The scenario dict is built by hand
-  against the format, which means a handful of field names cannot be checked here. They
-  are all named in `_UNVERIFIED_FIELDS` and repeated in the conversion report rather than
-  left as a surprise for whoever installs ScenarioNet first. Nothing here guesses at
-  content - only at spelling.
+* **ScenarioNet is deliberately not a dependency, but the schema is still pinned.** The
+  scenario dict is built by hand against MetaDrive's `ScenarioDescription`.
+  `test_the_scenario_passes_metadrives_own_sanity_check` runs MetaDrive's real
+  `sanity_check` against a converted scenario by loading its schema module directly from a
+  checkout - no install, no panda3d - and skips where no checkout exists. So the field
+  names below are measured against MetaDrive 0.4.3 rather than assumed, and a schema change
+  fails a test rather than surfacing as a load error hours later.
 """
 
 from __future__ import annotations
@@ -30,7 +32,6 @@ import tempfile
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any
 
 import networkx as nx
@@ -47,7 +48,6 @@ from osm_scenario.stage1b_data_audit import _write_text_atomic
 
 REPORT_VERSION = 1
 
-SCENARIO_FILE = "scenario.pkl"
 SUMMARY_FILE = "dataset_summary.pkl"
 MAPPING_FILE = "dataset_mapping.pkl"
 
@@ -60,26 +60,26 @@ _LANE_TYPE = "LANE_SURFACE_STREET"
 _BOUNDARY_TYPE = "ROAD_EDGE_BOUNDARY"
 _FORMAT_VERSION = "1.0"
 
-# Field spellings taken from the ScenarioNet format rather than from our own model, which
-# cannot be checked on this machine: ScenarioNet is not a dependency, is not vendored, and
-# the repo's Stage 6 spec describes the format in prose without a field list.
-#
-# This is an absence of evidence, not a known defect. Every one of these carries the right
-# *content*; what is unconfirmed is the key it is filed under. Kept in one mapping, and
-# copied into the conversion report, so installing ScenarioNet turns this into a single
-# edit rather than a search.
-_UNVERIFIED_FIELDS: Mapping[str, str] = MappingProxyType(
-    {
-        "map_features[].left_neighbor": (
-            "written as a lane id or null; ScenarioNet may want a list of objects "
-            "carrying the index range over which the two lanes are adjacent"
-        ),
-        "map_features[].right_neighbor": "same question as left_neighbor",
-        "map_features[].speed_limit_kmh": "unit suffix on the key is unconfirmed",
-        "version": f"written as {_FORMAT_VERSION!r}; ScenarioNet pins its own format version",
-        "metadata.coordinate": "the name ScenarioNet gives a metre-based local frame",
-    }
-)
+_DATASET_NAME = "osm-scenario"
+_DATASET_VERSION = "v1"
+
+# MetaDrive's coordinate frame: right-handed, metres. Nothing in MetaDrive 0.4.3 branches on
+# this value - the only assignment is in its own `scenario/utils.py` - so it is a label, not
+# a transform. `metadrive_processed` stays False because this dataset came from a converter,
+# which is what every ScenarioNet converter records.
+_COORDINATE = "metadrive"
+
+
+def scenario_file_name(scenario_id: str) -> str:
+    """The one filename the dataset is keyed on, in the form MetaDrive insists on.
+
+    `ScenarioDescription.is_scenario_file` accepts a name only if it starts with `sd_` or is
+    entirely digits, and `read_dataset_summary` asserts it for every entry in the summary.
+    So a friendly name like `scenario.pkl` loads nowhere. Built the way MetaDrive's own
+    `get_export_file_name` builds it, and derived rather than constant so the summary and
+    the mapping cannot key on different strings.
+    """
+    return f"sd_{_DATASET_NAME}_{_DATASET_VERSION}_{scenario_id}.pkl"
 
 
 class ConversionError(RuntimeError):
@@ -241,11 +241,17 @@ def _lane_feature(
         "polyline": _polyline(lane.centerline),
         "polygon": _polyline(lane.polygon),
         "speed_limit_kmh": lane.speed_limit_kph,
+        # MetaDrive's `ScenarioLane` ignores this and uses its own `VIS_LANE_WIDTH`. Kept
+        # because it is the surveyed width and the field is the format's own name for it.
         "width": lane.width_m,
         "entry_lanes": entries,
         "exit_lanes": exits,
-        "left_neighbor": lane.left_neighbor,
-        "right_neighbor": lane.right_neighbor,
+        # Lists, not bare ids: that is the shape every ScenarioNet converter writes, and an
+        # empty list is how "no neighbour" is spelled. MetaDrive 0.4.3 stores these and
+        # reads them nowhere - `ScenarioLane.get_lane_width` returns before it reaches the
+        # only code that would - so this is convention rather than a load requirement.
+        "left_neighbor": [lane.left_neighbor] if lane.left_neighbor else [],
+        "right_neighbor": [lane.right_neighbor] if lane.right_neighbor else [],
     }
 
 
@@ -300,7 +306,11 @@ def _scenario(
         )
 
     routing = _reachability(neighbours)
-    scenario_id = f"{workspace_name}-{model.metadata.generation_fingerprint}"
+    # A 16-hex-digit prefix, which is how the fingerprint is written everywhere a person
+    # reads it. The id ends up in the filename and in MetaDrive's logs, and the full 64
+    # characters are one field away in `metadata.provenance`, so nothing is lost by not
+    # spending 64 of them here.
+    scenario_id = f"{workspace_name}-{model.metadata.generation_fingerprint[:16]}"
     scenario = {
         "id": scenario_id,
         "version": _FORMAT_VERSION,
@@ -312,9 +322,13 @@ def _scenario(
         "map_features": features,
         "metadata": {
             "scenario_id": scenario_id,
-            "dataset": "osm-scenario",
-            "coordinate": "local_metres",
-            "ts": [0.0],
+            "dataset": _DATASET_NAME,
+            # The three keys `ScenarioDescription.METADATA_KEYS` requires. `ts` must be an
+            # array whose shape equals `length` - `sanity_check` reads `.shape` on it, so a
+            # plain list fails there rather than at load.
+            "coordinate": _COORDINATE,
+            "metadrive_processed": False,
+            "ts": np.zeros(1, dtype=np.float64),
             "sdc_id": None,
             "map_only": True,
             "coordinate_system_wkt": model.metadata.coordinate_system_wkt,
@@ -338,7 +352,6 @@ def _scenario(
                 "reviewed_lane_model_sha256": model_sha256,
                 "stage_5_status": manifest["stage_5"]["status"],
             },
-            "unverified_fields": dict(_UNVERIFIED_FIELDS),
         },
     }
     return scenario, routing
@@ -366,19 +379,20 @@ def convert_scenario(
     )
 
     dataset_dir = workspace / "scenarionet"
-    scenario_path = dataset_dir / SCENARIO_FILE
+    file_name = scenario_file_name(scenario["id"])
+    scenario_path = dataset_dir / file_name
     summary_path = dataset_dir / SUMMARY_FILE
     mapping_path = dataset_dir / MAPPING_FILE
 
     _write_bytes_atomic(scenario_path, pickle.dumps(scenario, protocol=_PICKLE_PROTOCOL))
     _write_bytes_atomic(
         summary_path,
-        pickle.dumps({SCENARIO_FILE: scenario["metadata"]}, protocol=_PICKLE_PROTOCOL),
+        pickle.dumps({file_name: scenario["metadata"]}, protocol=_PICKLE_PROTOCOL),
     )
-    # An empty relative path means "beside the summary". Both index files key on the
-    # scenario's filename, so the two cannot drift apart.
+    # An empty relative path means "beside the summary". Both index files key on the one
+    # `file_name` computed above, so the two cannot drift apart.
     _write_bytes_atomic(
-        mapping_path, pickle.dumps({SCENARIO_FILE: ""}, protocol=_PICKLE_PROTOCOL)
+        mapping_path, pickle.dumps({file_name: ""}, protocol=_PICKLE_PROTOCOL)
     )
 
     artifacts = {}
@@ -405,10 +419,10 @@ def convert_scenario(
         "converted": scenario["metadata"]["counts"],
         "map_features": len(scenario["map_features"]),
         "routing": routing,
+        # Named outside the pickle because it is the string every MetaDrive entry point
+        # keys on, and the first thing to check when a load fails.
+        "scenario_file": file_name,
         "artifacts": artifacts,
-        # Restated outside the pickle so the limitation is legible without unpickling
-        # anything, which is where somebody looks first when a MetaDrive load fails.
-        "unverified_fields": dict(_UNVERIFIED_FIELDS),
     }
 
     report_path = workspace / "reports" / "scenario-conversion.json"

@@ -7,8 +7,12 @@ touches the filesystem.
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import math
 import pickle
+import sys
+import types
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +25,7 @@ from osm_scenario.conversion import (
     _reachability,
     _scenario,
     convert_scenario,
+    scenario_file_name,
 )
 from osm_scenario.lane_model import (
     ConnectorFeature,
@@ -183,14 +188,31 @@ def test_a_passing_workspace_converts_and_records_stage_6(tmp_path: Path) -> Non
     )
     scenario = pickle.loads(scenario_path.read_bytes())
     assert set(scenario["map_features"]) == {"a", "b", "d"}
-    assert pickle.loads(summary_path.read_bytes()) == {"scenario.pkl": scenario["metadata"]}
-    assert pickle.loads(mapping_path.read_bytes()) == {"scenario.pkl": ""}
+
+    # Both index files key on the same computed filename, and it is the one MetaDrive will
+    # accept - not a name we found readable.
+    name = scenario_file_name(scenario["id"])
+    assert scenario_path.name == name
+    assert pickle.loads(summary_path.read_bytes()) == {name: scenario["metadata"]}
+    assert pickle.loads(mapping_path.read_bytes()) == {name: ""}
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["map_features"] == 3
+    assert report["scenario_file"] == name
     manifest = json.loads((workspace / "source" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["stage_6"]["status"] == "converted"
     assert manifest["stage_6"]["scenario_id"] == scenario["id"]
+
+
+def test_the_scenario_file_is_named_the_way_metadrive_demands() -> None:
+    """`ScenarioDescription.is_scenario_file` accepts `sd_*` or all-digits, nothing else.
+
+    `read_dataset_summary` asserts it for every entry in the summary, so a friendly name
+    like `scenario.pkl` produces a dataset that loads nowhere.
+    """
+    name = scenario_file_name("junction-1-abc123")
+    assert name.startswith("sd_")
+    assert name.endswith(".pkl")
 
 
 # --- the two kinds of id ------------------------------------------------------------------
@@ -279,10 +301,103 @@ def test_provenance_names_the_model_it_was_built_from() -> None:
     assert provenance["stage_5_status"] == "passed"
 
 
-def test_the_unconfirmed_field_names_travel_with_the_dataset() -> None:
-    # Whoever installs ScenarioNet first should not have to find these by failing.
-    unverified = _built(_model())["metadata"]["unverified_fields"]
-    assert "map_features[].left_neighbor" in unverified
+def test_metadata_carries_the_three_keys_metadrive_requires() -> None:
+    """`ScenarioDescription.METADATA_KEYS`, and the shape `sanity_check` reads off `ts`.
+
+    Stated here as well as in the sanity-check test so the requirement survives on a
+    machine with no MetaDrive checkout, where that test skips.
+    """
+    scenario = _built(_model())
+    metadata = scenario["metadata"]
+    assert {"metadrive_processed", "coordinate", "ts"} <= set(metadata)
+    assert metadata["metadrive_processed"] is False
+    assert metadata["ts"].shape == (scenario["length"],)
+
+
+def test_neighbours_are_lists_even_when_there_is_no_neighbour() -> None:
+    lanes = [_lane("a", left_neighbor=None, right_neighbor="b"), _lane("b")]
+    features = _built(_model(lanes=lanes, connectors=[]))["map_features"]
+    assert features["a"]["left_neighbor"] == []
+    assert features["a"]["right_neighbor"] == ["b"]
+
+
+# --- MetaDrive's own schema -----------------------------------------------------------------
+
+METADRIVE_SRC = Path("/home/keith/Desktop/work/wingfin/metadrive/metadrive")
+
+
+def _load_metadrive_schema() -> Any:
+    """MetaDrive's `ScenarioDescription`, loaded from a checkout without installing it.
+
+    A plain `import metadrive...` runs `metadrive/__init__.py`, which pulls in panda3d, the
+    renderer. Checking a data structure needs none of that, and adding a 27-package
+    dependency to pin one schema is a bad trade - the Stage 6 spec explicitly keeps
+    MetaDrive out of this converter's dependencies.
+
+    So the three package levels are registered as bare modules carrying only `__path__`,
+    `metadrive.utils.math.norm` is supplied directly (the one function the schema imports
+    from a package whose `__init__` needs panda3d), and the two real modules are loaded by
+    file path. If MetaDrive reorganises these files this raises rather than silently
+    passing, which is the point.
+    """
+    for name, path in (
+        ("metadrive", METADRIVE_SRC),
+        ("metadrive.scenario", METADRIVE_SRC / "scenario"),
+        ("metadrive.utils", METADRIVE_SRC / "utils"),
+    ):
+        module = types.ModuleType(name)
+        module.__path__ = [str(path)]  # type: ignore[attr-defined]
+        sys.modules[name] = module
+    stub = types.ModuleType("metadrive.utils.math")
+    stub.norm = lambda x, y: math.sqrt(x * x + y * y)  # type: ignore[attr-defined]
+    sys.modules["metadrive.utils.math"] = stub
+
+    def load(name: str, path: Path) -> Any:
+        spec = importlib.util.spec_from_file_location(name, path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    load("metadrive.type", METADRIVE_SRC / "type.py")
+    schema = load(
+        "metadrive.scenario.scenario_description",
+        METADRIVE_SRC / "scenario" / "scenario_description.py",
+    )
+    return schema.ScenarioDescription
+
+
+@pytest.mark.skipif(not METADRIVE_SRC.is_dir(), reason="no MetaDrive checkout on this machine")
+def test_the_scenario_passes_metadrives_own_sanity_check(tmp_path: Path) -> None:
+    """The gate that stops this converter drifting from the format it targets.
+
+    Everything else in this file checks what we meant to write. This checks that MetaDrive
+    agrees, using MetaDrive's code rather than our reading of it.
+    """
+    schema = _load_metadrive_schema()
+    workspace = _workspace(tmp_path, _model())
+    scenario_path, _, _, _ = convert_scenario(
+        workspace=workspace, config=ConverterConfig(config_version=1)
+    )
+    schema.sanity_check(pickle.loads(scenario_path.read_bytes()))
+
+
+@pytest.mark.skipif(not METADRIVE_SRC.is_dir(), reason="no MetaDrive checkout on this machine")
+def test_our_feature_types_are_the_ones_metadrive_defines() -> None:
+    """Spelled from MetaDrive's constants, not from a reading of someone else's dataset."""
+    _load_metadrive_schema()
+    from metadrive.type import MetaDriveType
+
+    scenario = _built(_model(lanes=[_lane("a", boundaries=[
+        LaneBoundary(identifier="edge-1", side="left", points=_straight(0.0, 50.0))
+    ])]))
+    types_used = {feature["type"] for feature in scenario["map_features"].values()}
+    assert types_used == {"LANE_SURFACE_STREET", "ROAD_EDGE_BOUNDARY"}
+    assert MetaDriveType.is_lane("LANE_SURFACE_STREET")
+    # `has_type` covers object types and never sees a map feature, so the boundary is
+    # checked against the constant MetaDrive actually names it with.
+    assert MetaDriveType.BOUNDARY_LINE == "ROAD_EDGE_BOUNDARY"
 
 
 # --- reachability -------------------------------------------------------------------------

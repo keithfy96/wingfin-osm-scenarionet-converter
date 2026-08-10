@@ -381,8 +381,12 @@ before approval.
     `dataset_summary.pkl` and `dataset_mapping.pkl` under
     `<workspace>/scenarionet/`, plus `reports/scenario-conversion.json` and a
     `stage_6` manifest record.
-  - [ ] **Isolated ScenarioNet/MetaDrive validation not started.** Nothing here
-    has been loaded by ScenarioNet or rendered by MetaDrive.
+  - [x] **`ScenarioDescription.sanity_check()` passes**, and the dataset satisfies
+    every assertion `read_dataset_summary` makes. Both are run against MetaDrive
+    0.4.3's own source, not a reading of it — see the schema note below.
+  - [ ] **Not yet loaded in MetaDrive itself.** Nothing has been rendered, and no
+    route has been driven. That needs panda3d and a GPU, so it belongs in the
+    lockfile-pinned isolated environment rather than here.
 
 - Convert the reviewed model directly into `ScenarioDescription.map_features`.
 - Include centerline, polygon, type, speed, boundaries, neighbors, and
@@ -411,10 +415,30 @@ Two things the implemented conversion decided that the list above does not say:
   lane-to-lane journeys exist. `metadata.routing` names the best starting lane
   and how far it reaches, which is the number step 4 above actually needs.
 
-Field names taken from the ScenarioNet format rather than from our own model
-cannot be checked while ScenarioNet is not installed. They are listed in
-`conversion._UNVERIFIED_FIELDS` and repeated in the conversion report, and are
-the first thing to confirm when the isolated environment lands.
+**The schema is pinned against MetaDrive's own source, without depending on it.**
+`test_the_scenario_passes_metadrives_own_sanity_check` loads
+`metadrive/scenario/scenario_description.py` by file path from a checkout and runs
+the real `ScenarioDescription.sanity_check()`; it skips where no checkout exists.
+MetaDrive's `__init__` needs panda3d, so the test registers bare package modules
+and supplies `metadrive.utils.math.norm` directly - no install, and MetaDrive
+stays out of this converter's dependencies as required above.
+
+Three things measurement caught that a reading of the format would not:
+
+- `metadata` must carry `metadrive_processed` (`METADATA_KEYS`), and `ts` must be
+  an array whose shape equals `length` - `sanity_check` reads `.shape` on it.
+- The **filename** is validated. `read_dataset_summary` asserts `is_scenario_file`
+  on every summary entry, which accepts only `sd_*` or an all-digits name.
+  `conversion.scenario_file_name` builds it the way MetaDrive's
+  `get_export_file_name` does, and both index files key on that one string.
+- Neighbours are lists, not bare ids, matching every ScenarioNet converter.
+  MetaDrive 0.4.3 stores and never reads them, so this is convention only.
+
+Equally worth recording, because they look wrong beside Waymo's converted data and
+are not: two-point lane polylines load (MetaDrive skips a lane only at
+`len(polyline) <= 1`), `ROAD_EDGE_BOUNDARY` is exactly
+`MetaDriveType.BOUNDARY_LINE`, and entry/exit ids that resolve against
+`map_features` are stricter than Waymo's own, whose ids do not resolve at all.
 
 ## Interfaces and Artifacts
 
