@@ -150,10 +150,40 @@ pre-existing files and is **not** a gate — do not mass-reformat to satisfy it.
 ### Workspaces
 
 `workspaces/` is gitignored, so its contents never appear in `git status` — run
-`ls workspaces/` rather than assuming. `junction-1` is currently the only one.
+`ls workspaces/` rather than assuming. `junction-1` is the working one.
 Generation refuses to run when `source/map.osm` drifts from the sha256 in
 `source/manifest.json`; Keith hand-edits the OSM mid-session, so re-check rather
 than trusting a number from earlier in the conversation.
+
+### Reference checkouts — read MetaDrive, do not guess at it
+
+Both are on this machine. Neither is a dependency of this repo, and nothing in
+`git status` will remind you they exist.
+
+- `/home/keith/Desktop/work/wingfin/metadrive/` — MetaDrive **0.4.3**, the format
+  this converter targets. When a question is "what does MetaDrive do with this
+  field", the answer is in here, not in a recollection of the docs.
+- `/home/keith/Desktop/work/wingfin/scenarionet/` — ScenarioNet: the dataset
+  tooling, and the Waymo / nuPlan / nuScenes / Argoverse converters worth
+  comparing our output against when a field's shape is in doubt.
+
+`tests/unit/test_conversion.py` loads MetaDrive's real `ScenarioDescription`
+straight from the first path (`METADRIVE_SRC`, near line 356) and is marked
+`skipif` on the directory being absent — so a moved or renamed checkout **silently
+drops the schema gate** rather than failing.
+
+Two traps that have already cost a session, both measured rather than read:
+
+- **Neither checkout can unpickle our scenario.** Both `.venv`s are Python 3.8 /
+  numpy 1.24; we write with numpy 2.2, so loading raises `ModuleNotFoundError: No
+  module named 'numpy._core'`. The `sanity_check` test passes because it loads
+  MetaDrive's *source file* into this repo's 3.10 environment — it checks the
+  schema, never the round trip.
+- **`ScenarioEnv` cannot reset on a map-only scenario.** `ScenarioMapManager.reset`
+  calls `update_route()` unconditionally, which calls `get_sdc_track()`; with no
+  recorded ego car that raises `KeyError('None')`. No config skips it — `no_map`
+  does not. Driving our map needs an ego route from somewhere, and that is an
+  open decision, not an oversight.
 
 ### Conventions that bite
 
