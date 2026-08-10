@@ -134,11 +134,13 @@ const SPECS: Record<string, ControlSpec> = {
     fields: [{ kind: "choice", key: "movement", label: "Movement", options: TURN_OPTIONS }],
   },
   signal_lane_association: {
-    question: "Which approaching lanes does this signal govern?",
+    // Not "approaching lanes": where the extract was cut at the signal there is no
+    // approach in this map, and the generator associates the lanes it releases instead.
+    question: "Which lanes does this signal govern?",
     acceptLabel: "Accept association",
     overrideLabel: "Choose lanes",
-    acceptEffect: "Keeps the generated association; kept as an override in review.json.",
-    overrideEffect: "Records which lanes the signal governs; kept as an override in review.json.",
+    acceptEffect: "Keeps the generated association; the reviewed model carries it.",
+    overrideEffect: "Associates the signal with these lanes in the regenerated model.",
     fields: [{ kind: "lanes", key: "lane_ids", label: "Governed lanes" }],
   },
   inferred_stop_line: {

@@ -141,6 +141,35 @@ def read_osm_snapshot(path: Path) -> OsmSnapshot:
     )
 
 
+def way_terminus_nodes(snapshot: OsmSnapshot) -> set[str]:
+    """OSM nodes where no source way continues through.
+
+    A node is a terminus when it is the first or last node of *every* way that contains
+    it. A feature sitting on one of those is at the edge of the extract: the road does
+    not continue there because the file was cut there. A feature at any other node sits
+    somewhere a road runs through, and a gap at one of those is a defect.
+
+    Lives here rather than in either caller because both stages need the same verdict from
+    different inputs. Stage 2 has the snapshot in hand and must stay pure, and Stage 5
+    reads the source OSM from disk; giving each its own parse would let the two drift into
+    disagreeing about where the map ends.
+
+    Deliberately blind to whether a way is drivable. `public-driving-v1` can exclude the
+    only way through a node, which leaves lanes stopping at a node the *source* still runs
+    through - a selection consequence, not an edge of the extract, and one that should be
+    reported rather than absorbed.
+    """
+    positions: dict[str, list[tuple[int, int]]] = {}
+    for way in snapshot.ways.values():
+        for index, node_id in enumerate(way.node_ids):
+            positions.setdefault(node_id, []).append((index, len(way.node_ids)))
+    return {
+        node_id
+        for node_id, seen in positions.items()
+        if all(index in (0, length - 1) for index, length in seen)
+    }
+
+
 def road_exclusion_reason(tags: dict[str, str]) -> str | None:
     """Return why a way is outside the versioned public-driving policy."""
     highway = tags.get("highway")

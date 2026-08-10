@@ -35,6 +35,7 @@ JUNCTION = Path(__file__).parents[1] / "fixtures" / "osm" / "junction.osm"
 TURN_LANES_CONFLICT = (
     Path(__file__).parents[1] / "fixtures" / "osm" / "turn-lanes-conflict.osm"
 )
+SIGNALS = Path(__file__).parents[1] / "fixtures" / "osm" / "signals.osm"
 CONFIG = ConverterConfig(config_version=1)
 
 
@@ -947,3 +948,103 @@ def test_a_finding_left_open_does_not_count_as_still_open(tmp_path: Path) -> Non
     assert not [
         item for item in comparison["finding_decisions"].values() if item["state"] == "undecided"
     ]
+
+
+def test_a_signal_association_override_reaches_the_regenerated_model(
+    tmp_path: Path,
+) -> None:
+    """`Choose lanes` used to be recorded and then dropped on the floor.
+
+    `_overrides_from` collected the association into the audit record, but
+    `ReviewOverrides` carried only connector ids, so regeneration rebuilt the association
+    from the graph and the reviewer's answer changed nothing. Because
+    `_decision_is_satisfied` asks the *model* whether the signal is mapped, the blocker
+    then stayed open whatever was answered - a review that appeared applied and was not.
+    """
+    workspace = tmp_path / "signals"
+    acquire_osm(workspace=workspace, driving_side="left", osm_file=SIGNALS)
+    normalize_workspace(workspace=workspace, config=CONFIG)
+    generate_lane_model(workspace=workspace, config=CONFIG)
+
+    model = _model(workspace)
+    blocker = next(
+        f
+        for f in model.findings
+        if f.rule == "signal_lane_association" and f.severity == "blocker"
+    )
+    chosen = sorted(lane.identifier for lane in model.lanes)[:1]
+    submission = _submission(
+        workspace,
+        overrides={
+            blocker.identifier: {"status": "overridden", "value": {"lane_ids": chosen}}
+        },
+    )
+    _apply(workspace, submission)
+
+    reviewed = _reviewed(workspace)
+    signal = next(s for s in reviewed.signals if s.source_node_id == blocker.source_ids[0])
+    assert signal.lane_ids == chosen
+    assert signal.status == "mapped"
+    # And the decision now counts as met, which is the whole point: before this, no answer
+    # except `not_applicable` could close the finding.
+    comparison = json.loads((workspace / "reports" / "reviewed-comparison.json").read_text())
+    assert comparison["findings_still_open"] == []
+
+
+def test_a_signal_override_naming_an_absent_lane_is_refused(tmp_path: Path) -> None:
+    # Gate 6 catches this from the submission, so it never reaches generation. The check
+    # inside the generator is the backstop for a caller that builds overrides directly.
+    workspace = tmp_path / "signals"
+    acquire_osm(workspace=workspace, driving_side="left", osm_file=SIGNALS)
+    normalize_workspace(workspace=workspace, config=CONFIG)
+    generate_lane_model(workspace=workspace, config=CONFIG)
+
+    blocker = next(
+        f
+        for f in _model(workspace).findings
+        if f.rule == "signal_lane_association" and f.severity == "blocker"
+    )
+    submission = _submission(
+        workspace,
+        overrides={
+            blocker.identifier: {
+                "status": "overridden",
+                "value": {"lane_ids": ["not-a-lane"]},
+            }
+        },
+    )
+    with pytest.raises(ApplyReviewError, match="not in the model"):
+        _apply(workspace, submission)
+
+
+def test_a_signal_override_is_keyed_on_the_node_not_the_finding(tmp_path: Path) -> None:
+    """Why `ReviewOverrides.signal_lane_associations` is a node map.
+
+    A finding's identifier covers its `affected_feature_ids`, so the moment an association
+    changes the question is renamed. A verdict filed under the old id would then match
+    nothing on the regenerated model and apply silently to no one.
+    """
+    workspace = tmp_path / "signals"
+    acquire_osm(workspace=workspace, driving_side="left", osm_file=SIGNALS)
+    normalize_workspace(workspace=workspace, config=CONFIG)
+    generate_lane_model(workspace=workspace, config=CONFIG)
+
+    model = _model(workspace)
+    blocker = next(
+        f
+        for f in model.findings
+        if f.rule == "signal_lane_association" and f.severity == "blocker"
+    )
+    chosen = sorted(lane.identifier for lane in model.lanes)[:1]
+    submission = _submission(
+        workspace,
+        overrides={
+            blocker.identifier: {"status": "overridden", "value": {"lane_ids": chosen}}
+        },
+    )
+    _apply(workspace, submission)
+
+    recorded = json.loads((workspace / "review" / "applied-decisions.json").read_text())
+    associations = recorded["non_osm_overrides"]["signal_lane_associations"]
+    assert associations == {blocker.source_ids[0]: chosen}
+    assert blocker.identifier not in associations

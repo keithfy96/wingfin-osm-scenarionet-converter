@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Three traffic signals, one per case the signal-association rule has to tell apart.
+
+  No other fixture covers the first of these. `tiny.osm`'s only signal (node 2) sits at
+  index 1 of 4 in a two-way residential way, so lanes both enter and leave it — the
+  ordinary case — and most of the suite's checksum assertions hang off that file, so it
+  must not be changed. `junction.osm` has no signal nodes at all.
+
+  * node 400 — the entry case. Way 500 is `oneway=yes` and STARTS here, so it is the
+    first node of the only way containing it: a way terminus. Nothing in this extract
+    approaches the signal; two lanes are released by it. Mirrors junction-1's node
+    1927184932 on way 1173001826.
+  * node 401 — the ordinary case. Way 500 ends here and way 501 begins, so lanes end at
+    the node and the signal is associated with them, with no finding at all.
+  * node 410 — the unreachable case. It sits on a footway, which `public-driving-v1`
+    excludes, so no lane starts or ends there. Must stay a blocker.
+
+  Deliberately free of `maxspeed`, `width` and `turn:lanes` so the warning-level noise
+  stays out of the counts these tests assert on.
+-->
+<osm version="0.6" generator="hand-written fixture">
+  <bounds minlat="3.1590" minlon="101.7080" maxlat="3.1640" maxlon="101.7140"/>
+
+  <node id="400" lat="3.1600" lon="101.7100">
+    <tag k="highway" v="traffic_signals"/>
+  </node>
+  <node id="401" lat="3.1600" lon="101.7110">
+    <tag k="highway" v="traffic_signals"/>
+  </node>
+  <node id="402" lat="3.1600" lon="101.7120"/>
+
+  <node id="410" lat="3.1620" lon="101.7130">
+    <tag k="highway" v="traffic_signals"/>
+  </node>
+  <node id="411" lat="3.1620" lon="101.7135"/>
+
+  <way id="500">
+    <nd ref="400"/>
+    <nd ref="401"/>
+    <tag k="highway" v="residential"/>
+    <tag k="oneway" v="yes"/>
+    <tag k="lanes" v="2"/>
+  </way>
+  <way id="501">
+    <nd ref="401"/>
+    <nd ref="402"/>
+    <tag k="highway" v="residential"/>
+    <tag k="oneway" v="yes"/>
+    <tag k="lanes" v="2"/>
+  </way>
+  <way id="600">
+    <nd ref="410"/>
+    <nd ref="411"/>
+    <tag k="highway" v="footway"/>
+  </way>
+</osm>

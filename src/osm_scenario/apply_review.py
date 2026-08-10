@@ -25,6 +25,7 @@ import shutil
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import osmnx as ox
@@ -547,11 +548,11 @@ def _overrides_from(
     # feature keeps whatever status generation gave it and the reviewed model asks the
     # question again - which the comparison reports rather than hiding.
     #
-    # Checked before the rule dispatch, so it is available to every rule. A signal at the
-    # upstream edge of the extract can never have an approaching lane to associate, and
-    # the only honest answer to that finding is that it is not applicable; scoping this to
+    # Checked before the rule dispatch, so it is available to every rule; scoping it to
     # connectors left such a decision matching no branch at all, applying nothing and
-    # recording nothing.
+    # recording nothing. It used to be the only answer a signal at the edge of the extract
+    # could be given, because that finding could never be satisfied - generation now names
+    # the lanes such a signal releases, so accepting it is a real answer.
     # {finding id: the reviewer's reason}. The reason is the whole value of this state -
     # "not applicable" without one is indistinguishable from a finding nobody read.
     left_open: dict[str, str] = {}
@@ -571,7 +572,10 @@ def _overrides_from(
             elif status == "overridden":
                 forbidden.update(finding.affected_feature_ids)
         elif finding.rule == "signal_lane_association" and status == "overridden":
-            signal_associations[finding.identifier] = list(value["lane_ids"])
+            # Keyed on the node, not the finding: see `ReviewOverrides`. Two findings
+            # cannot name one node - generation emits one association per signal node -
+            # so there is no disagreement to settle here.
+            signal_associations[finding.source_ids[0]] = sorted(set(value["lane_ids"]))
         elif finding.rule == "inferred_stop_line" and status == "accepted":
             accepted_stop_lines.extend(finding.affected_feature_ids)
         elif finding.rule == "lane_count_inference" and status == "overridden":
@@ -632,6 +636,8 @@ def _overrides_from(
     applied = {
         "forbidden_connector_ids": sorted(forbidden),
         "activated_connector_ids": sorted(active),
+        # Keyed on OSM node id. Was keyed on the finding, which renamed itself the moment
+        # the association changed - the verdict then no longer matched what it answered.
         "signal_lane_associations": {k: v for k, v in sorted(signal_associations.items())},
         "accepted_stop_line_ids": sorted(accepted_stop_lines),
         "left_open_as_not_applicable": sorted(left_open),
@@ -656,6 +662,9 @@ def _overrides_from(
     overrides = ReviewOverrides(
         forbidden_connector_ids=frozenset(forbidden),
         active_connector_ids=frozenset(active),
+        signal_lane_associations=MappingProxyType(
+            {node_id: tuple(lane_ids) for node_id, lane_ids in signal_associations.items()}
+        ),
     )
     return overrides, applied
 
@@ -704,9 +713,18 @@ def _regenerate(
             # carries no build timestamp, so this is stable across identical runs.
             "graph_checksum": source_checksum,
             "configuration_checksum": config_checksum,
+            # Every override that changes what `build_lane_model` produces belongs here.
+            # Two reviewed models that differ must not share a fingerprint, and a signal
+            # association changes the model, so leaving it out would let one identify the
+            # other. This is the Stage 4 fingerprint; Gate 3 checks a submission against
+            # the *preliminary* model's, so extending it does not invalidate a live review.
             "review_overrides": {
                 "forbidden": sorted(overrides.forbidden_connector_ids),
                 "active": sorted(overrides.active_connector_ids),
+                "signal_lanes": {
+                    node_id: list(lane_ids)
+                    for node_id, lane_ids in sorted(overrides.signal_lane_associations.items())
+                },
             },
         }
     )
@@ -734,10 +752,14 @@ def _decision_is_satisfied(
     leaves the map exactly as generated - that is what accepting *means* - so for almost
     every rule a decision is satisfied the moment it is made.
 
-    `signal_lane_association` is the exception, and the reason this check exists.
-    Accepting it accepts a `proposed_value` of `[]`, because the finding only fires when
-    no approaching lane was found; the association stays `review_required` with no lanes.
+    `signal_lane_association` is the exception, and the reason this check exists. Its
+    blocking form fires when no lane was found at all, so accepting accepts a
+    `proposed_value` of `[]` and the association stays `review_required` with no lanes.
     Keying resolution on "a decision exists" would call that settled for ever.
+
+    Its *warning* form - a signal at the edge of the extract, associated with the lanes it
+    releases - is `mapped` and so satisfies this check the moment it is accepted. That is
+    the point of the distinction: an unanswerable question became an answerable one.
 
     `turn_permission_geometry_conflict` is the second exception, and only when overridden.
     An override writes a `turn:lanes` the reviewer says is correct; if the conflict were

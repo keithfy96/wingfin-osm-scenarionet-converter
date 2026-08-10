@@ -29,6 +29,7 @@ from osm_scenario.generation import (
     _merge_taper_plan,
     _movement_roles,
     _side_filtered_candidates,
+    _signal_association,
     _speed_kph,
     _stranded_permission_fallback,
     _tagged_side_block,
@@ -49,6 +50,7 @@ from osm_scenario.osm_source import read_osm_snapshot
 from osm_scenario.topology import MovementCandidate
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "osm" / "tiny.osm"
+SIGNALS = Path(__file__).parents[1] / "fixtures" / "osm" / "signals.osm"
 
 
 def _workspace(tmp_path: Path) -> Path:
@@ -1334,3 +1336,128 @@ def test_generate_lane_model_rejects_changed_stage_1_input(tmp_path: Path) -> No
 
     with pytest.raises(GenerationError, match="source OSM checksum"):
         generate_lane_model(workspace=workspace, config=ConverterConfig(config_version=1))
+
+
+def _signal_workspace(tmp_path: Path) -> PreliminaryLaneModel:
+    """The three-signal fixture, generated. See `tests/fixtures/osm/signals.osm`."""
+    workspace = tmp_path / "signals"
+    config = ConverterConfig(config_version=1)
+    acquire_osm(workspace=workspace, driving_side="left", osm_file=SIGNALS)
+    normalize_workspace(workspace=workspace, config=config)
+    generate_lane_model(workspace=workspace, config=config)
+    return PreliminaryLaneModel.model_validate_json(
+        (workspace / "lane-model" / "preliminary.json").read_bytes()
+    )
+
+
+def test_a_signal_with_an_approaching_lane_is_measured_not_inferred() -> None:
+    # Lanes both end and start at an ordinary mid-network signal. The ones that end there
+    # are what it governs, and nothing was guessed, so nothing is put to the reviewer.
+    lanes, severity, _, reason = _signal_association(
+        approaching=["ends-here"], released=["starts-here"], is_terminus=False
+    )
+    assert lanes == ["ends-here"]
+    assert severity is None and reason == ""
+
+
+def test_a_signal_at_the_extract_edge_governs_the_lanes_it_releases() -> None:
+    # Nothing approaches it and the road stops at it, so the approach is outside the map.
+    # The lanes it releases are the only true thing left to say, and saying it is still an
+    # inference - hence a finding, at warning.
+    lanes, severity, confidence, reason = _signal_association(
+        approaching=[], released=["a", "b"], is_terminus=True
+    )
+    assert lanes == ["a", "b"]
+    assert (severity, confidence) == ("warning", "medium")
+    assert "edge of the extract" in reason and "releases" in reason
+
+
+def test_a_signal_a_source_way_runs_through_stays_an_unassociated_blocker() -> None:
+    """The case the terminus test exists to separate out, and it must not be softened.
+
+    Lanes start at the node but none ends there while the source road runs on through it:
+    the lane that should have ended there is missing. `_decision_is_satisfied` reads
+    `mapped` as the reviewer's answer having been met, so associating a guess here would
+    let `accepted` close a question the generator cannot answer.
+    """
+    lanes, severity, _, reason = _signal_association(
+        approaching=[], released=["a"], is_terminus=False
+    )
+    assert lanes == []
+    assert severity == "blocker"
+    assert "runs through" in reason
+
+
+def test_a_signal_no_lane_touches_stays_a_blocker() -> None:
+    # A signal on a way road selection excluded. Its reason is unchanged from before the
+    # entry case existed, so its finding identifier is stable across this change.
+    lanes, severity, _, reason = _signal_association(
+        approaching=[], released=[], is_terminus=True
+    )
+    assert lanes == []
+    assert severity == "blocker"
+    assert reason == "signal has no generated approaching lane"
+
+
+def test_the_entry_signal_is_associated_and_still_reviewed(tmp_path: Path) -> None:
+    # End to end: the terminus verdict reaches the signal block, and the association the
+    # reviewer is shown names the lanes the map actually holds.
+    model = _signal_workspace(tmp_path)
+    entry = next(s for s in model.signals if s.source_node_id == "400")
+    released = sorted(
+        lane.identifier for lane in model.lanes if lane.source_edge[0] == "400"
+    )
+
+    assert entry.status == "mapped"
+    assert entry.lane_ids == released and len(released) == 2
+
+    finding = next(f for f in model.findings if f.source_ids == ["400"])
+    assert finding.rule == "signal_lane_association"
+    assert finding.severity == "warning"
+    # The finding names its geometry, which the blocking form could not: it fires only
+    # when there is none.
+    assert finding.affected_feature_ids == released
+
+
+def test_an_ordinary_signal_raises_no_finding(tmp_path: Path) -> None:
+    model = _signal_workspace(tmp_path)
+    ordinary = next(s for s in model.signals if s.source_node_id == "401")
+
+    assert ordinary.status == "mapped"
+    assert ordinary.lane_ids == sorted(
+        lane.identifier for lane in model.lanes if lane.source_edge[1] == "401"
+    )
+    # Its stop lines are still proposed for review; the *association* is not, because it
+    # was measured rather than inferred.
+    assert not [
+        f
+        for f in model.findings
+        if f.rule == "signal_lane_association" and f.source_ids == ["401"]
+    ]
+
+
+def test_a_signal_on_an_excluded_way_is_still_a_blocker(tmp_path: Path) -> None:
+    model = _signal_workspace(tmp_path)
+    excluded = next(s for s in model.signals if s.source_node_id == "410")
+
+    assert excluded.status == "review_required"
+    assert excluded.lane_ids == []
+    finding = next(f for f in model.findings if f.source_ids == ["410"])
+    assert finding.severity == "blocker"
+
+
+def test_a_released_lane_gets_no_stop_line(tmp_path: Path) -> None:
+    """The trap in associating a signal with lanes that start at it.
+
+    A stop line is measured back from the lane's downstream end, which is the signal only
+    for a lane that *ends* there. Placed on a released lane it lands at the far end of it
+    - on junction-1, 14 m past the junction and facing the wrong way - and raises an
+    `inferred_stop_line` warning about a place nothing stops.
+    """
+    model = _signal_workspace(tmp_path)
+    assert [line.source_node_id for line in model.stop_lines] == ["401", "401"]
+    assert not [
+        f
+        for f in model.findings
+        if f.rule == "inferred_stop_line" and f.source_ids == ["400"]
+    ]

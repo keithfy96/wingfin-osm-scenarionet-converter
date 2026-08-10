@@ -6,9 +6,11 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import osmnx as ox
@@ -32,7 +34,13 @@ from osm_scenario.lane_model import (
     SignalAssociation,
     StopLine,
 )
-from osm_scenario.osm_source import ONEWAY_VALUES, OsmRelation, OsmSnapshot, read_osm_snapshot
+from osm_scenario.osm_source import (
+    ONEWAY_VALUES,
+    OsmRelation,
+    OsmSnapshot,
+    read_osm_snapshot,
+    way_terminus_nodes,
+)
 from osm_scenario.topology import (
     MovementCandidate,
     classify_movement,
@@ -303,6 +311,48 @@ def _directional_lane_count(tags: dict[str, str], direction: str) -> tuple[int, 
         confidence = "medium" if total % 2 == 0 else "low"
         return count, "inferred_from_total", confidence
     return 1, "default_single_lane", "low"
+
+
+def _signal_association(
+    *, approaching: list[str], released: list[str], is_terminus: bool
+) -> tuple[list[str], str | None, str, str]:
+    """Which lanes a signal governs, and what the reviewer must be told about it.
+
+    Returns `(lane_ids, finding severity or None, confidence, reason)`.
+
+    A signal governs the traffic coming *up* to it, so a lane ending at the node is the
+    association whenever one exists, and nothing needs reviewing.
+
+    Where none exists and the node terminates every way through it, the extract was cut at
+    the signal: the approach is outside the map, and no amount of review can produce one.
+    What the map does hold is the lanes the signal *releases*, and naming those is both
+    true and useful - it is where a vehicle entering this scenario is held. It is still an
+    inference, so it is still raised, as a warning.
+
+    Where none exists and a source way runs *through* the node, the road is there and the
+    lane that should end at it is not. That is a defect, not an edge, and it stays a
+    blocker with no association: `apply_review._decision_is_satisfied` treats "mapped" as
+    the reviewer's answer having been met, so associating a guess here would let accepting
+    close a question the generator cannot answer.
+    """
+    if approaching:
+        return approaching, None, "high", ""
+    if released and is_terminus:
+        return (
+            released,
+            "warning",
+            "medium",
+            "signal is at the edge of the extract - no lane in this map approaches it, "
+            "so it is associated with the lanes it releases",
+        )
+    if released:
+        return (
+            [],
+            "blocker",
+            "low",
+            "no lane ends at this signal although a source way runs through the node",
+        )
+    return [], "blocker", "low", "signal has no generated approaching lane"
 
 
 def _turn_permissions(
@@ -1363,10 +1413,16 @@ class ReviewOverrides:
     records that: `turn:lanes` says what is permitted, not what a human concluded about
     one connector. So the verdict rides alongside the snapshot rather than being written
     into it, and Stage 2 keeps producing exactly what it produced before.
+
+    `signal_lane_associations` is keyed on the **OSM node id**, not on the finding that
+    asked the question. A finding's identifier covers its `affected_feature_ids`, so the
+    moment the association changes the question is renamed and a verdict keyed on it stops
+    matching the thing it answers. The node is what the reviewer actually pointed at.
     """
 
     forbidden_connector_ids: frozenset[str] = frozenset()
     active_connector_ids: frozenset[str] = frozenset()
+    signal_lane_associations: Mapping[str, tuple[str, ...]] = MappingProxyType({})
 
 
 # Module-level rather than a default argument: a mutable-looking default in the signature
@@ -1949,11 +2005,32 @@ def build_lane_model(
                 curve.buffer(width / 2, cap_style="flat", join_style="mitre")
             )
 
+    # Where the source road simply stops, so a signal there can be told apart from one
+    # that lost its lanes to a defect. Derived from the snapshot rather than read from
+    # disk, which is what keeps this function pure; `osm_source.way_terminus_nodes` is the
+    # same verdict Stage 5 reaches about the same map.
+    terminus_nodes = way_terminus_nodes(snapshot)
     signals: list[SignalAssociation] = []
     for node in sorted(snapshot.nodes.values(), key=lambda item: item.identifier):
         if node.tags.get("highway") != "traffic_signals" and "traffic_signals" not in node.tags:
             continue
-        associated = sorted(set(lanes_by_end.get(node.identifier, [])))
+        associated, severity, confidence, reason = _signal_association(
+            approaching=sorted(set(lanes_by_end.get(node.identifier, []))),
+            released=sorted(set(lanes_by_start.get(node.identifier, []))),
+            is_terminus=node.identifier in terminus_nodes,
+        )
+        # The reviewer's own answer outranks both. Keyed on the node for the reason given
+        # in `ReviewOverrides`; unknown lane ids are refused rather than dropped, because a
+        # silently ignored association is a review that did not happen.
+        override = overrides.signal_lane_associations.get(node.identifier)
+        if override is not None:
+            unknown = [lane_id for lane_id in override if lane_id not in lane_lookup]
+            if unknown:
+                raise GenerationError(
+                    f"the review associates signal node {node.identifier} with lanes that "
+                    f"are not in the model: {', '.join(sorted(unknown)[:5])}"
+                )
+            associated, severity, confidence, reason = sorted(set(override)), None, "high", ""
         status = "mapped" if associated else "review_required"
         association_id = deterministic_id("signal-association", node.identifier, *associated)
         signals.append(
@@ -1964,23 +2041,34 @@ def build_lane_model(
                 status=status,
             )
         )
-        if status == "review_required":
+        # Raised whenever the association was inferred rather than measured, whatever its
+        # severity. An association the reviewer never sees is one nobody agreed to.
+        if severity is not None:
             findings.append(
                 _finding(
                     rule="signal_lane_association",
-                    severity="blocker",
+                    severity=severity,
                     source_type="node",
                     source_ids=[node.identifier],
                     affected_feature_ids=associated,
                     proposed_value=associated,
-                    confidence="low",
-                    reason="signal has no generated approaching lane",
+                    confidence=confidence,
+                    reason=reason,
                 )
             )
 
     stop_lines: list[StopLine] = []
     for signal in signals:
+        # A stop line is where traffic waits *before* a signal, and the placement below
+        # measures back from the lane's downstream end - which is the signal only for a
+        # lane that ends there. A lane the signal releases starts at it, so measuring from
+        # its far end would put the stop line at the *other* end of the lane, tens of
+        # metres past the junction and facing the wrong way. Nothing waits on such a lane,
+        # so it gets no stop line at all.
+        ends_here = set(lanes_by_end.get(signal.source_node_id, []))
         for lane_id in signal.lane_ids:
+            if lane_id not in ends_here:
+                continue
             lane = lane_lookup[lane_id]
             line = LineString((point.x, point.y) for point in lane.centerline)
             distance = max(0.0, line.length - 2.0)

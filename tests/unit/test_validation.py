@@ -7,6 +7,7 @@ all look alike tells a reader that something is wrong but not what.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Any
 
 from osm_scenario.lane_model import (
@@ -27,6 +28,7 @@ from osm_scenario.validation import (
     _reference_issues,
     _restriction_issues,
     _signal_issues,
+    _way_terminus_nodes,
 )
 from osm_scenario.validation_view import render_validation_html
 
@@ -459,3 +461,49 @@ def test_rendering_the_same_report_twice_is_byte_identical() -> None:
     second = render_validation_html(model=model, report=_report(model), boundary_lane_ids={"a"})
 
     assert first == second
+
+
+def test_a_signal_governing_the_lanes_it_releases_is_not_reported() -> None:
+    """The reason no third `SignalAssociation.status` was added.
+
+    This check spells its test `status != "mapped"`, as does `unmapped_signal_nodes` in
+    Stage 4. A distinct status for the entry case would be read as unassociated by both,
+    reporting a signal that names two real lanes and making its finding unanswerable
+    again - the very bug the entry case was added to fix.
+    """
+    model = _model()
+    signal = SignalAssociation(
+        identifier="s1", source_node_id="900", lane_ids=["a", "b"], status="mapped"
+    )
+    assert "unassociated_signal" not in _codes(
+        _signal_issues(model.model_copy(update={"signals": [signal]}))
+    )
+
+
+def test_a_deleted_way_does_not_make_its_nodes_look_like_through_nodes(
+    tmp_path: Path,
+) -> None:
+    """The one behaviour change in sharing the terminus predicate with Stage 2.
+
+    Stage 5 used to parse the source XML itself and count every `<way>`, including one an
+    editor had flagged deleted. `read_osm_snapshot` drops those - which is the right
+    answer, because the graph the model was built from never had them either.
+    """
+    source = tmp_path / "map.osm"
+    source.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<osm version="0.6">'
+        '<node id="1" lat="3.16" lon="101.71"/>'
+        '<node id="2" lat="3.16" lon="101.72"/>'
+        '<node id="3" lat="3.16" lon="101.73"/>'
+        '<way id="10"><nd ref="1"/><nd ref="2"/>'
+        '<tag k="highway" v="residential"/></way>'
+        '<way id="11" action="delete"><nd ref="1"/><nd ref="2"/><nd ref="3"/>'
+        '<tag k="highway" v="residential"/></way>'
+        "</osm>\n",
+        encoding="utf-8",
+    )
+
+    # Node 2 ends the one way that still exists. Counting the deleted way would put it in
+    # the middle of a road, and Stage 5 would call a lane stopping there a defect.
+    assert _way_terminus_nodes(source) == {"1", "2"}

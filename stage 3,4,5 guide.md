@@ -224,15 +224,22 @@ Every issue is sorted into errors or warnings by `_dispositioned_osm_ids`:
 - Otherwise → **error**.
 
 Stage 5 re-derives conditions from the model, so it will happily re-detect
-something a human already looked at and ruled out — `junction-1`'s traffic
-signal at the upstream edge of the extract is exactly that. Re-deriving it as an
-error would make the review pointless: the reviewer would have to answer the
-same question in a second place, and answering it there would still not silence
-this one. The issue is still reported, still carries its feature IDs, and still
-names the finding that dispositioned it — it just stops failing the map.
+something a human already looked at and ruled out. Re-deriving it as an error
+would make the review pointless: the reviewer would have to answer the same
+question in a second place, and answering it there would still not silence this
+one. The issue is still reported, still carries its feature IDs, and still names
+the finding that dispositioned it — it just stops failing the map.
 
 **Corollary: the only place to disposition an issue is Stage 3.** There is no
 suppression list in Stage 5.
+
+`junction-1`'s signal at the upstream edge of the extract used to be the worked
+example here. It no longer is: Stage 2 recognises that node as the edge of the
+map and associates the signal with the lanes it releases, so Stage 5 finds
+nothing to report about it. Dispositioning a re-derived issue is the right tool
+when a reviewer's judgement is genuinely the only thing that settles it — but a
+fact the generator can work out for itself should not be costing a judgement at
+all, and that one could.
 
 ### Two calibrated constants, both measured against `junction-1`
 
@@ -271,10 +278,14 @@ a report" as "the map is fit to convert".
 ```
 status   passed
 errors   0
-warnings 1   unassociated_signal (dispositioned)
+warnings 0
 boundary lanes_at_the_extract_edge 39 · without_entry 19 · without_exit 20
          routing_components [121, 70, 44, 22, 19, 9]
 ```
+
+The one warning that used to sit here was `unassociated_signal`, dispositioned
+by hand. Stage 2 now classifies that node as the edge of the extract, so the
+issue is not raised at all.
 
 ---
 

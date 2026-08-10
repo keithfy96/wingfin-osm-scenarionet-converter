@@ -26,7 +26,6 @@ from __future__ import annotations
 import json
 import math
 import xml.etree.ElementTree as ET
-from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -41,6 +40,7 @@ from shapely.geometry import LineString, Polygon
 from osm_scenario.apply_review import _read_json, _sha256
 from osm_scenario.config import ConverterConfig
 from osm_scenario.lane_model import PreliminaryLaneModel
+from osm_scenario.osm_source import read_osm_snapshot, way_terminus_nodes
 from osm_scenario.stage1b_data_audit import _write_text_atomic
 from osm_scenario.validation_view import render_validation_html
 
@@ -117,10 +117,15 @@ def _dispositioned_osm_ids(
     """OSM features a reviewer judged not applicable, and the finding that says so.
 
     Stage 5 re-derives conditions from the model, so it will happily re-detect something a
-    human has already looked at and ruled out - `junction-1`'s traffic signal at the
-    upstream edge of the extract is exactly that. Re-deriving it as an error would make the
+    human has already looked at and ruled out. Re-deriving it as an error would make the
     review pointless: the reviewer would have to answer the same question in a second
     place, and answering it there would still not silence this one.
+
+    `junction-1`'s traffic signal at the upstream edge of the extract used to be the
+    worked example, and is no longer one: Stage 2 now recognises that node as the edge of
+    the map and associates the signal with the lanes it releases, so `_signal_issues`
+    finds nothing to report and there is nothing to disposition. The mechanism is general
+    and stays - it is what stops any judged finding being re-litigated here.
 
     A judgement is not a silence. The issue is still reported, still carries its feature
     ids, and still names the finding that dispositioned it - it just stops failing the map.
@@ -505,30 +510,23 @@ def _signal_issues(model: PreliminaryLaneModel) -> list[dict[str, Any]]:
 
 
 def _way_terminus_nodes(source_osm: Path) -> set[str]:
-    """OSM nodes where no source way continues through.
+    """OSM nodes where no source way continues through - see `osm_source`.
 
-    A node is a terminus when it is the first or last node of *every* way that contains
-    it. A lane stopping at one of those has run off the edge of the extract; a lane
-    stopping anywhere else has lost a link the source road still has.
+    The verdict itself is shared with Stage 2, which needs the same answer about the same
+    map and must reach it without touching the filesystem. Only the reading is local:
+    Stage 5 is handed a path, so it parses, and `read_osm_snapshot` drops elements an
+    editor flagged deleted - which the older parse here counted. A deleted way keeps its
+    tags but loses its `<nd>` refs, so in practice it contributed nothing either way;
+    `junction-1`'s one deleted way, `776021090`, is exactly that shape and both readings
+    give the same 74 nodes.
     """
     if not source_osm.is_file():
         raise ValidationError(f"source OSM not found: {source_osm}")
     try:
-        root = ET.parse(source_osm).getroot()
+        snapshot = read_osm_snapshot(source_osm)
     except ET.ParseError as error:
         raise ValidationError(f"source OSM is not valid XML: {error}") from error
-
-    positions: dict[str, list[tuple[int, int]]] = defaultdict(list)
-    for way in root.findall("way"):
-        refs = [node.get("ref") for node in way.findall("nd")]
-        for index, ref in enumerate(refs):
-            if ref is not None:
-                positions[ref].append((index, len(refs)))
-    return {
-        node
-        for node, seen in positions.items()
-        if all(index == 0 or index == length - 1 for index, length in seen)
-    }
+    return way_terminus_nodes(snapshot)
 
 
 def _boundary_report(

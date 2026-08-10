@@ -39,7 +39,7 @@ It is not, by itself, proof that the source or generated map is wrong.
 | `ambiguous_connector` | 292 | 9.2% | Blocker |
 | `lane_transition_count_mismatch` | 141 | 4.5% | Warning |
 | `inferred_stop_line` | 19 | 0.6% | Warning |
-| `signal_lane_association` | 2 | 0.1% | Blocker |
+| `signal_lane_association` | 2 | 0.1% | Blocker or warning — see its section |
 | `restriction_effect_review` | 1 | under 0.1% | Blocker |
 
 Warnings mark deterministic, usable proposals whose real-world correctness
@@ -474,28 +474,53 @@ plus the affected lane centreline and width.
 ## `signal_lane_association`
 
 **Meaning and current scale.** This finding means a source traffic-signal
-**node** has no generated lane ending at it. There are **two findings (0.1%)**,
-for nodes `394550253` and `1903786381`.
+**node** has no generated lane ending at it. It comes in two forms, and which
+one you have is decided by whether a source way runs *through* the node. The
+mosque snapshot has **two blockers (0.1%)**, nodes `394550253` and
+`1903786381`, both interior nodes of way `709850699`. `junction-1` has one
+**warning**, node `1927184932`.
 
 **Trigger, evidence, and geometry.** Stage 2 associates a signal with generated
-lanes whose directed endpoint is the signal node. If that set is empty, the
-association becomes `review_required`, with an empty proposed list and empty
-`affected_feature_ids`. Consequently these findings currently have **no
-affected geometry**. There is no configured geometric fallback: absence of an
-ending lane is the evidence gap.
+lanes whose directed endpoint is the signal node — the traffic coming up to it.
+There is no geometric fallback: absence of an ending lane is the evidence gap.
+What happens next depends on the node's position in the source ways.
 
-Stage 2 cannot prove whether the signal is displaced from the junction,
-controls a filtered/non-driving way or another transport mode, or exposes a
-graph-direction/topology problem. The low-confidence finding is a blocker
-because no controlled vehicle lane can be named. Inspect signal placement,
-filtered or non-driving roads, graph direction, divided-carriageway topology,
-and whether the node controls vehicles or another transport mode. Accepting
-requires choosing a valid association (or explicitly accepting none under the
-future review semantics); rejecting the proposal means correcting source or
-topology rather than pretending a lane was mapped. Do not interpret empty
-geometry as proof the signal is irrelevant or erroneous. Inspect finding
-`source_ids`, empty affected/proposed lists, and the signal record's
+| Lanes end there | Lanes start there | Node terminates every way containing it | Association | Finding |
+| --- | --- | --- | --- | --- |
+| yes | — | — | the lanes that end there | none — it was measured, not inferred |
+| no | yes | **yes** | the lanes it **releases** | **warning**, `medium` |
+| no | yes | no | none | **blocker**, `low` |
+| no | no | — | none | **blocker**, `low` |
+
+The second row is the **edge of the extract**. The file was cut at the signal,
+so the approach is outside the map and no review can produce one; the lanes the
+signal releases are where a vehicle entering the scenario is held, and naming
+them is both true and useful. It is still an inference, so it is still raised —
+as a warning carrying the released lanes in `affected_feature_ids` and
+`proposed_value`, which the blocking form cannot, because it fires only when
+there is no geometry to name. It is the same fact `_boundary_report` reports for
+39 of `junction-1`'s lanes; this is that rule reaching signals.
+
+The third row is the one the terminus test exists to separate out, and it is
+**not** associated on purpose. The road runs through the node and the lane that
+should end there is missing. `apply_review._decision_is_satisfied` reads
+`mapped` as the reviewer's answer having been met, so associating a guess would
+let `accepted` close a question the generator cannot answer.
+
+For a blocker, Stage 2 cannot prove whether the signal is displaced from the
+junction, controls a filtered/non-driving way or another transport mode, or
+exposes a graph-direction/topology problem. Inspect signal placement, filtered
+or non-driving roads, graph direction, and divided-carriageway topology.
+Accepting requires choosing a valid association; rejecting means correcting the
+source or the topology rather than pretending a lane was mapped. Do not
+interpret empty geometry as proof the signal is irrelevant. Inspect finding
+`source_ids`, the affected/proposed lists, and the signal record's
 `source_node_id`, `lane_ids`, and `status`.
+
+**Stop lines follow the association, but only one way.** An inferred stop line is
+placed two metres before a lane's downstream end, which is the signal only for a
+lane that ends there. A released lane gets none — nothing waits on it, and
+measuring from its far end would put the stop line past the junction.
 
 ## `restriction_effect_review`
 

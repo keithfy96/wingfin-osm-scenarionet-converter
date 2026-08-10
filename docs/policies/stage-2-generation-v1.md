@@ -297,9 +297,17 @@ OSM prohibition is not treated as permission.
 
 - A traffic-signal node is associated with generated lanes that approach and
   end at that source node.
-- A signal without an approaching generated lane is `review_required`.
+- Where no lane ends at the signal but the node terminates every source way
+  containing it, the extract was cut at the signal: the approach is outside the
+  map. The signal is associated with the lanes it **releases** — the lanes that
+  begin at that node — and the finding is raised as a warning naming them.
+- A signal with no approaching lane at a node a source way runs **through** is
+  `review_required`, and so is one no generated lane touches at all. Both are
+  blockers: the road is there and the lane that should meet it is not.
 - Stage 2 creates an inferred stop-line candidate two metres before the end of
-  each associated lane.
+  each associated lane **that ends at the signal**. A lane the signal releases
+  gets none: nothing waits on it, and measuring back from its far end would place
+  the stop line beyond the junction.
 - Inferred stop lines remain `review_required`; Stage 2 does not claim that
   their generated position is an observed source fact.
 - Stage 2 does not generate signal timing, phases, actors, or traffic-light
