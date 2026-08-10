@@ -1,0 +1,61 @@
+[33mc4cf405[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m decision now default to the proposed value
+[33m019d023[m added review ability to the stage 4
+[33m6da40d6[m added highlighting to stage 2
+[33m715fe70[m[33m ([m[1;31morigin/main[m[33m)[m completed stage 4
+[33mc594480[m removed autosaving feature, its too problematic, can't tell which version of the original file i am looking at
+[33m488d9f9[m fixed issue where right turn lanes were extending but not connecting
+[33m318bc73[m removed issue where lanecount does not take into account the backward lanes
+[33m69c12be[m impelmented changes to allow ignoring of warnings
+[33m97c7f71[m fixed a visual bug with the issues list
+[33ma5c44f4[m collpased reviews on multiple lanes to a single way
+[33mfeb7709[m added coordinate information for the tabs, and partial save feature for the reviews
+[33m10d934e[m added more highlting and gui to focus on review when selected
+[33mcf0b9cc[m added link to the review from the modal
+[33m81932d1[m added highlighting etc to the review panel
+[33m11e6124[m created gui to handle reviews on stage 3
+[33m2ef4d25[m fixed issue with lanes that have a left turn but do not result in an off ramp
+[33m8bd0b5c[m fixed issue where i could not edit the source osm
+[33m2d59d7d[m fixed lane fa74351a73e87a68 that was originally entering the kerbside lane & added some docs
+[33ma39445e[m added claude.md and docs to track revisions
+[33m96ae00d[m fixed origin point of turn lane dc1ae82400f47f4a
+[33m1f0f5ef[m fixed the 0afbd72e5f0b9450 not connecting to the next lane
+[33m2248ec4[m finally solved the left alignment of lane 4fd9a6aef6e49335
+[33m85381da[m added lane ids
+[33mf4c3fa1[m added highlighting of lanes / nodes when searched
+[33m0fff018[m added arrows to lanes
+[33m2a4a504[m fixed generate maps to only create one map
+[33md6007b0[m fixed issue with lanes bug the the divide by 2 when there are 3 lanes
+[33m13bf402[m added some docs for lane policies algorithm
+[33m63ace7b[m added audit
+[33m55416c7[m fixed first attempt
+[33m99a5aaf[m completed stage 2
+[33m13700e4[m completed half of stage 2
+[33mce4b30c[m touched up plan after claude critque
+[33m57907c0[m created first draft v2 implementation plan
+[33m645a054[m reset main to Stage 1 baseline
+[33m37eccf5[m[33m ([m[1;32mlegacy-stage2-implementation[m[33m)[m prefork with new design
+[33m90b1a52[m fixed maps to allow clicking on lanes / reviews with data modal
+[33m3246c4f[m added topology analysis
+[33m028e52c[m fixed big id problem by changing it to a string
+[33m574c422[m fixed bug with lane angle
+[33m6d6f224[m chagned stage three to not overwrite the visual analysis file
+[33mc7b2d38[m completed initial run of stage 2 to create lanelet
+[33m42acc68[m added search by OSM node id
+[33m2b26337[m added the roads crossing visually and the roads connected at grade issues to the legend
+[33m29ef76c[m added the point node 'via' for restriction
+[33m03f5814[m added the node for restrictions
+[33m87106e5[m added a search by way id
+[33m9d82991[m fixed colour issues with maps
+[33m340c31f[m added source coverage to show where manual corrections need to be done
+[33m289308b[m changed the maps to track directly the usage
+[33ma20db48[m fixed naming convention for audit
+[33mf1b5afd[m[33m ([m[1;32magent/docs[m[33m)[m moving to work trees instead Merge branch 'docs'
+[33m78f29f1[m added the new audit step for errors
+[33m8e9cf9b[m[33m ([m[1;32mdocs[m[33m)[m added guide folder
+[33m850265a[m added the visualisations and the policy docs
+[33m1fba684[m stage 1a seems to work, but can't verify the data artifacts yet
+[33m57feb2d[m about to start stage 1a
+[33mcd70b73[m completed stage 0
+[33m97ea84f[m starting project
+[33m972b79a[m checkpoint prior to changes in implementation plan
+[33m2e67b87[m first commit

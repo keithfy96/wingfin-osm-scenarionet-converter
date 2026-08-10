@@ -54,6 +54,10 @@ _TEMPLATE = """<!doctype html>
   .frow:hover{background:#e9ecef}
   .frow.sel{background:#d0ebff;border-left-color:#1c7ed6}
   .frow .muted{display:block;font-size:11px}
+  .caption.warn{color:#a5490b}
+  .badge{display:inline-block;margin-left:6px;padding:0 5px;border-radius:8px;font-size:10px}
+  .badge.ok{background:#d3f9d8;color:#2b8a3e}
+  .badge.no{background:#ffe3e3;color:#c92a2a}
   details{margin-top:4px}
   summary{cursor:pointer;color:#495057}
   #detail{margin-top:10px;padding:8px;background:#fff;border:1px solid #dee2e6;border-radius:3px;word-break:break-word}
@@ -147,6 +151,10 @@ function select(id) {
   box.append(detailRow('reason', finding.reason));
   box.append(detailRow('source', finding.source_type + ' ' + finding.source_ids.join(', ')));
   box.append(detailRow('proposed', JSON.stringify(finding.proposed)));
+  // Absent entirely when no review was supplied - saying nothing is right there, whereas
+  // "never decided" would be a false alarm about a decision nobody was asked for.
+  if (finding.decision) box.append(detailRow('decided', finding.decision));
+  else if (finding.decision_state === 'undecided') box.append(detailRow('decided', 'never decided'));
   box.append(detailRow('affects', finding.features.length + ' generated feature(s)'));
   const identifier = document.createElement('div');
   identifier.className = 'muted';
@@ -173,17 +181,69 @@ def _lonlat(points: list[Point2D], transformer: Transformer) -> list[list[float]
     return out
 
 
-def _findings(model: PreliminaryLaneModel) -> list[dict[str, Any]]:
-    """The reviewed model's findings, blockers first.
+_STATUS_WORDS = {
+    "accepted": "accepted",
+    "overridden": "overridden",
+    "not_applicable": "not applicable",
+    "ignored": "set aside unjudged",
+    "unresolved": "left unresolved",
+}
+
+
+def _decision_label(entry: dict[str, Any] | None) -> str | None:
+    """How to badge one finding: what was decided, and what number that approved.
+
+    `None` means draw no badge - either the caller supplied no decisions, or this finding
+    is one nothing was decided about, and those two are distinguished by the caller rather
+    than here so a missing entry never reads as an unreviewed finding.
+    """
+    if not entry or entry.get("state") != "decided":
+        return None
+    word = _STATUS_WORDS.get(entry.get("status", ""), entry.get("status", ""))
+    # An override replaces the proposal; anything else leaves it standing. Either way the
+    # badge names the value that is now in the map, which is what "accepted" alone did not.
+    value = entry.get("value") if entry.get("status") == "overridden" else None
+    if value is None:
+        value = entry.get("proposed_value")
+    detail = _value_label(value)
+    return f"{word} - {detail}" if detail else word
+
+
+def _value_label(value: Any) -> str | None:
+    """A short reading of an approved value, or None for shapes with no short reading.
+
+    Deliberately partial. A `turn_permission_geometry_conflict` proposes a whole object of
+    rejected movements and restored angles; abbreviating that on a row would mislead, and
+    the detail panel already shows it in full.
+    """
+    if isinstance(value, dict) and "lane_count" in value:
+        count = value["lane_count"]
+        unit = "lane" if count == 1 else "lanes"
+        direction = value.get("direction")
+        return f"{count} {unit} {direction}" if direction else f"{count} {unit}"
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return f"{value:g}"
+    return None
+
+
+def _findings(
+    model: PreliminaryLaneModel, decisions: dict[str, dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    """The reviewed model's findings, blockers first and anything undecided ahead of the rest.
 
     Ordered here rather than in the panel so the list the reader clicks and the list the
     script indexes are the same object in the same order. The page is a checksummed
-    artifact, so the order has to be a function of the model and nothing else.
+    artifact, so the order has to be a function of the model and the decisions and nothing
+    else - no timestamps, no iteration order that depends on how the dict was built.
     """
+    decisions = decisions or {}
     out: list[dict[str, Any]] = []
     for finding in model.findings:
         data = finding.model_dump(mode="json")
         location = data.get("location")
+        entry = decisions.get(data["identifier"])
         bounds = None
         if location and len(location.get("bbox") or []) == 4:
             # bbox is [min_lon, min_lat, max_lon, max_lat]; Leaflet wants corner pairs
@@ -207,9 +267,23 @@ def _findings(model: PreliminaryLaneModel) -> list[dict[str, Any]]:
                 "lat": location["lat"] if location else None,
                 "lon": location["lon"] if location else None,
                 "bounds": bounds,
+                # "decided" | "undecided" when decisions were supplied, "unknown" when
+                # they were not. Three states, because "we were not told" and "nobody
+                # decided this" would raise a false alarm if they were the same state.
+                "decision_state": entry["state"] if entry else "unknown",
+                "decision": _decision_label(entry),
             }
         )
-    out.sort(key=lambda item: (item["severity"] != "blocker", item["rule"], item["id"]))
+    # Undecided leads within each severity: whatever still needs attention should be the
+    # first thing read, not buried alphabetically among 23 questions already answered.
+    out.sort(
+        key=lambda item: (
+            item["severity"] != "blocker",
+            item["decision_state"] != "undecided",
+            item["rule"],
+            item["id"],
+        )
+    )
     return out
 
 
@@ -225,12 +299,53 @@ def _finding_rows(findings: list[dict[str, Any]]) -> str:
             refs = ", ".join(finding["source_ids"][:2])
             if len(finding["source_ids"]) > 2:
                 refs += f" +{len(finding['source_ids']) - 2}"
+            if finding["decision"]:
+                badge = f"<span class='badge ok'>{escape(finding['decision'])}</span>"
+            elif finding["decision_state"] == "undecided":
+                badge = "<span class='badge no'>never decided</span>"
+            else:
+                badge = ""
             out.append(
                 f"<div class='frow' data-finding='{escape(finding['id'])}'>"
-                f"{escape(finding['source_type'])} <code>{escape(refs)}</code>"
+                f"{escape(finding['source_type'])} <code>{escape(refs)}</code>{badge}"
                 f"<span class='muted'>{escape(finding['reason'])}</span></div>"
             )
     return "".join(out)
+
+
+def _blocker_verdict(blockers: list[dict[str, Any]]) -> str:
+    """Say whether the blockers still listed were reviewed - the question the count begs.
+
+    A blocker surviving into the reviewed model is not evidence of unfinished work.
+    Accepting a finding means the inference stands, so the map does not change, so the
+    regenerated model asks the same question of the same evidence and mints a fresh
+    finding for it. Without this paragraph the page reports 27 blockers and leaves the
+    reader to guess which of them anyone has looked at.
+    """
+    undecided = [f for f in blockers if f["decision_state"] == "undecided"]
+    if all(f["decision_state"] == "unknown" for f in blockers):
+        verdict = "<p class='caption'>No review was supplied, so nothing here is marked decided.</p>"
+    elif undecided:
+        verdict = (
+            f"<p class='caption warn'>{len(undecided)} of {len(blockers)} were never "
+            "decided. They lead the list below, badged <b>never decided</b>. The rest "
+            "carry the decision that answered them.</p>"
+        )
+    else:
+        verdict = (
+            f"<p class='caption'><b>All {len(blockers)} were decided in your review</b> - "
+            "each row carries the decision that answered it, and nothing here is "
+            "unreviewed. They are still listed because accepting a finding leaves the map "
+            "unchanged, so the regenerated model asks the same question again.</p>"
+        )
+    return verdict + (
+        "<p class='caption'>To make one go away rather than come back: a "
+        "<code>lane_count_inference</code> blocker is answered by overriding the count in "
+        "Stage 3, which is written into <code>review/reviewed.osm</code> and leaves the "
+        "source untouched. The others still need an edit to <code>source/map.osm</code>, "
+        "which moves its checksum and does invalidate the review. Click a row to find it "
+        "on the map.</p>"
+    )
 
 
 def _side_panel(comparison: dict[str, Any], findings: list[dict[str, Any]]) -> str:
@@ -286,9 +401,7 @@ def _side_panel(comparison: dict[str, Any], findings: list[dict[str, Any]]) -> s
         )
         + f"<h2>Blockers still in the model: {len(blockers)}</h2>"
         + (
-            "<p class='caption'>Only an OSM tag edit can answer most of these, and that "
-            "invalidates the whole review - so decide them together. Click one to find "
-            "it on the map.</p>" + _finding_rows(blockers)
+            _blocker_verdict(blockers) + _finding_rows(blockers)
             if blockers
             else "<p class='muted'>None. Nothing blocks promotion.</p>"
         )
@@ -406,7 +519,7 @@ def render_comparison_html(
     else:
         center, bounds = [0.0, 0.0], None
 
-    findings = _findings(reviewed)
+    findings = _findings(reviewed, comparison.get("finding_decisions"))
     data = json.dumps(
         {"center": center, "bounds": bounds, "features": features, "findings": findings},
         separators=(",", ":"),

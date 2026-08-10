@@ -60,13 +60,23 @@ def _connector(identifier: str, *, status: str) -> ConnectorFeature:
     )
 
 
-def _finding(identifier: str, *, rule: str, severity: str, located: bool = True) -> ReviewFinding:
+def _finding(
+    identifier: str,
+    *,
+    rule: str,
+    severity: str,
+    located: bool = True,
+    # Two findings of the same way-level rule on the same way in the same direction are
+    # the *same question*, and `_question_key` collapses them by design. Any test needing
+    # two distinct questions has to vary the way.
+    source_id: str = "200",
+) -> ReviewFinding:
     return ReviewFinding(
         identifier=identifier,
         rule=rule,
         severity=severity,  # type: ignore[arg-type]
         source_type="way" if located else "edge",
-        source_ids=["200"],
+        source_ids=[source_id],
         affected_feature_ids=["lane-1"],
         # `lane_count_inference` is a way-level question keyed on `direction`, so the
         # comparison refuses a proposal without one. See `_WAY_LEVEL_QUESTIONS`.
@@ -80,7 +90,9 @@ def _finding(identifier: str, *, rule: str, severity: str, located: bool = True)
                 lon=101.61,
                 bbox=[101.60, 3.17, 101.62, 3.19],
                 sources=[
-                    FindingSource(ref="way:200", coordinates=[GeoPoint(lat=3.18, lon=101.61)])
+                    FindingSource(
+                        ref=f"way:{source_id}", coordinates=[GeoPoint(lat=3.18, lon=101.61)]
+                    )
                 ],
             )
             if located
@@ -112,7 +124,16 @@ def _model(
     )
 
 
-def _render(model: PreliminaryLaneModel, *, applied: dict[str, Any] | None = None) -> str:
+def _decision(finding_id: str, *, status: str = "accepted", **extra: Any) -> dict[str, Any]:
+    return {"finding_id": finding_id, "rule": "lane_count_inference", "status": status, **extra}
+
+
+def _render(
+    model: PreliminaryLaneModel,
+    *,
+    applied: dict[str, Any] | None = None,
+    decisions: list[dict[str, Any]] | None = None,
+) -> str:
     comparison = _comparison(
         preliminary=model,
         reviewed=model,
@@ -122,6 +143,7 @@ def _render(model: PreliminaryLaneModel, *, applied: dict[str, Any] | None = Non
             "activated_connector_ids": [],
             "left_open_as_not_applicable": [],
         },
+        decisions=decisions,
     )
     return render_comparison_html(preliminary=model, reviewed=model, comparison=comparison)
 
@@ -225,3 +247,66 @@ def test_rendering_the_same_model_twice_is_byte_identical() -> None:
         connectors=[_connector("c", status="forbidden")],
     )
     assert _render(model) == _render(model)
+    decisions = [_decision("f-1"), _decision("f-2", status="ignored")]
+    assert _render(model, decisions=decisions) == _render(model, decisions=decisions)
+
+
+def test_a_decided_blocker_says_what_was_approved_not_merely_that_it_was_decided() -> None:
+    """The complaint that started this: 27 blockers, no way to see any had been answered.
+
+    Accepting leaves the map unchanged, so the same question comes back in the regenerated
+    model. The badge is what tells the reader that is what happened.
+    """
+    model = _model(findings=[_finding("f-1", rule="lane_count_inference", severity="blocker")])
+    html = _render(model, decisions=[_decision("f-1")])
+
+    assert "accepted - 1 lane forward" in html
+    assert "All 1 were decided in your review" in html
+    assert "<span class='badge no'>never decided</span>" not in html
+
+
+def test_an_override_badges_the_value_it_replaced_the_proposal_with() -> None:
+    model = _model(findings=[_finding("f-1", rule="lane_count_inference", severity="blocker")])
+    html = _render(
+        model,
+        decisions=[
+            _decision(
+                "f-1",
+                status="overridden",
+                value={"lane_count": 2},
+                proposed_value={"direction": "forward", "lane_count": 1},
+            )
+        ],
+    )
+
+    assert "overridden - 2 lanes" in html
+    assert "accepted - 1 lane forward" not in html
+
+
+def test_an_undecided_blocker_leads_the_list_and_says_so() -> None:
+    """Whatever still needs attention has to be the first thing read, not buried
+    alphabetically among questions already answered."""
+    model = _model(
+        findings=[
+            _finding("a-decided", rule="lane_count_inference", severity="blocker"),
+            _finding(
+                "z-undecided", rule="lane_count_inference", severity="blocker", source_id="201"
+            ),
+        ]
+    )
+    html = _render(model, decisions=[_decision("a-decided")])
+
+    assert [item["id"] for item in _payload(html)["findings"]] == ["z-undecided", "a-decided"]
+    assert "1 of 2 were never decided" in html
+    assert "<span class='badge no'>never decided</span>" in html
+
+
+def test_no_review_supplied_badges_nothing_rather_than_crying_unreviewed() -> None:
+    """"We were not told" and "nobody decided this" are different states. Conflating them
+    would put a false alarm on every page rendered from a bare model."""
+    model = _model(findings=[_finding("f-1", rule="lane_count_inference", severity="blocker")])
+    html = _render(model)
+
+    assert "<span class='badge no'>never decided</span>" not in html
+    assert "class='badge" not in html
+    assert "No review was supplied" in html

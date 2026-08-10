@@ -360,6 +360,48 @@ def test_an_overridden_lane_count_stops_being_inferred(tmp_path: Path) -> None:
     assert "forward" not in directions(_reviewed(workspace))
 
 
+def test_a_decision_still_answers_its_finding_after_regeneration_renames_it(
+    tmp_path: Path,
+) -> None:
+    """The test that matters for Stage 5, and the one a stable-identifier fixture cannot see.
+
+    A finding's identifier covers its `affected_feature_ids`, so re-laning a way renames
+    every finding about it. A decision names the *preliminary* identifier. Join those on the
+    identifier and a fully reviewed map reports unresolved blockers the moment anyone
+    overrides a lane count - which is exactly what Stage 5 must not do.
+    """
+    workspace = _workspace(tmp_path)
+    before = {_question_key(f): f for f in _model(workspace).findings}
+    submission, way_id = _lane_count_override(workspace, count=3)
+    _apply(workspace, submission)
+
+    after = {_question_key(f): f for f in _reviewed(workspace).findings}
+    # The way's `speed_default` and `lane_width_default` cover its whole lane list, so
+    # tripling the forward lanes renames both while the question each asks is untouched.
+    renamed = {
+        after[key].identifier: before[key].identifier
+        for key in before.keys() & after.keys()
+        if before[key].identifier != after[key].identifier
+    }
+    assert renamed, "nothing was renamed, so this fixture cannot prove anything about the join"
+    assert all(way_id in f.source_ids for f in after.values() if f.identifier in renamed)
+
+    decisions = json.loads((workspace / "reports" / "reviewed-comparison.json").read_text())[
+        "finding_decisions"
+    ]
+    for new_id, old_id in renamed.items():
+        assert decisions[new_id]["state"] == "decided"
+        # The join followed the question, not the name. An identifier join would have
+        # missed exactly these and called a finished review unresolved.
+        assert decisions[new_id]["answers_finding_id"] == old_id
+
+    # Nothing the reviewer saw is left looking unreviewed. What is undecided is exactly
+    # what regeneration asked for the first time - those are honestly new questions, and
+    # reporting them as decided would be the more dangerous error.
+    undecided = {i for i, entry in decisions.items() if entry["state"] == "undecided"}
+    assert undecided == {after[key].identifier for key in after.keys() - before.keys()}
+
+
 def test_the_source_osm_is_untouched_even_when_a_tag_is_written(tmp_path: Path) -> None:
     # The whole reason the tag goes to a derived file: correcting a lane count by editing
     # source/map.osm would move its checksum and invalidate every decision in the review.

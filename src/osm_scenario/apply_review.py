@@ -523,6 +523,45 @@ def _regenerate(
     return model, counts, fingerprint, selection_audit
 
 
+def _decisions_by_reviewed_finding(
+    before: dict[tuple[Any, ...], ReviewFinding],
+    reviewed: list[ReviewFinding],
+    decisions: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Which reviewed finding each decision answers, joined by question, not identifier.
+
+    A decision names a *preliminary* finding id. Regeneration mints new ids - and re-laning
+    a way renames every question about it - so joining on the id would report a fully
+    reviewed map as untouched the moment a lane-count override lands. The question key is
+    the join that survives that, which is why it is computed here rather than left for
+    Stage 5 to reinvent against the wrong key.
+
+    Two states are recorded, never three: a finding is `decided` when a decision names its
+    question, `undecided` when none does. The third state - "we were not told" - is the
+    empty map returned when no decisions are supplied at all, so an absent entry never
+    reads as an unreviewed finding.
+    """
+    by_finding_id = {d["finding_id"]: d for d in decisions}
+    joined: dict[str, dict[str, Any]] = {}
+    for finding in reviewed:
+        preliminary = before.get(_question_key(finding))
+        decision = by_finding_id.get(preliminary.identifier) if preliminary else None
+        if decision is None:
+            # Either the reviewer left this question alone, or regeneration asked it for
+            # the first time. Both are genuinely undecided; neither is an error here.
+            joined[finding.identifier] = {"state": "undecided"}
+            continue
+        joined[finding.identifier] = {
+            "state": "decided",
+            "status": decision["status"],
+            "value": decision.get("value"),
+            "proposed_value": decision.get("proposed_value", finding.proposed_value),
+            "reason": decision.get("reason"),
+            "answers_finding_id": decision["finding_id"],
+        }
+    return dict(sorted(joined.items()))
+
+
 def _comparison(
     *,
     preliminary: PreliminaryLaneModel,
@@ -540,7 +579,13 @@ def _comparison(
     after = {_question_key(f): f for f in reviewed.findings}
     created = [after[k] for k in after.keys() - before.keys()]
     resolved = [before[k] for k in before.keys() - after.keys()]
-    decided = _decisions_by_reviewed_finding(preliminary, after, decisions or [])
+    # Empty when no decisions were supplied, which is how a caller says "not told" rather
+    # than "nothing was decided" - the page must not badge a finding as unreviewed on that.
+    decided = (
+        _decisions_by_reviewed_finding(before, reviewed.findings, decisions)
+        if decisions is not None
+        else {}
+    )
 
     def by_rule(findings: list[ReviewFinding]) -> dict[str, dict[str, int]]:
         table: dict[str, dict[str, int]] = {}
@@ -611,6 +656,11 @@ def _comparison(
             "activated_by_review": applied["activated_connector_ids"],
         },
         "ways_retagged": retagged or {},
+        # What Stage 5 should read to decide whether a blocker is unresolved. A blocker
+        # still in the reviewed model is not evidence of unreviewed work - accepting an
+        # inference leaves the map unchanged, so the same question comes back. Unresolved
+        # means `state == "undecided"`, not "a blocker exists".
+        "finding_decisions": decided,
         "lanes_left_without_an_exit": sorted(
             lane for lane in (stranded_after - stranded_before) if lane in reviewed_lanes
         ),
@@ -771,6 +821,7 @@ def apply_review(*, workspace: Path, submission: Path, config: ConverterConfig) 
         reviewed=reviewed,
         applied=applied,
         retagged=materialised_tags,
+        decisions=decisions,
     )
     comparison_json = reports_dir / "reviewed-comparison.json"
     comparison_json.write_text(
