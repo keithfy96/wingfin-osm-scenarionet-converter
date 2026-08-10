@@ -31,6 +31,7 @@ Two things about this stage are worth knowing before reading the code.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import pickle
@@ -63,6 +64,41 @@ MAPPING_FILE = "dataset_mapping.pkl"
 # separate, lockfile-pinned ScenarioNet environment whose Python is chosen by MetaDrive's
 # constraints, not ours; 4 is readable everywhere that matters and costs nothing here.
 _PICKLE_PROTOCOL = 4
+
+
+class _PortablePickler(pickle.Pickler):
+    """Pickle arrays so an older numpy can read them.
+
+    The same argument as the protocol above, carried through to the payload. numpy 2 pickles
+    an array as a reference to `numpy._core`, a module that does not exist in numpy 1 - so a
+    dataset written here fails to *open* in the environment it is written for, with
+    `ModuleNotFoundError` rather than anything that names the real problem. Both of the
+    MetaDrive checkouts this repo targets run Python 3.8 and numpy 1.24, and 3.8 cannot have
+    numpy 2 at all, so this is not a version skew that waits itself out.
+
+    `np.array` and `dtype.str` exist unchanged in both major versions, so rebuilding through
+    them makes the stream carry no version-specific name. What comes back is a real
+    `ndarray` with the original dtype and shape, not a list - which matters, because
+    MetaDrive indexes these with tuples (`positions[:, :2]` in `parse_full_trajectory`) and
+    a list would fail there instead, further away.
+
+    The cost is that arrays travel as nested lists rather than raw buffers. For `junction-1`
+    that is 1141 arrays holding 50 KB, so the file grows by a few hundred KB - cheap enough
+    not to trade against being loadable.
+    """
+
+    def reducer_override(self, obj: Any) -> Any:
+        if isinstance(obj, np.ndarray):
+            return np.array, (obj.tolist(), obj.dtype.str)
+        return NotImplemented
+
+
+def _portable_pickle(payload: Any) -> bytes:
+    """`pickle.dumps`, minus the numpy version dependence. See `_PortablePickler`."""
+    buffer = io.BytesIO()
+    _PortablePickler(buffer, protocol=_PICKLE_PROTOCOL).dump(payload)
+    return buffer.getvalue()
+
 
 _LANE_TYPE = "LANE_SURFACE_STREET"
 _BOUNDARY_TYPE = "ROAD_EDGE_BOUNDARY"
@@ -473,16 +509,11 @@ def convert_scenario(
     summary_path = dataset_dir / SUMMARY_FILE
     mapping_path = dataset_dir / MAPPING_FILE
 
-    _write_bytes_atomic(scenario_path, pickle.dumps(scenario, protocol=_PICKLE_PROTOCOL))
-    _write_bytes_atomic(
-        summary_path,
-        pickle.dumps({file_name: scenario["metadata"]}, protocol=_PICKLE_PROTOCOL),
-    )
+    _write_bytes_atomic(scenario_path, _portable_pickle(scenario))
+    _write_bytes_atomic(summary_path, _portable_pickle({file_name: scenario["metadata"]}))
     # An empty relative path means "beside the summary". Both index files key on the one
     # `file_name` computed above, so the two cannot drift apart.
-    _write_bytes_atomic(
-        mapping_path, pickle.dumps({file_name: ""}, protocol=_PICKLE_PROTOCOL)
-    )
+    _write_bytes_atomic(mapping_path, _portable_pickle({file_name: ""}))
 
     # Written after the pickles and from the same `neighbours`, so the page can only ever
     # describe a dataset that exists. It goes in `inspection/` beside the other stages'

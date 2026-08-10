@@ -172,18 +172,45 @@ straight from the first path (`METADRIVE_SRC`, near line 356) and is marked
 `skipif` on the directory being absent — so a moved or renamed checkout **silently
 drops the schema gate** rather than failing.
 
-Two traps that have already cost a session, both measured rather than read:
+### Checking a converted dataset, and what it can and cannot do yet
 
-- **Neither checkout can unpickle our scenario.** Both `.venv`s are Python 3.8 /
-  numpy 1.24; we write with numpy 2.2, so loading raises `ModuleNotFoundError: No
-  module named 'numpy._core'`. The `sanity_check` test passes because it loads
-  MetaDrive's *source file* into this repo's 3.10 environment — it checks the
-  schema, never the round trip.
-- **`ScenarioEnv` cannot reset on a map-only scenario.** `ScenarioMapManager.reset`
-  calls `update_route()` unconditionally, which calls `get_sdc_track()`; with no
-  recorded ego car that raises `KeyError('None')`. No config skips it — `no_map`
-  does not. Driving our map needs an ego route from somewhere, and that is an
-  open decision, not an oversight.
+`uv run pytest` cannot tell you the dataset loads. Both checkouts run **Python 3.8
+/ numpy 1.24** and this repo runs 3.10 / numpy 2.2, so the interpreter the tests
+use is exactly the one where a version fault is invisible. Run it from the other
+side instead:
+
+```bash
+/home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
+  tools/check_dataset.py workspaces/junction-1/scenarionet
+```
+
+`conversion.py` pickles arrays through `_PortablePickler` precisely because of
+that gap — numpy 2 writes a reference to `numpy._core`, which numpy 1 does not
+have and 3.8 can never get. **Anything that changes how arrays are written must
+keep the stream free of version-specific module names**; two tests in
+`test_conversion.py` pin it, one on the pickle stream and one on arrays still
+arriving as arrays rather than lists.
+
+What the map-only dataset supports today:
+
+| works now | needs an ego route first |
+| --- | --- |
+| `python -m scenarionet.num -d <path>` | `python -m scenarionet.sim -d <path>` |
+| `python -m scenarionet.check_existence -d <path>` — it passes `steps_to_run=0`, so it reads and runs `sanity_check` without a simulator | `python -m scenarionet.check_simulation` — the same verifier, but it boots `ScenarioEnv` |
+| `tools/check_dataset.py` | `ScenarioEnv(...).reset()` |
+
+**`ScenarioEnv` cannot reset without an ego track**, and that is not a bug in our
+output. `ScenarioMapManager.reset` calls `update_route()` unconditionally, which
+calls `get_sdc_track()`; with no recorded ego car that raises `KeyError('None')`,
+and no config skips it — `no_map` does not. ScenarioEnv has no start/end setting
+at all: `TrajectoryNavigation` follows the *recorded* ego's own path. Giving the
+map a route means generating one, which is Keith's open decision.
+
+Two things to carry into that work when it happens. The track must hold
+`position` (T,3), `heading`, `velocity`, `valid` and the size arrays, with
+`metadata.object_id` equal to the track key and `sdc_id` naming it. And
+`ScenarioEnv` needs `map_region_size=2048`: its default of 1024 clips lanes to
+±512 m about the origin, and `junction-1` reaches y = 581 m.
 
 ### Conventions that bite
 

@@ -11,11 +11,13 @@ import importlib.util
 import json
 import math
 import pickle
+import pickletools
 import sys
 import types
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 
 from osm_scenario.config import ConverterConfig
@@ -428,6 +430,66 @@ def test_our_feature_types_are_the_ones_metadrive_defines() -> None:
     # `has_type` covers object types and never sees a map feature, so the boundary is
     # checked against the constant MetaDrive actually names it with.
     assert MetaDriveType.BOUNDARY_LINE == "ROAD_EDGE_BOUNDARY"
+
+
+# --- readable by the numpy the reader has, not the one we have ----------------------------
+#
+# These cannot be written as ordinary round-trip assertions, because this interpreter is
+# exactly the one where the fault is invisible: numpy 2 reads its own pickles happily. What
+# can be checked here is the property that makes the file portable - that the stream names
+# no module the reader might not have - and that is what these look at.
+
+
+def _pickled(tmp_path: Path) -> bytes:
+    workspace = _workspace(tmp_path, _model())
+    scenario_path, _, _, _, _ = convert_scenario(
+        workspace=workspace, config=ConverterConfig(config_version=1)
+    )
+    return scenario_path.read_bytes()
+
+
+def _modules_named_in(payload: bytes) -> set[str]:
+    """Every module the unpickler will try to import to rebuild this object."""
+    named = set()
+    for opcode, argument, _ in pickletools.genops(payload):
+        if opcode.name in {"GLOBAL", "STACK_GLOBAL", "INST"} and isinstance(argument, str):
+            named.add(argument.split(" ")[0].split("\n")[0])
+    return named
+
+
+def test_the_pickle_names_no_module_an_older_numpy_would_not_have(tmp_path: Path) -> None:
+    """The dataset must open in MetaDrive's interpreter, which is older than this one.
+
+    numpy 2 pickles an array as a reference to `numpy._core`, a module numpy 1 does not
+    have, so the dataset fails to *open* in the environment it is written for - with
+    `ModuleNotFoundError`, which names nothing about the real problem. Both MetaDrive
+    checkouts run Python 3.8, which cannot have numpy 2 at all, so this does not wait
+    itself out.
+    """
+    named = _modules_named_in(_pickled(tmp_path))
+    assert not {module for module in named if module.startswith("numpy._core")}, named
+    # Whatever numpy is named, it is only ever the one public constructor that has kept its
+    # name across both major versions.
+    assert {module for module in named if module.startswith("numpy")} <= {"numpy"}
+
+
+def test_geometry_survives_that_as_arrays_rather_than_lists(tmp_path: Path) -> None:
+    """Portable is not enough on its own - it has to still be an array on arrival.
+
+    MetaDrive indexes this geometry with tuples (`positions[:, :2]` in
+    `parse_full_trajectory`, `polyline[neighbor_start]` in `ScenarioLane`). A shim that
+    degraded arrays to lists would satisfy the test above and fail there instead, further
+    from the cause.
+    """
+    scenario = pickle.loads(_pickled(tmp_path))
+    polyline = scenario["map_features"]["a"]["polyline"]
+    assert isinstance(polyline, np.ndarray)
+    assert polyline.dtype == np.float64
+    assert polyline.ndim == 2
+    assert polyline[:, :2].shape == polyline.shape
+    # `sanity_check` reads `.shape` on this one, so it is the array most likely to be
+    # noticed if it degrades - which is the reason to pin the least likely one above too.
+    assert scenario["metadata"]["ts"].shape == (1,)
 
 
 # --- reachability -------------------------------------------------------------------------
