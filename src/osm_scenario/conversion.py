@@ -13,6 +13,13 @@ Two things about this stage are worth knowing before reading the code.
   swapped - exactly twice the 83 active connectors, which is the arithmetic that says the
   swap is complete.
 
+* **A lane change is a way to get somewhere.** `entry_lanes` / `exit_lanes` say where a
+  lane physically leads, and a lane change is not that - so the map features are untouched
+  by this. But the *reachability* figures in `metadata.routing` count moving across into a
+  side-by-side lane, because OSM says a change is permitted unless `change` / `change:lanes`
+  forbids it and `junction-1` carries no such tag. Counting junction movements alone said
+  the best lane reached 79 of 285; counting what the source actually permits says 190.
+
 * **ScenarioNet is deliberately not a dependency, but the schema is still pinned.** The
   scenario dict is built by hand against MetaDrive's `ScenarioDescription`.
   `test_the_scenario_passes_metadrives_own_sanity_check` runs MetaDrive's real
@@ -193,24 +200,53 @@ def _lane_neighbours(model: PreliminaryLaneModel) -> dict[str, tuple[list[str], 
     return resolved
 
 
-def _reachability(neighbours: Mapping[str, tuple[list[str], list[str]]]) -> dict[str, Any]:
-    """Where a car can actually get to, respecting one-way direction.
+def _lane_change_moves(model: PreliminaryLaneModel) -> dict[str, list[str]]:
+    """Each lane's side-by-side neighbours - the lanes a car can move across into.
 
-    Stage 5 reports `routing_components`, which uses *weakly* connected components - it
-    ignores direction, so two one-way lanes pointing away from each other still count as
-    one piece. That is the right measure for "is this map internally sound", and the wrong
-    one for "can a route be driven here". Both are true at once and they disagree wildly:
-    `junction-1` is 6 pieces weakly and 274 strongly.
+    OSM spells a lane-change ban with `change` / `change:lanes`, and absence means the
+    change is permitted; `junction-1`'s source carries no `change` tag of any kind. So
+    treating every side-by-side lane as unreachable is *stricter than the survey*, which
+    inverts this project's rule that a surveyed tag outranks an inferred angle.
 
-    So the dataset carries the only number a person planning a MetaDrive route can use -
-    the best starting lane and how far it gets.
+    Each recorded link becomes a one-way move from the lane that records it. Where the
+    model is symmetric - all 178 links in `junction-1` are - that yields both directions
+    on its own, and where it is not, the half that is recorded still works rather than
+    failing the conversion over bookkeeping.
     """
-    graph = nx.DiGraph()
-    graph.add_nodes_from(neighbours)
-    for lane_id, (_, exits) in neighbours.items():
-        for target in exits:
-            graph.add_edge(lane_id, target)
+    lanes = {lane.identifier: lane for lane in model.lanes}
+    moves: dict[str, list[str]] = {}
 
+    for lane in model.lanes:
+        out: list[str] = []
+        for side, neighbour in (("left", lane.left_neighbor), ("right", lane.right_neighbor)):
+            if not neighbour:
+                continue
+            other = lanes.get(neighbour)
+            if other is None:
+                raise ConversionError(
+                    f"lane {lane.identifier} names {neighbour} as its {side} neighbour, "
+                    "but it is not a lane in this model"
+                )
+            # A "neighbour" facing the other way, or on another stretch of road, would put
+            # a drivable edge into oncoming traffic or teleport a car down the street. The
+            # check costs nothing and the failure it prevents is silent.
+            if (
+                other.direction != lane.direction
+                or other.source_edge != lane.source_edge
+                or other.source_way_ids != lane.source_way_ids
+            ):
+                raise ConversionError(
+                    f"lane {lane.identifier} names {neighbour} as its {side} neighbour, "
+                    "but they are not the same stretch of road running the same way"
+                )
+            out.append(neighbour)
+        moves[lane.identifier] = list(dict.fromkeys(out))
+
+    return moves
+
+
+def _reach_facts(graph: nx.DiGraph) -> dict[str, Any]:
+    """The six numbers that describe how far a car gets in one graph."""
     reach = {lane_id: len(nx.descendants(graph, lane_id)) for lane_id in graph}
     best = max(reach.items(), key=lambda item: (item[1], item[0]))
     strong = sorted((len(part) for part in nx.strongly_connected_components(graph)), reverse=True)
@@ -221,12 +257,53 @@ def _reachability(neighbours: Mapping[str, tuple[list[str], list[str]]]) -> dict
         "lanes_reaching_nothing": sum(1 for count in reach.values() if count == 0),
         "reachable_lane_pairs": sum(reach.values()),
         "possible_lane_pairs": len(graph) * (len(graph) - 1),
-        # Summarised, not listed. `junction-1` has 274 of these and 273 are a single lane,
-        # so the full list is 274 numbers carrying two facts.
+        # Summarised, not listed. `junction-1` has 185 of these and most are a single lane,
+        # so the full list would be 185 numbers carrying two facts.
         "components_respecting_direction": {
             "count": len(strong),
             "largest": strong[0] if strong else 0,
         },
+    }
+
+
+def _reachability(
+    neighbours: Mapping[str, tuple[list[str], list[str]]],
+    moves: Mapping[str, list[str]],
+) -> dict[str, Any]:
+    """Where a car can actually get to, respecting one-way direction.
+
+    Two facts sit behind the numbers, and reporting either one alone misleads.
+
+    Stage 5 reports `routing_components`, which uses *weakly* connected components - it
+    ignores direction, so two one-way lanes pointing away from each other still count as
+    one piece. That is the right measure for "is this map internally sound", and the wrong
+    one for "can a route be driven here". `junction-1` is 6 pieces weakly and 185 strongly.
+
+    And a car can change lanes. Counting only junction movements says `junction-1`'s best
+    lane reaches 79 of 285; counting the lane changes the source permits says 190. So the
+    headline numbers allow lane changes - that is what a person planning a route needs -
+    and `without_lane_changes` keeps the junction-only figures beside them.
+    """
+    graph = nx.DiGraph()
+    graph.add_nodes_from(neighbours)
+    for lane_id, (_, exits) in neighbours.items():
+        for target in exits:
+            graph.add_edge(lane_id, target)
+
+    junction_only = _reach_facts(graph)
+
+    edges = 0
+    for lane_id, sideways in moves.items():
+        for target in sideways:
+            if not graph.has_edge(lane_id, target):
+                edges += 1
+            graph.add_edge(lane_id, target)
+
+    return {
+        **_reach_facts(graph),
+        "lane_changes_allowed": True,
+        "lane_change_edges": edges,
+        "without_lane_changes": junction_only,
     }
 
 
@@ -289,14 +366,20 @@ def _scenario(
     workspace_name: str,
     manifest: dict[str, Any],
     model_sha256: str,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, tuple[list[str], list[str]]]]:
-    """The scenario dict, the reachability facts, and the graph both were built from.
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, tuple[list[str], list[str]]],
+    dict[str, list[str]],
+]:
+    """The scenario dict, the reachability facts, and the two graphs both were built from.
 
-    The graph comes back out so the Stage 6 page can be drawn from the same object rather
+    The graphs come back out so the Stage 6 page can be drawn from the same objects rather
     than a second resolution of the same references. A page that disagreed with the
     dataset about which lanes join would be worse than no page.
     """
     neighbours = _lane_neighbours(model)
+    moves = _lane_change_moves(model)
     features = _map_features(model, neighbours)
 
     dangling = {
@@ -311,7 +394,7 @@ def _scenario(
             f"feature: {', '.join(sorted(dangling)[:5])}"
         )
 
-    routing = _reachability(neighbours)
+    routing = _reachability(neighbours, moves)
     # A 16-hex-digit prefix, which is how the fingerprint is written everywhere a person
     # reads it. The id ends up in the filename and in MetaDrive's logs, and the full 64
     # characters are one field away in `metadata.provenance`, so nothing is lost by not
@@ -360,7 +443,7 @@ def _scenario(
             },
         },
     }
-    return scenario, routing, neighbours
+    return scenario, routing, neighbours, moves
 
 
 def convert_scenario(
@@ -377,7 +460,7 @@ def convert_scenario(
     model_sha256 = _sha256(model_path)
 
     model = PreliminaryLaneModel.model_validate(_read(model_path, "reviewed lane model"))
-    scenario, routing, neighbours = _scenario(
+    scenario, routing, neighbours, moves = _scenario(
         model=model,
         workspace_name=workspace.name,
         manifest=manifest,
@@ -408,7 +491,9 @@ def convert_scenario(
     html_path = workspace / "inspection" / "stage-6-reachability.html"
     _write_text_atomic(
         html_path,
-        render_reachability_html(model=model, neighbours=neighbours, routing=routing),
+        render_reachability_html(
+            model=model, neighbours=neighbours, moves=moves, routing=routing
+        ),
     )
 
     artifacts = {}

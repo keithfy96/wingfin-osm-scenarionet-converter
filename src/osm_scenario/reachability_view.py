@@ -13,9 +13,15 @@ unmissable, and anyone about to spend GPU time driving a route in MetaDrive can 
 start and an end that a car can actually get between.
 
 The search runs in the browser, over the same adjacency this page is handed. That is the
-whole correctness argument: `convert_scenario` computes `_lane_neighbours` once and gives
-the identical object to the pickle and to this page, so the page cannot draw a graph the
-dataset does not contain. `test_the_page_carries_the_same_graph_the_scenario_does` pins it.
+whole correctness argument: `convert_scenario` computes `_lane_neighbours` and
+`_lane_change_moves` once and gives the identical objects to the pickle and to this page,
+so the page cannot draw a graph the dataset does not contain.
+`test_the_page_carries_the_same_graph_the_scenario_does` pins it.
+
+Lane changes count as steps, and the checkbox that turns them off is not decoration: it is
+how a reader checks the claim rather than taking it. The junction-only view is what this
+page showed before, and the difference between the two is large enough - 79 against 190 -
+that asserting it without letting anyone see both would be asking for trust.
 """
 
 from __future__ import annotations
@@ -62,6 +68,7 @@ _TEMPLATE = """<!doctype html>
   .toggle button.on{background:#1c7ed6;border-color:#1c7ed6;color:#fff}
   .toggle button:first-child{border-radius:3px 0 0 3px}
   .toggle button:last-child{border-radius:0 3px 3px 0}
+  .switch{display:flex;align-items:center;gap:6px;margin:0 0 4px;font-weight:600;cursor:pointer}
   .lrow{display:flex;justify-content:space-between;gap:8px;padding:3px 6px;border-left:3px solid transparent;cursor:pointer;border-radius:2px}
   .lrow:hover{background:#e9ecef}
   .lrow.sel{background:#d0ebff;border-left-color:#1c7ed6}
@@ -75,13 +82,18 @@ _TEMPLATE = """<!doctype html>
 <div id="wrap"><div id="map"></div><div id="side">
 <h1>Stage 6 - where you can drive to</h1>
 <p class='caption'>Pick a lane. The map colours everywhere a car can get to from it, by how many
-lanes it has to cross to arrive. Click any lane on the map to start there instead.</p>
+steps it takes to arrive - a step being either a junction movement or a change into the lane
+alongside. Click any lane on the map to start there instead.</p>
 <p class='verdict' id='verdict'>&nbsp;</p>
 <p class='muted' id='selected'>&nbsp;</p>
 <div class='toggle'>
   <button id='btn-fwd' class='on'>can drive to</button>
   <button id='btn-rev'>can be reached from</button>
 </div>
+<label class='switch'><input type='checkbox' id='allow-change' checked> allow lane changes</label>
+<p class='caption'>Moving across into the lane beside you counts as one step, the same as any
+junction. OSM permits it unless a road is tagged to forbid it, and nothing here is. Untick to
+see what the map looks like if a car may never leave the lane it starts in.</p>
 <h2>Selection</h2>
 <table id='facts'></table>
 <p class='caption'>Lanes found at each step, first step first. A row of ones is a single road with
@@ -102,11 +114,21 @@ const LANES = DATA.lanes;
 const BY_ID = {};
 for (const lane of LANES) BY_ID[lane.id] = lane;
 
-// The reverse graph, built here rather than shipped: it is the same 294 edges read the
-// other way round, and a second copy in the payload could disagree with the first.
-const FWD = {}, REV = {};
-for (const lane of LANES) { FWD[lane.id] = lane.exits; REV[lane.id] = []; }
-for (const lane of LANES) for (const target of lane.exits) if (REV[target]) REV[target].push(lane.id);
+/* Four graphs, all derived here from the one adjacency in the payload rather than shipped
+   separately: junction movements alone and junction movements plus lane changes, each
+   read forwards and backwards. A second copy in the payload could disagree with the first.
+   `sideways` is one-way per recorded link, so a lane change appears in the reverse graph
+   only if the lane on the other side records it too - which is what makes it reversible. */
+const FWD = {}, REV = {}, FWD_LC = {}, REV_LC = {};
+for (const lane of LANES) { FWD[lane.id] = lane.exits; REV[lane.id] = []; FWD_LC[lane.id] = lane.exits.concat(lane.sideways); REV_LC[lane.id] = []; }
+for (const lane of LANES) {
+  for (const target of lane.exits) { if (REV[target]) REV[target].push(lane.id); if (REV_LC[target]) REV_LC[target].push(lane.id); }
+  for (const target of lane.sideways) if (REV_LC[target]) REV_LC[target].push(lane.id);
+}
+function graphFor(forward, allowChange) {
+  if (forward) return allowChange ? FWD_LC : FWD;
+  return allowChange ? REV_LC : REV;
+}
 
 const BANDS = [
   {upto: 2,        color: '#c92a2a', label: '1-2'},
@@ -144,7 +166,7 @@ const layerById = {};
 for (const lane of LANES) {
   const line = L.polyline(lane.line, UNREACHED).addTo(map);
   line.bindPopup(function () {
-    const found = search(lane.id, FWD);
+    const found = search(lane.id, graphFor(true, allowChange()));
     return '<b>' + lane.label + '</b><br><code>' + lane.id + '</code><br>reaches '
       + (Object.keys(found.steps).length - 1) + ' lane(s)<br>'
       + '<a href="#lane=' + lane.id + '">start here</a>';
@@ -158,12 +180,14 @@ let forward = true;
 let current = null;
 
 function text(id, value) { document.getElementById(id).textContent = value; }
+function allowChange() { return document.getElementById('allow-change').checked; }
 
 function select(laneId, keepView) {
   if (!BY_ID[laneId]) return;
   current = laneId;
   const lane = BY_ID[laneId];
-  const found = search(laneId, forward ? FWD : REV);
+  const changing = allowChange();
+  const found = search(laneId, graphFor(forward, changing));
   const reached = Object.keys(found.steps).filter(function (id) { return id !== laneId; });
   const ways = {};
   for (const id of reached) for (const way of BY_ID[id].ways) ways[way] = true;
@@ -186,9 +210,13 @@ function select(laneId, keepView) {
   document.getElementById('facts').innerHTML =
       "<tr><td>lanes " + verb + "</td><td class='n'>" + reached.length + "</td></tr>"
     + "<tr><td>ways they lie on</td><td class='n'>" + Object.keys(ways).length + "</td></tr>"
-    + "<tr><td>furthest, in lanes crossed</td><td class='n'>" + found.layers.length + "</td></tr>"
+    + "<tr><td>furthest, in steps</td><td class='n'>" + found.layers.length + "</td></tr>"
     + "<tr><td>lanes leaving this one</td><td class='n'>" + lane.exits.length + "</td></tr>"
-    + "<tr><td>lanes entering this one</td><td class='n'>" + REV[laneId].length + "</td></tr>";
+    + "<tr><td>lanes entering this one</td><td class='n'>" + REV[laneId].length + "</td></tr>"
+    + "<tr><td>lanes alongside this one</td><td class='n'>" + lane.sideways.length + "</td></tr>"
+    + "<tr><td>same, without lane changes</td><td class='n'>"
+    + (changing ? (Object.keys(search(laneId, graphFor(forward, false)).steps).length - 1) : reached.length)
+    + "</td></tr>";
   text('layers', found.layers.length ? found.layers.join('  ') : 'nothing at all');
 
   for (const row of document.querySelectorAll('.lrow')) {
@@ -211,7 +239,7 @@ function select(laneId, keepView) {
 function fillLanes(wayId) {
   const rows = LANES.filter(function (lane) { return lane.ways.indexOf(wayId) !== -1; });
   const counts = rows.map(function (lane) {
-    return {lane: lane, reach: Object.keys(search(lane.id, FWD).steps).length - 1};
+    return {lane: lane, reach: Object.keys(search(lane.id, graphFor(true, allowChange())).steps).length - 1};
   });
   counts.sort(function (a, b) { return b.reach - a.reach; });
   document.getElementById('lanes').innerHTML = counts.map(function (item) {
@@ -234,7 +262,7 @@ document.getElementById('legend').innerHTML =
   "<div class='key'><span class='sw' style='border-top-color:" + START_COLOR + "'></span>the lane you picked</div>"
   + BANDS.map(function (band) {
       return "<div class='key'><span class='sw' style='border-top-color:" + band.color + "'></span>"
-        + band.label + ' lanes crossed to get there</div>';
+        + band.label + ' steps to get there</div>';
     }).join('')
   + "<div class='key'><span class='sw' style='border-top-color:" + UNREACHED.color + "'></span>no route at all</div>";
 
@@ -252,6 +280,12 @@ document.getElementById('btn-fwd').addEventListener('click', function () {
 document.getElementById('btn-rev').addEventListener('click', function () {
   forward = false; this.classList.add('on');
   document.getElementById('btn-fwd').classList.remove('on');
+  if (current) select(current, true);
+});
+document.getElementById('allow-change').addEventListener('change', function () {
+  // The way list carries a reach count per lane, so it has to be rebuilt too - otherwise
+  // the column and the map would be answering different questions.
+  fillLanes(document.getElementById('way').value);
   if (current) select(current, true);
 });
 
@@ -281,20 +315,32 @@ def _edge_name(source_edge: list[str]) -> str:
 
 def _caveats(routing: dict[str, Any], lane_count: int) -> str:
     """The facts that stop the map being read as a better-connected network than it is."""
+    strict = routing["without_lane_changes"]
     pairs = routing["possible_lane_pairs"]
     share = (routing["reachable_lane_pairs"] / pairs * 100) if pairs else 0.0
+    strict_share = (strict["reachable_lane_pairs"] / pairs * 100) if pairs else 0.0
     return (
         f"<p>Of the {pairs:,} journeys you could ask for between two lanes here, "
         f"<b>{routing['reachable_lane_pairs']:,}</b> exist - about "
-        f"<b>{share:.0f}%</b>. Pick a destination at random and it is probably not "
-        "reachable from where you started.</p>"
+        f"<b>{share:.0f}%</b>. Pick a destination at random and it is more likely than "
+        "not to be unreachable from where you started.</p>"
         f"<p><b>{routing['lanes_reaching_nothing']}</b> of {lane_count} lanes lead "
-        "nowhere at all: start on one and the car has no next lane. Most are lanes that "
-        "run off the edge of the downloaded area rather than mistakes.</p>"
+        "nowhere at all: start on one and the car has no next lane and no lane beside it. "
+        "Most are lanes that run off the edge of the downloaded area rather than "
+        "mistakes.</p>"
         "<p>The typical lane reaches "
         f"<b>{routing['median_reach']:.0f}</b> others. The best reaches "
         f"<b>{routing['best_start_reaches']}</b>, and that is the lane this page opens "
         "on.</p>"
+        f"<p class='caption'><b>Lane changes are counted.</b> There are "
+        f"{routing['lane_change_edges']} places where a car can move into the lane "
+        "beside it, and OSM permits every one of them - a change is allowed unless the "
+        "road is tagged <code>change</code> or <code>change:lanes</code> to forbid it, and "
+        "nothing in this extract is. Ignore them and the same map looks far worse than it "
+        f"is: the best lane reaches {strict['best_start_reaches']} rather than "
+        f"{routing['best_start_reaches']}, the typical lane {strict['median_reach']:.0f} "
+        f"rather than {routing['median_reach']:.0f}, and only {strict_share:.0f}% of "
+        "journeys exist. Untick the box above to see it.</p>"
         "<p class='caption'>Stage 5 counts this map in pieces too, and gets a far smaller "
         "number. That count ignores one-way direction, which is right for asking whether "
         "the map hangs together and wrong for asking whether a car can drive it. "
@@ -309,12 +355,14 @@ def render_reachability_html(
     *,
     model: PreliminaryLaneModel,
     neighbours: Mapping[str, tuple[list[str], list[str]]],
+    moves: Mapping[str, list[str]],
     routing: dict[str, Any],
 ) -> str:
     """Draw the reviewed map so a person can pick a start and see where it leads.
 
-    `neighbours` is passed in rather than recomputed: it must be the same object the
-    scenario was built from, or the page and the dataset can disagree about the network.
+    `neighbours` and `moves` are passed in rather than recomputed: they must be the same
+    objects the scenario was built from, or the page and the dataset can disagree about
+    the network.
     """
     transformer = Transformer.from_crs(
         model.metadata.coordinate_system_wkt, "EPSG:4326", always_xy=True
@@ -338,6 +386,7 @@ def render_reachability_html(
                 ),
                 "line": _lonlat(lane.centerline, transformer),
                 "exits": list(neighbours[lane.identifier][1]),
+                "sideways": list(moves.get(lane.identifier, ())),
             }
         )
 

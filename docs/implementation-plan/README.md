@@ -385,11 +385,12 @@ before approval.
     every assertion `read_dataset_summary` makes. Both are run against MetaDrive
     0.4.3's own source, not a reading of it — see the schema note below.
   - [x] **`inspection/stage-6-reachability.html`** — pick any lane and see every
-    lane a car can reach from it, coloured by how many lanes it has to cross,
-    and the same search run backwards. Written by `convert` from the same
-    resolved graph the dataset is built from, so the page cannot show a network
-    the pickle does not contain. It is what turns `metadata.routing`'s one
-    number into a route you can pick before spending GPU time on it.
+    lane a car can reach from it, coloured by how many steps it takes, the same
+    search run backwards, and a checkbox for whether lane changes count.
+    Written by `convert` from the same resolved graph the dataset is built
+    from, so the page cannot show a network the pickle does not contain. It is
+    what turns `metadata.routing`'s numbers into a route you can pick before
+    spending GPU time on it.
   - [ ] **Not yet loaded in MetaDrive itself.** Nothing has been rendered, and no
     route has been driven. That needs panda3d and a GPU, so it belongs in the
     lockfile-pinned isolated environment rather than here.
@@ -417,12 +418,20 @@ Two things the implemented conversion decided that the list above does not say:
   reappear as a drivable edge.
 - **The dataset carries reachability, not just `routing_components`.** Stage 5's
   component sizes use *weakly* connected components, which ignore one-way
-  direction: `junction-1` is 6 pieces weakly and 274 strongly, and only 8% of
-  lane-to-lane journeys exist. `metadata.routing` names the best starting lane
-  and how far it reaches, which is the number step 4 above actually needs. The
-  Stage 6 page draws it, because the number alone still misleads: 285 lanes are
-  joined by 294 edges, so the best lane's 79 is a thread twelve steps long
-  before it branches at all, not a network.
+  direction: `junction-1` is 6 pieces weakly and 185 strongly.
+  `metadata.routing` names the best starting lane and how far it reaches, which
+  is the number step 4 above actually needs. The Stage 6 page draws it, because
+  a count alone misleads about the shape.
+- **Reachability counts lane changes; `exit_lanes` does not.** A lane change is
+  not "where this lane leads", so the map features are untouched by it — but a
+  car can still make one, and OSM says so: a change is permitted unless
+  `change` / `change:lanes` forbids it, and `junction-1`'s source has no
+  `change` tag of any kind. Ignoring the 178 side-by-side links made the map
+  look far worse than it is. Best lane 79 → **190**, typical lane 10 → **110**,
+  journeys that exist 8% → **27%**, lanes reaching nothing 20 → **8**, pieces
+  respecting direction 274 → **185**. `metadata.routing.without_lane_changes`
+  keeps the junction-only figures beside the headline ones, and the page has a
+  checkbox so a reader can see both rather than take one on trust.
 
 **The schema is pinned against MetaDrive's own source, without depending on it.**
 `test_the_scenario_passes_metadrives_own_sanity_check` loads

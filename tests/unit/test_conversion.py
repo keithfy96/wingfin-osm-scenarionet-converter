@@ -21,6 +21,7 @@ import pytest
 from osm_scenario.config import ConverterConfig
 from osm_scenario.conversion import (
     ConversionError,
+    _lane_change_moves,
     _lane_neighbours,
     _reachability,
     _scenario,
@@ -126,8 +127,36 @@ def _model(**update: Any) -> PreliminaryLaneModel:
     return model.model_copy(update=update) if update else model
 
 
+def _side_by_side(**update: Any) -> PreliminaryLaneModel:
+    """`_model()` with a second lane running alongside `a`, so lane changes have a subject.
+
+    Kept separate from `_model()` rather than folded into it: a fourth lane would change
+    the feature set several tests pin by name, and those assertions are about resolving
+    references, which is a different subject from moving sideways.
+
+    `a2` has no exits of its own. Without lane changes it reaches nothing at all; with them
+    it reaches everything `a` reaches, which is the whole distinction in three lanes.
+    """
+    a = _lane(
+        "a", exit_lanes=["c"], lane_index=0, lane_count=2, left_neighbor="a2"
+    )
+    a2 = _lane("a2", lane_index=1, lane_count=2, right_neighbor="a")
+    base = _model()
+    lanes = [a.model_dump(), a2.model_dump()] + [
+        lane.model_dump() for lane in base.lanes if lane.identifier != "a"
+    ]
+    model = PreliminaryLaneModel.model_validate(
+        {
+            "metadata": _METADATA,
+            "lanes": lanes,
+            "connectors": [connector.model_dump() for connector in base.connectors],
+        }
+    )
+    return model.model_copy(update=update) if update else model
+
+
 def _built(model: PreliminaryLaneModel) -> dict[str, Any]:
-    scenario, _, _ = _scenario(
+    scenario, _, _, _ = _scenario(
         model=model,
         workspace_name="test-workspace",
         manifest={"source": {"sha256": "src"}, "stage_5": {"status": "passed"}},
@@ -404,8 +433,12 @@ def test_our_feature_types_are_the_ones_metadrive_defines() -> None:
 # --- reachability -------------------------------------------------------------------------
 
 
+def _routing(model: PreliminaryLaneModel) -> dict[str, Any]:
+    return _reachability(_lane_neighbours(model), _lane_change_moves(model))
+
+
 def test_reachability_measures_where_a_car_can_get_to() -> None:
-    routing = _reachability(_lane_neighbours(_model()))
+    routing = _routing(_model())
     assert routing["best_start_lane_id"] == "a"
     assert routing["best_start_reaches"] == 2
     assert routing["lanes_reaching_nothing"] == 1
@@ -419,8 +452,76 @@ def test_one_way_lanes_are_not_counted_as_mutually_reachable() -> None:
     All three lanes are one weakly connected piece, and a reader of that number alone
     would conclude a car can drive between any two of them. It cannot: nothing returns.
     """
-    routing = _reachability(_lane_neighbours(_model()))
+    routing = _routing(_model())
     assert routing["components_respecting_direction"] == {"count": 3, "largest": 1}
+
+
+# --- lane changes ---------------------------------------------------------------------------
+
+
+def test_a_lane_change_is_a_way_to_get_somewhere() -> None:
+    """`a2` has no exits. Only moving across into `a` gets it anywhere at all."""
+    routing = _routing(_side_by_side())
+    assert routing["lane_change_edges"] == 2
+    assert routing["without_lane_changes"]["lanes_reaching_nothing"] == 2
+    assert routing["lanes_reaching_nothing"] == 1
+    # a2 -> a -> b -> d, and a -> a2, so both front lanes now reach three of the four.
+    assert routing["best_start_reaches"] == 3
+    assert routing["without_lane_changes"]["best_start_reaches"] == 2
+
+
+def test_the_junction_only_figures_are_kept_beside_the_headline_ones() -> None:
+    """Reporting either alone misleads, which is the lesson Stage 5's piece count taught."""
+    model = _side_by_side()
+    routing = _routing(model)
+    assert routing["lane_changes_allowed"] is True
+    assert "without_lane_changes" not in routing["without_lane_changes"]
+
+    # Run it again with nothing to move sideways into. The headline figures then have to
+    # equal the block the real run files under `without_lane_changes` - that is what makes
+    # the block a measurement rather than a label.
+    wrapper = ("lane_changes_allowed", "lane_change_edges", "without_lane_changes")
+    nowhere_to_move = _reachability(_lane_neighbours(model), {})
+    assert nowhere_to_move["lane_change_edges"] == 0
+    assert routing["without_lane_changes"] == {
+        key: value for key, value in nowhere_to_move.items() if key not in wrapper
+    }
+
+
+def test_a_neighbour_that_is_not_a_lane_is_refused() -> None:
+    model = _side_by_side()
+    model.lanes[0].left_neighbor = "nowhere"
+    with pytest.raises(ConversionError, match="lane a names nowhere as its left neighbour"):
+        _lane_change_moves(model)
+
+
+def test_a_neighbour_facing_the_other_way_is_refused() -> None:
+    """It would be a drivable edge straight into oncoming traffic."""
+    model = _side_by_side()
+    model.lanes[1].direction = "backward"
+    with pytest.raises(ConversionError, match="not the same stretch of road"):
+        _lane_change_moves(model)
+
+
+def test_a_neighbour_on_another_stretch_of_road_is_refused() -> None:
+    """`left_neighbor` means alongside. Anything else would teleport a car down the street."""
+    model = _side_by_side()
+    model.lanes[1].source_edge = ["9", "10", "0"]
+    with pytest.raises(ConversionError, match="not the same stretch of road"):
+        _lane_change_moves(model)
+
+
+def test_a_lane_change_never_becomes_an_exit_in_the_map_features() -> None:
+    """`exit_lanes` means where the lane leads. Moving sideways is not that.
+
+    The dataset MetaDrive loads must be unchanged by any of this - only the reachability
+    figures move.
+    """
+    features = _built(_side_by_side())["map_features"]
+    assert features["a"]["exit_lanes"] == ["b"]
+    assert features["a2"]["exit_lanes"] == []
+    assert features["a"]["left_neighbor"] == ["a2"]
+    assert features["a2"]["right_neighbor"] == ["a"]
 
 
 # --- the Stage 6 reachability page ---------------------------------------------------------
@@ -438,13 +539,19 @@ def _payload(html: str) -> dict[str, Any]:
     return json.loads(html[start:end].replace("<\\/", "</"))
 
 
-def _reached_in_the_browsers_search(payload: dict[str, Any], start: str) -> set[str]:
+def _reached_in_the_browsers_search(
+    payload: dict[str, Any], start: str, *, allow_change: bool
+) -> set[str]:
     """The page's breadth-first search, rewritten line for line in Python.
 
     There is no JavaScript test runner here, so the algorithm is pinned by keeping a twin
-    of it beside the real thing and holding both to the number the scenario reports.
+    of it beside the real thing and holding both to the numbers the scenario reports -
+    with lane changes and without, since the page offers both.
     """
-    graph = {lane["id"]: lane["exits"] for lane in payload["lanes"]}
+    graph = {
+        lane["id"]: lane["exits"] + (lane["sideways"] if allow_change else [])
+        for lane in payload["lanes"]
+    }
     seen = {start}
     frontier = [start]
     while frontier:
@@ -458,34 +565,51 @@ def _reached_in_the_browsers_search(payload: dict[str, Any], start: str) -> set[
     return seen - {start}
 
 
+def _rendered(model: PreliminaryLaneModel) -> tuple[dict[str, Any], dict[str, Any]]:
+    neighbours = _lane_neighbours(model)
+    moves = _lane_change_moves(model)
+    routing = _reachability(neighbours, moves)
+    html = render_reachability_html(
+        model=model, neighbours=neighbours, moves=moves, routing=routing
+    )
+    return _payload(html), routing
+
+
 def test_the_page_carries_the_same_graph_the_scenario_does() -> None:
     """The page must not be able to draw a network the dataset does not contain.
 
     `convert_scenario` resolves the references once and hands the one result to both, so
     this is really a check that nothing re-derives them along the way.
     """
-    model = _model()
-    neighbours = _lane_neighbours(model)
-    payload = _payload(
-        render_reachability_html(
-            model=model, neighbours=neighbours, routing=_reachability(neighbours)
-        )
-    )
+    model = _side_by_side()
+    payload, _ = _rendered(model)
     assert {lane["id"]: lane["exits"] for lane in payload["lanes"]} == {
-        lane_id: exits for lane_id, (_, exits) in neighbours.items()
+        lane_id: exits for lane_id, (_, exits) in _lane_neighbours(model).items()
     }
+    assert {lane["id"]: lane["sideways"] for lane in payload["lanes"]} == _lane_change_moves(model)
 
 
 def test_the_pages_search_finds_what_the_scenarios_routing_metadata_claims() -> None:
-    model = _model()
-    neighbours = _lane_neighbours(model)
-    routing = _reachability(neighbours)
-    payload = _payload(
-        render_reachability_html(model=model, neighbours=neighbours, routing=routing)
-    )
+    payload, routing = _rendered(_side_by_side())
     assert payload["default_lane"] == routing["best_start_lane_id"]
-    reached = _reached_in_the_browsers_search(payload, routing["best_start_lane_id"])
-    assert len(reached) == routing["best_start_reaches"]
+    start = routing["best_start_lane_id"]
+    assert len(_reached_in_the_browsers_search(payload, start, allow_change=True)) == (
+        routing["best_start_reaches"]
+    )
+
+
+def test_the_page_can_reproduce_the_junction_only_view_exactly() -> None:
+    """The checkbox is how a reader checks the lane-change claim instead of taking it.
+
+    So the page with lane changes off must land on the number the metadata records for
+    that case, not merely on a smaller one.
+    """
+    payload, routing = _rendered(_side_by_side())
+    strict = routing["without_lane_changes"]
+    reached = _reached_in_the_browsers_search(
+        payload, strict["best_start_lane_id"], allow_change=False
+    )
+    assert len(reached) == strict["best_start_reaches"]
 
 
 def test_the_page_is_written_and_recorded_beside_the_dataset(tmp_path: Path) -> None:
@@ -511,12 +635,7 @@ def test_the_page_is_written_and_recorded_beside_the_dataset(tmp_path: Path) -> 
 def test_every_lane_is_drawn_with_a_line_and_a_way_to_name_it() -> None:
     """A lane the page cannot draw is a lane a reader cannot click, and so cannot start on."""
     model = _model()
-    neighbours = _lane_neighbours(model)
-    payload = _payload(
-        render_reachability_html(
-            model=model, neighbours=neighbours, routing=_reachability(neighbours)
-        )
-    )
+    payload, _ = _rendered(model)
     assert len(payload["lanes"]) == len(model.lanes)
     for lane in payload["lanes"]:
         assert len(lane["line"]) >= 2
