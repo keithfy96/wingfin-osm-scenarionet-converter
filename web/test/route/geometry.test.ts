@@ -70,20 +70,65 @@ describe("cut", () => {
   });
 });
 
+/** Metres north and east of the origin, as [lat, lon]. Equatorial, so the two axes match. */
+const PER_METRE = 1 / ((6_371_000 * Math.PI) / 180);
+function at(north: number, east: number): [number, number] {
+  return [north * PER_METRE, east * PER_METRE];
+}
+
+/** `n` runs north into `e` running east: a 90° turn, the lane ends 4.2 m apart.
+ *
+ * Mirrors `_corner` in `tests/unit/test_ego_route.py`. Both sides drive the same shape on
+ * purpose - the page must never offer a route the converter would refuse.
+ */
+const CORNER: RouteLane[] = [
+  { ...lane("n", 0, 0), line: [at(0, 0), at(60, 0)], exits: ["e"], sideways: [] },
+  { ...lane("e", 0, 0), line: [at(63, 3), at(63, 63)], exits: [], sideways: [] },
+];
+const CORNER_CROSSING: RouteConnector[] = [{ from: "n", to: "e", line: [at(60, 0), at(63, 3)] }];
+
+function headings(line: [number, number][]): number[] {
+  const out: number[] = [];
+  for (let i = 1; i < line.length; i += 1) {
+    out.push((Math.atan2(line[i]![0] - line[i - 1]![0], line[i]![1] - line[i - 1]![1]) * 180) / Math.PI);
+  }
+  return out;
+}
+
+function worstTurnDeg(line: [number, number][]): number {
+  const h = headings(line);
+  let worst = 0;
+  for (let i = 1; i < h.length; i += 1) {
+    worst = Math.max(worst, Math.abs((((h[i]! - h[i - 1]! + 180) % 360) + 360) % 360 - 180));
+  }
+  return worst;
+}
+
 describe("routeGeometry", () => {
   const graph = new RouteGraph(LANES);
+  const corner = new RouteGraph(CORNER);
 
   it("includes the first lane, which an earlier estimate left out entirely", () => {
-    const g = routeGeometry(graph, ["a", "b"], [], []);
+    const g = routeGeometry(graph, ["a", "b"], [], CONNECTORS);
     expect(g.distanceM).toBeGreaterThan(lineLength(LANES[0]!.line));
   });
 
-  it("follows the connector across a junction instead of cutting the corner", () => {
-    const withCrossing = routeGeometry(graph, ["a", "b"], [], CONNECTORS);
-    const without = routeGeometry(graph, ["a", "b"], [], []);
-    expect(withCrossing.distanceM).toBeGreaterThan(without.distanceM);
-    // The connector's apex is on the drawn line, so the page shows the turn being taken.
-    expect(withCrossing.line).toContainEqual([0.0001, 0.00105]);
+  it("builds a turn that leaves and arrives along the lanes rather than at an angle to them", () => {
+    // The connector is a marker for the inspection map, not a driving line: its curve is
+    // bent around the OSM node and tangent to neither lane, so splicing it in put a corner
+    // at each end of every junction. Measured on `junction-1`, 82° at the median.
+    const g = routeGeometry(corner, ["n", "e"], [], CORNER_CROSSING);
+    const h = headings(g.line);
+    // `headings` measures anticlockwise from due east, so north is +90 and east is 0.
+    expect(h[0]).toBeCloseTo(90, 4); // along lane n
+    expect(h[h.length - 1]).toBeCloseTo(0, 4); // along lane e
+    expect(worstTurnDeg(g.line)).toBeLessThan(10);
+  });
+
+  it("refuses a gap too wide for a junction to span", () => {
+    // Without a connector saying the step crosses a junction, the same 11 m is a hole in a
+    // road rather than a crossroads, and a car would drive straight over it.
+    expect(() => routeGeometry(graph, ["a", "b"], [], [])).toThrow(/gap before lane b/);
   });
 
   it("spans a lane change over one lane's worth of road, not two", () => {
@@ -98,7 +143,10 @@ describe("routeGeometry", () => {
   it("reports the change as its own piece, so it can be drawn as one", () => {
     const g = routeGeometry(graph, ["a2", "a"], [1], []);
     expect(g.changes).toHaveLength(1);
-    expect(g.changes[0]).toHaveLength(2);
+    // Drawn as a curve rather than the bare diagonal it used to be: crammed into two points
+    // the manoeuvre is a corner at each end, and the recorded car has to crawl through it.
+    expect(g.changes[0]!.length).toBeGreaterThan(8);
+    expect(worstTurnDeg(g.line)).toBeLessThan(10);
   });
 
   it("counts the change itself, which summing the pieces alone would miss", () => {

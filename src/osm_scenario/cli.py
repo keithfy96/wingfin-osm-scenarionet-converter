@@ -252,8 +252,9 @@ def convert(
     )
     for route in report["routes"]:
         typer.echo(
-            f"  route {route['name']}: {route['distance_m']:.0f} m, "
-            f"{route['duration_s']:.0f} s, {route['junction_movements']} junction "
+            f"  route {route['name']}: {route['distance_m']:.0f} m in "
+            f"{route['duration_s']:.0f} s, {route['slowest_kph']:.0f}-"
+            f"{route['speed_kph']:.0f} km/h, {route['junction_movements']} junction "
             f"movement(s), {route['lane_changes']} lane change(s)"
         )
     if not report["routes"]:

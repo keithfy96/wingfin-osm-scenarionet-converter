@@ -207,6 +207,33 @@ def main() -> int:
                 )
             )
 
+        # What the recorded car is actually asked to do. `ReplayEgoCarPolicy` sets both
+        # position and heading from these arrays every step, so a 180 degree flip in them is
+        # a car that visibly spins on the spot - which is what a junction marker spliced in
+        # as a driving line produced, at 13 steps of 575 on one route. Nothing else looks:
+        # `sanity_check` checks shapes and lengths, never whether the drive is drivable.
+        sdc_id = scenario["metadata"].get("sdc_id")
+        if sdc_id is not None and sdc_id in scenario["tracks"]:
+            state = scenario["tracks"][sdc_id]["state"]
+            heading = numpy.asarray(state["heading"]).reshape(-1)
+            speed = numpy.linalg.norm(numpy.asarray(state["velocity"])[:, :2], axis=1)
+            turn = numpy.abs((numpy.diff(heading) + numpy.pi) % (2 * numpy.pi) - numpy.pi)
+            snaps = int((numpy.degrees(turn) > 30).sum())
+            lateral = float((turn / 0.1 * speed[:-1]).max()) if len(turn) else 0.0
+            worst_turn = float(numpy.degrees(turn).max()) if len(turn) else 0.0
+            slowest, fastest = speed.min() * 3.6, speed.max() * 3.6
+            print(
+                f"drivability  worst turn {worst_turn:.1f} deg per 0.1 s step, {snaps} "
+                f"step(s) over 30 deg; speed {slowest:.0f}-{fastest:.0f} km/h; "
+                f"peak lateral {lateral:.1f} m/s^2"
+            )
+            if snaps:
+                print(
+                    f"             FAILED: the recorded car turns more than 30 deg in a "
+                    f"single 0.1 s step {snaps} time(s). Replayed, it spins on the spot."
+                )
+                failures += 1
+
         try:
             ScenarioDescription.sanity_check(scenario)
             print("sanity_check PASS")
