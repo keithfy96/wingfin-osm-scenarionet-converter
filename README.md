@@ -388,9 +388,21 @@ are reported as boundary facts.
 ### What Stage 6 writes
 
 `map_features` is a flat dict: one `LANE_SURFACE_STREET` per lane (centreline
-polyline, polygon, speed, width, entry/exit, neighbours) and one
-`ROAD_EDGE_BOUNDARY` per lane boundary. Connector IDs in the entry/exit lists are
-resolved to the lane on the other side.
+polyline, polygon, speed, width, entry/exit, neighbours) plus one feature per lane
+boundary. Connector IDs in the entry/exit lists are resolved to the lane on the other
+side.
+
+A boundary is written `ROAD_LINE_BROKEN_SINGLE_WHITE` — a dashed divider — exactly
+where the model records a lane change across it, and `ROAD_EDGE_BOUNDARY` everywhere
+else, so a kerb and a centreline can never come out dashed. This is not decoration:
+MetaDrive names the line's collision body after its type, so crossing a solid line
+sets `on_white_continuous_line` and crossing a broken one sets `on_broken_line`, and
+`ScenarioEnv._is_out_of_road` reads the first. The style is derived from lane-change
+permissions rather than surveyed — OSM carries no marking data — and
+`metadata.lane_markings.source` says so. Where two lanes each carry their own copy of
+the divider between them and the copies are the same line to within 5 cm, only one is
+written; two copies would dash out of phase and render as a solid line. On
+`junction-1`: 285 lanes, 93 dividers, 392 edges, 85 second copies merged.
 
 With `--routes`, each route is re-planned in Python (Dijkstra over the lane graph,
 splicing connector centrelines for junction hops), resampled at 10 Hz, and written as

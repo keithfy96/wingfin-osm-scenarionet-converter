@@ -14,11 +14,18 @@ Two things about this stage are worth knowing before reading the code.
   swap is complete.
 
 * **A lane change is a way to get somewhere.** `entry_lanes` / `exit_lanes` say where a
-  lane physically leads, and a lane change is not that - so the map features are untouched
-  by this. But the *reachability* figures in `metadata.routing` count moving across into a
+  lane physically leads, and a lane change is not that - so those two lists are untouched by
+  it. But the *reachability* figures in `metadata.routing` count moving across into a
   side-by-side lane, because OSM says a change is permitted unless `change` / `change:lanes`
   forbids it and `junction-1` carries no such tag. Counting junction movements alone said
   the best lane reached 79 of 285; counting what the source actually permits says 190.
+
+* **The lane lines are that same decision, drawn.** A boundary a lane change crosses is
+  written broken and every other boundary stays a road edge, so the road cannot show a solid
+  line across a movement `metadata.routing.lane_change_edges` advertises. MetaDrive names the
+  line's ghost body after its type, so this decides whether crossing sets
+  `on_broken_line` or `on_white_continuous_line` - it is not a question of appearance. See
+  `_divider_boundaries`.
 
 * **ScenarioNet is deliberately not a dependency, but the schema is still pinned.** The
   scenario dict is built by hand against MetaDrive's `ScenarioDescription`.
@@ -134,7 +141,25 @@ def _portable_pickle(payload: Any) -> bytes:
 
 
 _LANE_TYPE = "LANE_SURFACE_STREET"
+
+# The kerb, or the centreline: the edge of what a car may move into sideways. `unknown` is the
+# `boundary_type` on every boundary in the lane model, because the source carries no marking
+# survey, so the generic road edge stays the strongest honest claim for these.
 _BOUNDARY_TYPE = "ROAD_EDGE_BOUNDARY"
+
+# The line between two side-by-side lanes a car may move between. Not a cosmetic choice:
+# `BaseBlock._construct_lane_line_segment` names the ghost body after the line type, so on
+# contact `base_vehicle` sets `on_white_continuous_line` for a solid line and `on_broken_line`
+# for a broken one - and `ScenarioEnv._is_out_of_road` reads the first. Writing every divider
+# solid told the simulator that each of the lane changes `metadata.routing.lane_change_edges`
+# advertises is a violation. See `_divider_boundaries` for how one is picked out.
+_DIVIDER_TYPE = "ROAD_LINE_BROKEN_SINGLE_WHITE"
+
+# Two lanes either side of a divider each carry their own copy of it. This is the distance
+# below which those two copies are one line rather than two - the same threshold the rest of
+# the pipeline uses for "these two pieces of geometry are the same place".
+_SAME_LINE_M = 0.05
+
 _FORMAT_VERSION = "1.0"
 
 _DATASET_NAME = "osm-scenario"
@@ -402,14 +427,87 @@ def _lane_feature(
     }
 
 
+def _same_line(left: Any, right: Any) -> bool:
+    """Whether two boundaries are the same line, drawn from either end."""
+    if len(left) != len(right) or not len(left):
+        return False
+    first = _polyline(left)
+    second = _polyline(right)
+    apart = min(np.abs(first - second).max(), np.abs(first - second[::-1]).max())
+    return bool(apart <= _SAME_LINE_M)
+
+
+def _divider_boundaries(
+    model: PreliminaryLaneModel, moves: Mapping[str, list[str]]
+) -> tuple[set[str], set[str]]:
+    """Which boundaries a lane change crosses, and which of those are a second copy.
+
+    The line style is not a second opinion about where a lane change is allowed - it is
+    `_lane_change_moves` drawn. A boundary is broken exactly where that function records a
+    move across it, so a `change` ban honoured there would take the dashes with it rather
+    than leave the road contradicting `metadata.routing.lane_change_edges`. Nothing here
+    reads geometry to decide: a neighbour is assigned positionally within one direction's
+    lane list for one way (`generation.py`), which is why the centreline and the kerb cannot
+    come out dashed - opposing directions are never each other's neighbours, and there is no
+    lane beyond a kerb to be a neighbour at all.
+
+    Both lanes either side of a divider carry their own copy of it, and in `junction-1` 85 of
+    the 89 pairs are the same line to within a centimetre. Left as two features they dash out
+    of phase - each is resampled from its own first point - and fill each other's gaps, which
+    renders as a solid line and looks exactly like this change having done nothing. The
+    remaining 4 pairs stand up to 0.31 m apart, are genuinely two lines, and both are kept.
+    """
+    lanes = {lane.identifier: lane for lane in model.lanes}
+    sides = {
+        lane.identifier: {boundary.side: boundary for boundary in lane.boundaries}
+        for lane in model.lanes
+    }
+
+    dividers: set[str] = set()
+    superseded: set[str] = set()
+    for lane in model.lanes:
+        crossable = set(moves.get(lane.identifier, ()))
+        for side, neighbour in (("left", lane.left_neighbor), ("right", lane.right_neighbor)):
+            boundary = sides[lane.identifier].get(side)
+            if boundary is None or neighbour is None or neighbour not in crossable:
+                continue
+            dividers.add(boundary.identifier)
+
+            # Which of the neighbour's two boundaries faces back at this lane. Read from the
+            # neighbour rather than assumed to be the opposite side, because
+            # `_lane_change_moves` tolerates a one-way link and this must not invent the
+            # other half of one.
+            other = lanes[neighbour]
+            facing = next(
+                (
+                    name
+                    for name, back in (
+                        ("left", other.left_neighbor),
+                        ("right", other.right_neighbor),
+                    )
+                    if back == lane.identifier
+                ),
+                None,
+            )
+            twin = sides[neighbour].get(facing) if facing is not None else None
+            if twin is not None and _same_line(boundary.points, twin.points):
+                # Drop the later id rather than this lane's, so which copy survives does not
+                # depend on the order `model.lanes` happens to be in.
+                superseded.add(max(boundary.identifier, twin.identifier))
+    return dividers, superseded
+
+
 def _map_features(
-    model: PreliminaryLaneModel, neighbours: Mapping[str, tuple[list[str], list[str]]]
+    model: PreliminaryLaneModel,
+    neighbours: Mapping[str, tuple[list[str], list[str]]],
+    moves: Mapping[str, list[str]],
 ) -> dict[str, dict[str, Any]]:
     features: dict[str, dict[str, Any]] = {}
     for lane in model.lanes:
         entries, exits = neighbours[lane.identifier]
         features[lane.identifier] = _lane_feature(lane, entries, exits)
 
+    dividers, superseded = _divider_boundaries(model, moves)
     for lane in model.lanes:
         for boundary in lane.boundaries:
             if boundary.identifier in features:
@@ -417,11 +515,12 @@ def _map_features(
                     f"boundary {boundary.identifier} on lane {lane.identifier} shares an "
                     "id with another map feature"
                 )
+            if boundary.identifier in superseded:
+                continue
             features[boundary.identifier] = {
-                # `boundary_type` is `unknown` throughout the lane model - the source has
-                # no marking survey - so the generic road edge is the strongest honest
-                # claim. Naming a line style here would invent evidence.
-                "type": _BOUNDARY_TYPE,
+                "type": (
+                    _DIVIDER_TYPE if boundary.identifier in dividers else _BOUNDARY_TYPE
+                ),
                 "polyline": _polyline(boundary.points),
                 "side": boundary.side,
                 "lane_id": lane.identifier,
@@ -450,7 +549,7 @@ def _scenario(
     """
     neighbours = _lane_neighbours(model)
     moves = _lane_change_moves(model)
-    features = _map_features(model, neighbours)
+    features = _map_features(model, neighbours, moves)
 
     dangling = {
         target
@@ -509,6 +608,24 @@ def _scenario(
                 # `junction-1` the first is 1 and it is at the edge of the extract.
                 "signalled_lanes": len(plan.lanes) if plan else 0,
                 "phase_groups": len(plan.groups) if plan else 0,
+            },
+            # Which lines were drawn broken, and on what authority. The same reason
+            # `signals` carries `source` - a reader has to be able to tell a surveyed
+            # marking from one this converter worked out. OSM supplies neither: the extract
+            # behind `junction-1` carries no `lane_markings`, `change`, `overtaking` or
+            # `divider` tag of any kind, so `_divider_boundaries` derives the style from
+            # where a lane change is permitted and says so here. `merged` counts the second
+            # copies of a shared divider that were dropped rather than drawn twice.
+            "lane_markings": {
+                "source": "derived-from-lane-change-permissions",
+                "dividers": sum(
+                    1 for item in features.values() if item["type"] == _DIVIDER_TYPE
+                ),
+                "edges": sum(
+                    1 for item in features.values() if item["type"] == _BOUNDARY_TYPE
+                ),
+                "merged": sum(len(lane.boundaries) for lane in model.lanes)
+                - (len(features) - len(model.lanes)),
             },
             # Present only when `--signals` was given, and always marked `synthesised`.
             # OSM records that a signal exists and carries no cycle, split or offset, so a

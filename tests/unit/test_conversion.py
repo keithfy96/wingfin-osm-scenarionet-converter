@@ -160,6 +160,49 @@ def _side_by_side(**update: Any) -> PreliminaryLaneModel:
     return model.model_copy(update=update) if update else model
 
 
+def _line(y: float, x0: float = 0.0, x1: float = 50.0) -> list[Point2D]:
+    return [Point2D(x=x0, y=y), Point2D(x=x1, y=y)]
+
+
+def _sharing_a_divider(shared_y: float = 2.0) -> PreliminaryLaneModel:
+    """`_side_by_side()` with boundaries, so the line between the two lanes has a subject.
+
+    Each lane carries its own copy of that line, which is what the real generator produces.
+    `shared_y` moves `a2`'s copy off `a`'s: at the default they are one line drawn twice, and
+    further apart they are two lines that both have to survive.
+    """
+    base = _model()
+    a = _lane(
+        "a",
+        exit_lanes=["c"],
+        lane_index=0,
+        lane_count=2,
+        left_neighbor="a2",
+        boundaries=[
+            LaneBoundary(identifier="a-left", side="left", points=_line(2.0)),
+            LaneBoundary(identifier="a-right", side="right", points=_line(-2.0)),
+        ],
+    )
+    a2 = _lane(
+        "a2",
+        lane_index=1,
+        lane_count=2,
+        right_neighbor="a",
+        boundaries=[
+            LaneBoundary(identifier="a2-right", side="right", points=_line(shared_y)),
+            LaneBoundary(identifier="a2-left", side="left", points=_line(6.0)),
+        ],
+    )
+    return PreliminaryLaneModel.model_validate(
+        {
+            "metadata": _METADATA,
+            "lanes": [a.model_dump(), a2.model_dump()]
+            + [lane.model_dump() for lane in base.lanes if lane.identifier != "a"],
+            "connectors": [connector.model_dump() for connector in base.connectors],
+        }
+    )
+
+
 def _built(model: PreliminaryLaneModel, plan: SignalPlan | None = None) -> dict[str, Any]:
     scenario, _, _, _ = _scenario(
         model=model,
@@ -415,6 +458,47 @@ def test_boundaries_become_their_own_features() -> None:
     assert features["edge-1"]["polyline"].shape == (2, 2)
 
 
+def test_a_boundary_a_lane_change_crosses_is_drawn_broken() -> None:
+    """The line style is `_lane_change_moves` drawn, not a second opinion about it.
+
+    MetaDrive names the line's ghost body after this type, so a solid line here would tell
+    the simulator that every move in `metadata.routing.lane_change_edges` is a violation.
+    """
+    features = _built(_sharing_a_divider())["map_features"]
+    assert features["a-left"]["type"] == "ROAD_LINE_BROKEN_SINGLE_WHITE"
+    # Nothing lies beyond these two, so nothing may cross them. A kerb and a centreline
+    # cannot come out dashed however the rest of the rule behaves.
+    assert features["a-right"]["type"] == "ROAD_EDGE_BOUNDARY"
+    assert features["a2-left"]["type"] == "ROAD_EDGE_BOUNDARY"
+
+
+def test_the_second_copy_of_a_shared_divider_is_not_written() -> None:
+    """Both lanes carry the same line, and two copies of a broken line render as a solid one.
+
+    Each is resampled from its own first point, so the dashes land out of phase and fill each
+    other's gaps - the failure looks exactly like the broken type not having been applied.
+    """
+    features = _built(_sharing_a_divider())["map_features"]
+    assert "a-left" in features
+    assert "a2-right" not in features
+
+
+def test_two_copies_that_are_not_the_same_line_are_both_kept() -> None:
+    """0.4 m apart is two lines, not one drawn twice, and dropping one would move the paint."""
+    features = _built(_sharing_a_divider(shared_y=2.4))["map_features"]
+    assert features["a-left"]["type"] == "ROAD_LINE_BROKEN_SINGLE_WHITE"
+    assert features["a2-right"]["type"] == "ROAD_LINE_BROKEN_SINGLE_WHITE"
+
+
+def test_lane_markings_say_the_style_was_derived_rather_than_surveyed() -> None:
+    """OSM carries no marking survey, so the dataset has to admit where the style came from."""
+    markings = _built(_sharing_a_divider())["metadata"]["lane_markings"]
+    assert markings["source"] == "derived-from-lane-change-permissions"
+    assert markings["dividers"] == 1
+    assert markings["edges"] == 2
+    assert markings["merged"] == 1
+
+
 def test_a_boundary_sharing_a_lane_id_is_refused() -> None:
     boundary = LaneBoundary(identifier="b", side="left", points=_straight(0.0, 50.0))
     model = _model(lanes=[*_model().lanes[:2], _lane("d", boundaries=[boundary])])
@@ -587,15 +671,23 @@ def test_our_feature_types_are_the_ones_metadrive_defines() -> None:
     _load_metadrive_schema()
     from metadrive.type import MetaDriveType
 
-    scenario = _built(_model(lanes=[_lane("a", boundaries=[
-        LaneBoundary(identifier="edge-1", side="left", points=_straight(0.0, 50.0))
-    ])]))
+    scenario = _built(_sharing_a_divider())
     types_used = {feature["type"] for feature in scenario["map_features"].values()}
-    assert types_used == {"LANE_SURFACE_STREET", "ROAD_EDGE_BOUNDARY"}
+    assert types_used == {
+        "LANE_SURFACE_STREET",
+        "ROAD_EDGE_BOUNDARY",
+        "ROAD_LINE_BROKEN_SINGLE_WHITE",
+    }
     assert MetaDriveType.is_lane("LANE_SURFACE_STREET")
     # `has_type` covers object types and never sees a map feature, so the boundary is
     # checked against the constant MetaDrive actually names it with.
     assert MetaDriveType.BOUNDARY_LINE == "ROAD_EDGE_BOUNDARY"
+    # The divider type has to satisfy `is_broken_line` specifically. `is_road_boundary_line`
+    # is routed to `_construct_continuous_line` by `ScenarioBlock` whatever else it is, so a
+    # near-miss here would draw solid and look like the feature had not been built.
+    assert MetaDriveType.LINE_BROKEN_SINGLE_WHITE == "ROAD_LINE_BROKEN_SINGLE_WHITE"
+    assert MetaDriveType.is_road_line("ROAD_LINE_BROKEN_SINGLE_WHITE")
+    assert MetaDriveType.is_broken_line("ROAD_LINE_BROKEN_SINGLE_WHITE")
 
 
 # --- readable by the numpy the reader has, not the one we have ----------------------------

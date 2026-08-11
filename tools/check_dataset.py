@@ -19,8 +19,19 @@ far the dataset got.
 from __future__ import annotations
 
 import argparse
+import collections
 import os
 import sys
+
+
+def _polyline_length(polyline) -> float:
+    """Metres along a polyline. Written out rather than imported: numpy is the only thing
+    this script may lean on, and it has to behave the same under numpy 1.24."""
+    total = 0.0
+    for index in range(len(polyline) - 1):
+        step = polyline[index + 1][:2] - polyline[index][:2]
+        total += float((step[0] ** 2 + step[1] ** 2) ** 0.5)
+    return total
 
 
 def main() -> int:
@@ -83,6 +94,35 @@ def main() -> int:
         print(
             "content      {} map features ({} lanes), {} tracks, length {}".format(
                 len(scenario["map_features"]), lanes, len(scenario["tracks"]), scenario["length"]
+            )
+        )
+
+        # A divider has to satisfy MetaDrive's `is_broken_line` to be drawn dashed, and a
+        # boundary type never does however it is spelled - `ScenarioBlock` sends every
+        # `is_road_boundary_line` to `_construct_continuous_line`. So a typo here does not
+        # fail, it silently draws solid, which is also what a car feels: the ghost body takes
+        # its name from the type and only a solid one sets `on_white_continuous_line`.
+        # A dash also needs the line to be over 4 m, or `resample_polyline` never runs on it.
+        markings = scenario["metadata"].get("lane_markings")
+        styles = collections.Counter(
+            feature.get("type")
+            for feature in scenario["map_features"].values()
+            if feature.get("type") != "LANE_SURFACE_STREET"
+        )
+        short = sum(
+            1
+            for feature in scenario["map_features"].values()
+            if feature.get("type") == "ROAD_LINE_BROKEN_SINGLE_WHITE"
+            and _polyline_length(feature["polyline"]) <= 4.0
+        )
+        print(
+            "markings     {}{}{}".format(
+                ", ".join(f"{count} {name}" for name, count in sorted(styles.items()))
+                or "no boundaries",
+                f" · source {markings['source']}, {markings['merged']} second copies merged"
+                if markings
+                else " · no lane_markings metadata",
+                f" · {short} divider(s) under 4 m, too short to dash" if short else "",
             )
         )
 
