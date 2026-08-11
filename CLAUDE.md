@@ -206,9 +206,14 @@ the file, and choosing it is Keith's, not a heuristic's:
 uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yaml \
   --routes workspaces/junction-1/routes/routes.json
 # 3. drive (MetaDrive's own venv)
-cd /home/keith/Desktop/work/wingfin/scenarionet
-.venv/bin/python -m scenarionet.sim -d <repo>/workspaces/junction-1/scenarionet --render 3D
+/home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
+  tools/drive.py workspaces/junction-1/scenarionet --render 3D
 ```
+
+**Use `tools/drive.py`, not `python -m scenarionet.sim`.** `sim.py` loads the same
+dataset and drives it correctly, but in 3D it shows a broken map, and none of the
+settings that fix that can be reached from it. See "Why 3D needs its own runner"
+below.
 
 **MetaDrive never reads `routes.json`.** It is an exchange file between the
 browser and our converter — a browser cannot write to disk — exactly as Stage 3
@@ -221,21 +226,55 @@ Without `--routes` the dataset stays map-only: `scenarionet.num`,
 `tools/check_dataset.py` all work; `scenarionet.sim` and `check_simulation` do
 not.
 
-Three things that bite here:
+Two more things that bite here:
 
-- **`ScenarioEnv` needs `map_region_size=2048`.** Its default of 1024 clips lanes
-  to ±512 m about the origin, and `centralize_to_ego_car_initial_position` makes
-  the *ego's start* the origin — so the reach is the distance from there to the
-  far end of the network, up to about 790 m in `junction-1`. `scenarionet.sim`
-  does not set it.
 - **`sim.py` loops to 1,000,000 scenarios** when `--scenario_index` is absent, so
   it ends with `AssertionError: Scenario Index ... out of range` after driving
   everything. That is their script running off the end, not a fault in the data.
+  `tools/drive.py` stops at the end of the dataset.
 - **The route builder previews the drive; Python re-derives it.** Both build the
   same geometry, and they agreed to within 3.5 m over 1.1 km on 40 real routes.
   If the two ever disagree the page offers drives the converter refuses, so
   `web/test/route/geometry.test.ts` and `tests/unit/test_ego_route.py` cover the
   same cases deliberately.
+
+### Why 3D needs its own runner
+
+2D is fine from any entry point. 3D through `scenarionet.sim` shows roads that stop
+and an ego that sinks into the ground and floats — **none of it a defect in the
+converted data**, all of it MetaDrive terrain defaults meeting a map shaped like a
+road network rather than like a Waymo clip. Three separate causes, each measured:
+
+- **`height_scale` (default 50) is the sinking and the flying.** `use_mesh_terrain`
+  is false by default, so the car drives on a flat collision plane at z≈0 while the
+  *visible* ground is a noise heightfield around it. `tools/drive.py` measures it:
+  at 50 the ground within 25 m of the drive reaches **+10.3 m** and 11% of it stands
+  above the road; at 1 it reaches **+0.2 m** and 0% does. Only the surroundings move
+  — the road is flattened either way. **0 is not allowed**: panda3d builds a singular
+  transform and dies with `Tried to invert singular LMatrix4`.
+- **The road-surface texture is often larger than the GPU accepts, and there is no
+  config key for it.** MetaDrive builds it at `map_region_size × 22` px square —
+  22528 at 1024, **45056 at 2048**. A GL context reports its own ceiling: 16384 on
+  an Intel iGPU, 32768 on a discrete card. Past it the texture cannot be uploaded,
+  and that is what "the roads stop" looks like. The 22 is hard-coded in
+  `TerrainProperty.get_semantic_map_pixel_per_meter`; `tools/drive.py` replaces that
+  classmethod at runtime — the only monkeypatch in the repo, and it rides the seam
+  `base_env.py:335` already uses for `map_region_size`. Nothing in the MetaDrive
+  checkout is edited.
+- **`map_region_size` sizes the terrain square, and 2048 is the wrong blanket
+  answer** — an earlier version of this file said to set it, which would demand a
+  45056 px texture no GPU can hold. The square is `map_region_size` metres centred
+  on the ego's start (`base_engine.py:386` hard-codes `center_p = [0, 0]`; the disk
+  loader passes `centralize=True`, `scenario_data_manager.py:76`), and outside it
+  there is no ground and no flattened road. So it must be *just* big enough:
+  `tools/drive.py` measures each scenario and picks the smallest power of two that
+  covers it, and `tools/check_dataset.py` reports the same number. `junction-1`'s
+  `main-route` reaches 449 m from its start, so 1024 is enough; another start lane
+  will not be.
+
+Run `tools/drive.py --render offscreen` to check any of this without a display —
+`--render none` builds no terrain at all (`Terrain.reset` guards the whole path on
+`self.render or use_mesh_terrain`), so it checks the drive and not the view.
 
 ### Conventions that bite
 

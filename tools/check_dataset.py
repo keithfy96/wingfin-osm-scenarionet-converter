@@ -86,6 +86,30 @@ def main() -> int:
             )
         )
 
+        # What 3D needs, and nothing else reports. MetaDrive builds one terrain square of
+        # `map_region_size` metres centred on the ego's start - `base_engine` hard-codes the
+        # centre at the origin and the loader shifts the scenario so the ego begins there -
+        # and outside that square there is no ground and no flattened road. The number that
+        # decides whether the whole map can be shown is the largest single-axis offset from
+        # the ego's start, because the region is a square and not a circle.
+        sdc_id = scenario["metadata"].get("sdc_id")
+        if sdc_id is not None and polylines:
+            origin = scenario["tracks"][sdc_id]["state"]["position"][0][:2]
+            reach = float(numpy.abs(numpy.concatenate(polylines)[:, :2] - origin).max())
+            region = 512
+            while region < 2 * reach and region < 4096:
+                region *= 2
+            verdict = (
+                "which scenarionet.sim's default of 1024 covers"
+                if region <= 1024
+                else "and scenarionet.sim's default of 1024 does NOT cover it; the far end of "
+                "the map will have no terrain"
+            )
+            print(
+                f"map region   the map reaches {reach:.0f} m from the ego's start, so 3D needs "
+                f"map_region_size={region}, {verdict}"
+            )
+
         route = scenario["metadata"].get("sdc_route")
         if route:
             print(
