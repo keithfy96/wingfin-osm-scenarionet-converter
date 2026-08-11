@@ -21,6 +21,7 @@ export interface LeafletLayer {
   /** Leaflet accepts a node, so popup content is built as DOM rather than HTML. */
   bindPopup?(content: () => HTMLElement, options?: Record<string, unknown>): LeafletLayer;
   openPopup?(): LeafletLayer;
+  remove?(): LeafletLayer;
 }
 
 export interface LeafletLayerGroup extends LeafletLayer {
@@ -39,6 +40,8 @@ export interface LeafletStatic {
   layerGroup(): LeafletLayerGroup;
   geoJSON(data?: unknown, options?: Record<string, unknown>): LeafletLayer;
   circleMarker(latlng: unknown, options?: Record<string, unknown>): LeafletLayer;
+  polyline(points: [number, number][], options?: Record<string, unknown>): LeafletLayer;
+  canvas(options?: Record<string, unknown>): LeafletLayer;
   latLngBounds(corners: [number, number][]): LatLngBoundsLike;
   control: {
     layers(

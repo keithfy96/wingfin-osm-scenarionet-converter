@@ -86,6 +86,21 @@ def main() -> int:
             )
         )
 
+        route = scenario["metadata"].get("sdc_route")
+        if route:
+            print(
+                "route        {}: {:.0f} m over {} lanes in {:.0f} s, {} junction "
+                "movement(s), {} lane change(s) - {}".format(
+                    route["name"],
+                    route["distance_m"],
+                    len(route["lanes"]),
+                    route["duration_s"],
+                    route["junction_movements"],
+                    route["lane_changes"],
+                    route["source"],
+                )
+            )
+
         try:
             ScenarioDescription.sanity_check(scenario)
             print("sanity_check PASS")

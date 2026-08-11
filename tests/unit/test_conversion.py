@@ -215,22 +215,27 @@ def test_conversion_refuses_a_model_edited_after_validation(tmp_path: Path) -> N
 
 def test_a_passing_workspace_converts_and_records_stage_6(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path, _model())
-    scenario_path, summary_path, mapping_path, report_path, _ = convert_scenario(
+    scenario_paths, summary_path, mapping_path, report_path, _ = convert_scenario(
         workspace=workspace, config=ConverterConfig(config_version=1)
     )
-    scenario = pickle.loads(scenario_path.read_bytes())
+    # Map-only: one scenario, because there are no routes to make more than one of.
+    assert len(scenario_paths) == 1
+    scenario = pickle.loads(scenario_paths[0].read_bytes())
     assert set(scenario["map_features"]) == {"a", "b", "d"}
 
     # Both index files key on the same computed filename, and it is the one MetaDrive will
     # accept - not a name we found readable.
     name = scenario_file_name(scenario["id"])
-    assert scenario_path.name == name
+    assert scenario_paths[0].name == name
     assert pickle.loads(summary_path.read_bytes()) == {name: scenario["metadata"]}
     assert pickle.loads(mapping_path.read_bytes()) == {name: ""}
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["map_features"] == 3
-    assert report["scenario_file"] == name
+    assert report["scenario_files"] == [name]
+    # Empty rather than absent: a map-only dataset is one MetaDrive can check and cannot
+    # drive, and the report is where that difference is stated.
+    assert report["routes"] == []
     manifest = json.loads((workspace / "source" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["stage_6"]["status"] == "converted"
     assert manifest["stage_6"]["scenario_id"] == scenario["id"]
@@ -409,10 +414,10 @@ def test_the_scenario_passes_metadrives_own_sanity_check(tmp_path: Path) -> None
     """
     schema = _load_metadrive_schema()
     workspace = _workspace(tmp_path, _model())
-    scenario_path, _, _, _, _ = convert_scenario(
+    scenario_paths, _, _, _, _ = convert_scenario(
         workspace=workspace, config=ConverterConfig(config_version=1)
     )
-    schema.sanity_check(pickle.loads(scenario_path.read_bytes()))
+    schema.sanity_check(pickle.loads(scenario_paths[0].read_bytes()))
 
 
 @pytest.mark.skipif(not METADRIVE_SRC.is_dir(), reason="no MetaDrive checkout on this machine")
@@ -442,10 +447,10 @@ def test_our_feature_types_are_the_ones_metadrive_defines() -> None:
 
 def _pickled(tmp_path: Path) -> bytes:
     workspace = _workspace(tmp_path, _model())
-    scenario_path, _, _, _, _ = convert_scenario(
+    scenario_paths, _, _, _, _ = convert_scenario(
         workspace=workspace, config=ConverterConfig(config_version=1)
     )
-    return scenario_path.read_bytes()
+    return scenario_paths[0].read_bytes()
 
 
 def _modules_named_in(payload: bytes) -> set[str]:
@@ -674,19 +679,26 @@ def test_the_page_can_reproduce_the_junction_only_view_exactly() -> None:
     assert len(reached) == strict["best_start_reaches"]
 
 
-def test_the_page_is_written_and_recorded_beside_the_dataset(tmp_path: Path) -> None:
+def test_both_pages_are_written_and_recorded_beside_the_dataset(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path, _model())
-    *_, report_path, html_path = convert_scenario(
+    *_, report_path, (html_path, builder_path) = convert_scenario(
         workspace=workspace, config=ConverterConfig(config_version=1)
     )
     assert html_path == workspace / "inspection" / "stage-6-reachability.html"
+    # Written even for a map-only dataset, because it is how a map-only dataset stops being
+    # map-only: there is nowhere else to pick the routes that make it drivable.
+    assert builder_path == workspace / "inspection" / "stage-6-route-builder.html"
     # In `inspection/`, not in `scenarionet/`: MetaDrive reads that directory and it must
     # hold the dataset and nothing else.
-    assert not (workspace / "scenarionet" / html_path.name).exists()
+    for path in (html_path, builder_path):
+        assert not (workspace / "scenarionet" / path.name).exists()
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["artifacts"]["reachability_html"]["path"] == (
         "inspection/stage-6-reachability.html"
+    )
+    assert report["artifacts"]["route_builder_html"]["path"] == (
+        "inspection/stage-6-route-builder.html"
     )
     manifest = json.loads((workspace / "source" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["stage_6"]["artifacts"]["reachability_html"] == (

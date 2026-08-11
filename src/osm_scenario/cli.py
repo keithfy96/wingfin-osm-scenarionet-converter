@@ -211,23 +211,49 @@ def convert(
         Path | None,
         typer.Option("--config", exists=True, dir_okay=False, help="Versioned YAML config."),
     ] = None,
+    routes_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--routes",
+            exists=True,
+            dir_okay=False,
+            help="routes.json from the Stage 6 route builder. Without it the dataset is "
+            "map-only, which MetaDrive can load and check but cannot drive.",
+        ),
+    ] = None,
 ) -> None:
-    """Convert WORKSPACE's validated lane model into a map-only ScenarioNet dataset."""
+    """Convert WORKSPACE's validated lane model into a ScenarioNet dataset."""
     try:
         config = (
             load_config(config_path)
             if config_path is not None
             else ConverterConfig(config_version=1)
         )
-        scenario_path, _, _, report_path, html_path = convert_scenario(
-            workspace=workspace, config=config
+        scenario_paths, _, _, report_path, html_paths = convert_scenario(
+            workspace=workspace, config=config, routes=routes_path
         )
     except (ConversionError, ValueError, KeyError) as error:
         typer.echo(f"Stage 6 failed: {error}", err=True)
         raise typer.Exit(code=1) from error
-    features = json.loads(report_path.read_text(encoding="utf-8"))["map_features"]
-    typer.echo(f"Stage 6 complete: {features} map features -> {scenario_path}")
-    typer.echo(f"Stage 6 reachability map: {html_path}")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    typer.echo(
+        f"Stage 6 complete: {report['map_features']} map features, "
+        f"{len(scenario_paths)} scenario(s) -> {scenario_paths[0].parent}"
+    )
+    for route in report["routes"]:
+        typer.echo(
+            f"  route {route['name']}: {route['distance_m']:.0f} m, "
+            f"{route['duration_s']:.0f} s, {route['junction_movements']} junction "
+            f"movement(s), {route['lane_changes']} lane change(s)"
+        )
+    if not report["routes"]:
+        typer.echo(
+            "  map-only: no ego route, so ScenarioEnv cannot reset. Draw routes in the "
+            "route builder and pass --routes to make it drivable."
+        )
+    reachability, builder = html_paths
+    typer.echo(f"Stage 6 reachability map: {reachability}")
+    typer.echo(f"Stage 6 route builder:    {builder}")
 
 
 if __name__ == "__main__":

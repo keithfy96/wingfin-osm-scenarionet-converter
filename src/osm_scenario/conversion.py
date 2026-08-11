@@ -35,6 +35,7 @@ import io
 import json
 import os
 import pickle
+import re
 import statistics
 import tempfile
 from collections.abc import Mapping
@@ -51,11 +52,34 @@ import numpy as np
 # manifest or every run reports a stale checksum.
 from osm_scenario.apply_review import ApplyReviewError, _read_json, _sha256
 from osm_scenario.config import ConverterConfig
+from osm_scenario.ego_route import (
+    TIME_STEP_S,
+    Route,
+    RouteError,
+    ego_track,
+    plan_route,
+    route_polyline,
+    route_summary,
+)
 from osm_scenario.lane_model import LaneFeature, PreliminaryLaneModel
 from osm_scenario.reachability_view import render_reachability_html
+from osm_scenario.route_builder_view import render_route_builder_html
 from osm_scenario.stage1b_data_audit import _write_text_atomic
 
 REPORT_VERSION = 1
+
+# The version of `routes.json` this converter reads. The route builder writes the same
+# constant, so a page and a CLI that have drifted apart say so instead of half working.
+ROUTES_VERSION = 1
+
+# Route names reach the scenario filename, which MetaDrive keys the whole dataset on and
+# accepts only when it starts `sd_`. Anything a filesystem or a URL would treat specially has
+# no business in it.
+_ROUTE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,39}")
+
+# The track key, the `object_id` inside it and `metadata.sdc_id` must all agree; MetaDrive
+# asserts the first two match and looks the car up by the third.
+_EGO_ID = "ego"
 
 SUMMARY_FILE = "dataset_summary.pkl"
 MAPPING_FILE = "dataset_mapping.pkl"
@@ -482,10 +506,120 @@ def _scenario(
     return scenario, routing, neighbours, moves
 
 
+def _read_routes(
+    path: Path, *, model: PreliminaryLaneModel, model_sha256: str
+) -> list[dict[str, str]]:
+    """The routes drawn in the route builder, refused unless they were drawn on this map.
+
+    A `routes.json` names two lane ids per route and nothing else. Lane ids are content
+    addressed, so a route drawn on one generation and applied to another does not fail
+    loudly - it either names lanes that no longer exist, or worse, names lanes that do exist
+    somewhere else entirely. The identity block is what makes that a refusal rather than a
+    silently different drive, and it is the same guard `apply-review` puts on a submission.
+    """
+    raw = _read(path, "route selection")
+    if not isinstance(raw, dict):
+        raise ConversionError(f"{path} is not a route selection")
+    version = raw.get("routes_version")
+    if version != ROUTES_VERSION:
+        raise ConversionError(
+            f"unsupported routes_version {version!r}; this converter writes and reads "
+            f"{ROUTES_VERSION}"
+        )
+
+    identity = raw.get("identity")
+    if not isinstance(identity, dict):
+        raise ConversionError(f"{path} has no identity block, so it cannot be checked")
+    expected = {
+        "generation_fingerprint": model.metadata.generation_fingerprint,
+        "reviewed_lane_model_sha256": model_sha256,
+    }
+    for key, value in expected.items():
+        if identity.get(key) != value:
+            raise ConversionError(
+                f"{path} was drawn on a different lane model ({key} does not match). "
+                "Re-open the route builder from this workspace and pick the routes again"
+            )
+
+    routes = raw.get("routes")
+    if not isinstance(routes, list) or not routes:
+        raise ConversionError(f"{path} contains no routes")
+
+    seen: set[str] = set()
+    out: list[dict[str, str]] = []
+    for position, entry in enumerate(routes):
+        if not isinstance(entry, dict):
+            raise ConversionError(f"route {position} in {path} is not an object")
+        name = entry.get("name")
+        if not isinstance(name, str) or not _ROUTE_NAME.fullmatch(name):
+            raise ConversionError(
+                f"route {position} in {path} has name {name!r}; a name must be 1-40 "
+                "characters of letters, digits or hyphens, because it goes into the "
+                "scenario filename MetaDrive keys the dataset on"
+            )
+        if name in seen:
+            raise ConversionError(
+                f"{path} uses the route name {name!r} twice, so the two would write to "
+                "the same scenario file"
+            )
+        seen.add(name)
+        for key in ("start_lane", "end_lane"):
+            if not isinstance(entry.get(key), str):
+                raise ConversionError(f"route {name!r} in {path} has no {key}")
+        out.append(
+            {
+                "name": name,
+                "start_lane": entry["start_lane"],
+                "end_lane": entry["end_lane"],
+            }
+        )
+    return out
+
+
+def _with_route(
+    base: dict[str, Any], *, route: Route, track: dict[str, Any]
+) -> dict[str, Any]:
+    """The map-only scenario, plus the car that turns it into a drive.
+
+    A shallow copy sharing `map_features`: every scenario in the dataset is the same map, and
+    each is pickled separately, so sharing the features costs nothing and guarantees the
+    routes cannot disagree about the road they are drawn on. `metadata` is rebuilt rather
+    than shared, because it is the part that differs.
+    """
+    steps = len(track["state"]["position"])
+    scenario_id = f"{base['id']}-{route.name}"
+    metadata = {
+        **base["metadata"],
+        "scenario_id": scenario_id,
+        # `sanity_check` reads `.shape` on this and asserts it matches `length`.
+        "ts": np.arange(steps, dtype=np.float64) * TIME_STEP_S,
+        "sdc_id": _EGO_ID,
+        # No longer true, and the field exists so a reader does not have to infer it.
+        "map_only": False,
+        "sdc_route": route_summary(route),
+    }
+    return {
+        **base,
+        "id": scenario_id,
+        "length": steps,
+        "tracks": {_EGO_ID: track},
+        "metadata": metadata,
+    }
+
+
 def convert_scenario(
-    *, workspace: Path, config: ConverterConfig
-) -> tuple[Path, Path, Path, Path, Path]:
-    """Convert WORKSPACE's validated lane model into a map-only ScenarioNet dataset.
+    *, workspace: Path, config: ConverterConfig, routes: Path | None = None
+) -> tuple[list[Path], Path, Path, Path, tuple[Path, Path]]:
+    """Convert WORKSPACE's validated lane model into a ScenarioNet dataset.
+
+    Without `routes` the result is map-only: every road, and nothing that moves. MetaDrive
+    can load and check that, but it cannot *run* it - `ScenarioEnv` builds its route from a
+    recorded ego car, and refuses to reset without one.
+
+    With `routes` - a `routes.json` from the Stage 6 route builder - the dataset holds one
+    scenario per route, all sharing the same map. That is the shape every ScenarioNet
+    dataset has: variety comes from having many scenarios, not from freedom within one, so
+    `num_scenarios=N` is what gives a policy different drives to learn across.
 
     `config` is accepted for symmetry with the other stage entry points; conversion is a
     faithful restatement of the reviewed model and has nothing left to configure.
@@ -503,17 +637,63 @@ def convert_scenario(
         model_sha256=model_sha256,
     )
 
+    selections = (
+        _read_routes(routes, model=model, model_sha256=model_sha256)
+        if routes is not None
+        else []
+    )
+    planned: list[Route] = []
+    scenarios: list[dict[str, Any]] = []
+    try:
+        for selection in selections:
+            route = plan_route(
+                model=model,
+                neighbours=neighbours,
+                moves=moves,
+                name=selection["name"],
+                start_lane=selection["start_lane"],
+                end_lane=selection["end_lane"],
+            )
+            polyline = route_polyline(
+                model=model, route_lanes=route.lanes, lane_changes=route.lane_changes
+            )
+            planned.append(route)
+            scenarios.append(
+                _with_route(scenario, route=route, track=ego_track(route=route, polyline=polyline))
+            )
+    except RouteError as error:
+        raise ConversionError(str(error)) from error
+    if not scenarios:
+        scenarios = [scenario]
+
     dataset_dir = workspace / "scenarionet"
-    file_name = scenario_file_name(scenario["id"])
-    scenario_path = dataset_dir / file_name
     summary_path = dataset_dir / SUMMARY_FILE
     mapping_path = dataset_dir / MAPPING_FILE
 
-    _write_bytes_atomic(scenario_path, _portable_pickle(scenario))
-    _write_bytes_atomic(summary_path, _portable_pickle({file_name: scenario["metadata"]}))
-    # An empty relative path means "beside the summary". Both index files key on the one
-    # `file_name` computed above, so the two cannot drift apart.
-    _write_bytes_atomic(mapping_path, _portable_pickle({file_name: ""}))
+    scenario_paths: list[Path] = []
+    summary: dict[str, Any] = {}
+    mapping: dict[str, str] = {}
+    for item in scenarios:
+        file_name = scenario_file_name(item["id"])
+        path = dataset_dir / file_name
+        _write_bytes_atomic(path, _portable_pickle(item))
+        scenario_paths.append(path)
+        summary[file_name] = item["metadata"]
+        # An empty relative path means "beside the summary". Both index files key on the
+        # same computed filename, so the two cannot drift apart.
+        mapping[file_name] = ""
+
+    # Scenario files from an earlier run with different route names would otherwise stay in
+    # the directory. `read_dataset_summary` reads the summary rather than the listing, so
+    # they would not be loaded - but they would still be a dataset directory holding files
+    # that are not in the dataset, which is exactly the state that makes a stale pickle look
+    # current.
+    for stale in sorted(dataset_dir.glob("sd_*.pkl")):
+        if stale not in scenario_paths:
+            stale.unlink()
+
+    _write_bytes_atomic(summary_path, _portable_pickle(summary))
+    _write_bytes_atomic(mapping_path, _portable_pickle(mapping))
 
     # Written after the pickles and from the same `neighbours`, so the page can only ever
     # describe a dataset that exists. It goes in `inspection/` beside the other stages'
@@ -527,12 +707,31 @@ def convert_scenario(
         ),
     )
 
+    # The route builder is written on every convert, including a map-only one - it is how a
+    # map-only dataset stops being map-only, so it has to exist before there are any routes.
+    builder_path = workspace / "inspection" / "stage-6-route-builder.html"
+    _write_text_atomic(
+        builder_path,
+        render_route_builder_html(
+            model=model,
+            neighbours=neighbours,
+            moves=moves,
+            workspace_name=workspace.name,
+            model_sha256=model_sha256,
+            routes_version=ROUTES_VERSION,
+        ),
+    )
+
     artifacts = {}
     for name, path in (
-        ("scenario", scenario_path),
         ("dataset_summary", summary_path),
         ("dataset_mapping", mapping_path),
         ("reachability_html", html_path),
+        ("route_builder_html", builder_path),
+        *(
+            (f"scenario:{item['id']}", path)
+            for item, path in zip(scenarios, scenario_paths, strict=True)
+        ),
     ):
         artifacts[name] = {
             "path": path.relative_to(workspace).as_posix(),
@@ -548,13 +747,17 @@ def convert_scenario(
         "inputs": {
             "reviewed_lane_model": "lane-model/reviewed.json",
             "reviewed_lane_model_sha256": model_sha256,
+            "routes": routes.name if routes is not None else None,
         },
         "converted": scenario["metadata"]["counts"],
         "map_features": len(scenario["map_features"]),
         "routing": routing,
-        # Named outside the pickle because it is the string every MetaDrive entry point
+        # Named outside the pickle because these are the strings every MetaDrive entry point
         # keys on, and the first thing to check when a load fails.
-        "scenario_file": file_name,
+        "scenario_files": [path.name for path in scenario_paths],
+        # Empty for a map-only dataset, which is the difference between one MetaDrive can
+        # check and one it can drive.
+        "routes": [route_summary(route) for route in planned],
         "artifacts": artifacts,
     }
 
@@ -567,6 +770,8 @@ def convert_scenario(
         "converted": report["converted"],
         "map_features": report["map_features"],
         "routing": routing,
+        "routes": report["routes"],
+        "scenario_files": report["scenario_files"],
         "source_lane_model": {"path": "lane-model/reviewed.json", "sha256": model_sha256},
         "artifacts": artifacts,
     }
@@ -574,4 +779,4 @@ def convert_scenario(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
 
-    return scenario_path, summary_path, mapping_path, report_path, html_path
+    return scenario_paths, summary_path, mapping_path, report_path, (html_path, builder_path)

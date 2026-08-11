@@ -26,17 +26,14 @@ that asserting it without letting anyone see both would be asking for trust.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from typing import Any
 
-from pyproj import Transformer
-
-# Private helper imported across modules on purpose, for the reason `validation_view`
-# gives: this is the exact projection every other stage page uses, and a Stage 6 copy
-# would be a second implementation to keep in step.
-from osm_scenario.comparison_view import _lonlat
 from osm_scenario.lane_model import PreliminaryLaneModel
+
+# Shared with the route builder rather than duplicated. Two Stage 6 pages that disagreed
+# about which lanes join would leave no way to tell which one was wrong.
+from osm_scenario.lane_payload import build_lane_payload, embed
 
 _TEMPLATE = """<!doctype html>
 <html lang="en">
@@ -300,19 +297,6 @@ select(start);
 """
 
 
-def _edge_name(source_edge: list[str]) -> str:
-    """The stretch of road a lane sits on, as the two OSM nodes it runs between.
-
-    `source_edge` is the OSMnx multigraph key - two node ids and a counter that separates
-    parallel edges between the same pair. The counter is 0 for all 285 lanes in
-    `junction-1`, so it is shown only when it is doing work; printed always it is noise on
-    every row of the lane list.
-    """
-    if len(source_edge) >= 3 and source_edge[2] != "0":
-        return f"{source_edge[0]} → {source_edge[1]} #{source_edge[2]}"
-    return f"{source_edge[0]} → {source_edge[1]}" if len(source_edge) >= 2 else "?"
-
-
 def _caveats(routing: dict[str, Any], lane_count: int) -> str:
     """The facts that stop the map being read as a better-connected network than it is."""
     strict = routing["without_lane_changes"]
@@ -364,60 +348,7 @@ def render_reachability_html(
     objects the scenario was built from, or the page and the dataset can disagree about
     the network.
     """
-    transformer = Transformer.from_crs(
-        model.metadata.coordinate_system_wkt, "EPSG:4326", always_xy=True
-    )
-
-    lanes: list[dict[str, Any]] = []
-    for lane in sorted(model.lanes, key=lambda item: item.identifier):
-        ways = list(lane.source_way_ids)
-        edge = _edge_name(lane.source_edge)
-        lanes.append(
-            {
-                "id": lane.identifier,
-                "ways": ways,
-                # `lane_index`/`lane_count` alone do not tell two segments of the same way
-                # apart - most of `junction-1` is idx0/1 - so the pair of OSM nodes the
-                # segment runs between is what actually identifies it on the page.
-                "short": f"idx{lane.lane_index}/{lane.lane_count} {lane.direction} · {edge}",
-                "label": (
-                    f"way {', '.join(ways)} · lane {lane.lane_index}/{lane.lane_count} · "
-                    f"{lane.direction} · between OSM nodes {edge}"
-                ),
-                "line": _lonlat(lane.centerline, transformer),
-                "exits": list(neighbours[lane.identifier][1]),
-                "sideways": list(moves.get(lane.identifier, ())),
-            }
-        )
-
-    way_counts: dict[str, int] = {}
-    for entry in lanes:
-        for way in entry["ways"]:
-            way_counts[way] = way_counts.get(way, 0) + 1
-    ways = [
-        {"id": way, "lanes": count}
-        for way, count in sorted(way_counts.items(), key=lambda item: (-item[1], item[0]))
-    ]
-
-    points = [point for entry in lanes for point in entry["line"]]
-    if points:
-        lats = [point[0] for point in points]
-        lons = [point[1] for point in points]
-        center = [(min(lats) + max(lats)) / 2, (min(lons) + max(lons)) / 2]
-        bounds = [[min(lats), min(lons)], [max(lats), max(lons)]]
-    else:
-        center, bounds = [0.0, 0.0], None
-
-    data = json.dumps(
-        {
-            "lanes": lanes,
-            "ways": ways,
-            "center": center,
-            "bounds": bounds,
-            "default_lane": routing["best_start_lane_id"],
-        },
-        separators=(",", ":"),
-    )
-    # A literal `</script>` inside the payload would end the block early.
-    data = data.replace("</", "<\\/")
+    payload = build_lane_payload(model=model, neighbours=neighbours, moves=moves)
+    data = embed({**payload, "default_lane": routing["best_start_lane_id"]})
+    lanes = payload["lanes"]
     return _TEMPLATE % {"data": data, "caveats": _caveats(routing, len(lanes))}

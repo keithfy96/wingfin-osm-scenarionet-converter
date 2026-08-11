@@ -191,26 +191,51 @@ keep the stream free of version-specific module names**; two tests in
 `test_conversion.py` pin it, one on the pickle stream and one on arrays still
 arriving as arrays rather than lists.
 
-What the map-only dataset supports today:
+### Making a dataset MetaDrive can drive
 
-| works now | needs an ego route first |
-| --- | --- |
-| `python -m scenarionet.num -d <path>` | `python -m scenarionet.sim -d <path>` |
-| `python -m scenarionet.check_existence -d <path>` — it passes `steps_to_run=0`, so it reads and runs `sanity_check` without a simulator | `python -m scenarionet.check_simulation` — the same verifier, but it boots `ScenarioEnv` |
-| `tools/check_dataset.py` | `ScenarioEnv(...).reset()` |
+**`ScenarioEnv` has no start-and-end setting.** It is wired to
+`TrajectoryNavigation`, whose whole input is a *recorded* car's positions, and
+`ScenarioMapManager.reset` calls `get_sdc_track()` unconditionally — with no ego
+car that is `KeyError('None')`, and no config skips it. So a route has to be in
+the file, and choosing it is Keith's, not a heuristic's:
 
-**`ScenarioEnv` cannot reset without an ego track**, and that is not a bug in our
-output. `ScenarioMapManager.reset` calls `update_route()` unconditionally, which
-calls `get_sdc_track()`; with no recorded ego car that raises `KeyError('None')`,
-and no config skips it — `no_map` does not. ScenarioEnv has no start/end setting
-at all: `TrajectoryNavigation` follows the *recorded* ego's own path. Giving the
-map a route means generating one, which is Keith's open decision.
+```bash
+# 1. pick routes: open inspection/stage-6-route-builder.html, click a start lane,
+#    click an end lane, name it, add it, download routes.json
+# 2. build
+uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yaml \
+  --routes workspaces/junction-1/routes/routes.json
+# 3. drive (MetaDrive's own venv)
+cd /home/keith/Desktop/work/wingfin/scenarionet
+.venv/bin/python -m scenarionet.sim -d <repo>/workspaces/junction-1/scenarionet --render 3D
+```
 
-Two things to carry into that work when it happens. The track must hold
-`position` (T,3), `heading`, `velocity`, `valid` and the size arrays, with
-`metadata.object_id` equal to the track key and `sdc_id` naming it. And
-`ScenarioEnv` needs `map_region_size=2048`: its default of 1024 clips lanes to
-±512 m about the origin, and `junction-1` reaches y = 581 m.
+**MetaDrive never reads `routes.json`.** It is an exchange file between the
+browser and our converter — a browser cannot write to disk — exactly as Stage 3
+downloads `review.json` for `apply-review --submission`. MetaDrive reads the
+pickles and nothing else, and the route inside them *is*
+`tracks["ego"]["state"]["position"]`.
+
+Without `--routes` the dataset stays map-only: `scenarionet.num`,
+`scenarionet.check_existence` (it passes `steps_to_run=0`, so no simulator) and
+`tools/check_dataset.py` all work; `scenarionet.sim` and `check_simulation` do
+not.
+
+Three things that bite here:
+
+- **`ScenarioEnv` needs `map_region_size=2048`.** Its default of 1024 clips lanes
+  to ±512 m about the origin, and `centralize_to_ego_car_initial_position` makes
+  the *ego's start* the origin — so the reach is the distance from there to the
+  far end of the network, up to about 790 m in `junction-1`. `scenarionet.sim`
+  does not set it.
+- **`sim.py` loops to 1,000,000 scenarios** when `--scenario_index` is absent, so
+  it ends with `AssertionError: Scenario Index ... out of range` after driving
+  everything. That is their script running off the end, not a fault in the data.
+- **The route builder previews the drive; Python re-derives it.** Both build the
+  same geometry, and they agreed to within 3.5 m over 1.1 km on 40 real routes.
+  If the two ever disagree the page offers drives the converter refuses, so
+  `web/test/route/geometry.test.ts` and `tests/unit/test_ego_route.py` cover the
+  same cases deliberately.
 
 ### Conventions that bite
 
