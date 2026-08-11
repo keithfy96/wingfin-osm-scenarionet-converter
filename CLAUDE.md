@@ -238,6 +238,66 @@ Two more things that bite here:
   `web/test/route/geometry.test.ts` and `tests/unit/test_ego_route.py` cover the
   same cases deliberately.
 
+### Traffic lights, and why the timing cannot come from OSM
+
+**MetaDrive has no traffic-light controller.** `ScenarioLightManager.after_step` does
+one thing — index `state["object_state"]` by `episode_step` and call `set_status` —
+and it is the only light manager in 0.4.3; procedurally generated maps carry no
+lights at all. A light in a dataset is therefore a **tape**: a colour spelled out for
+every 0.1 s step.
+
+**OSM supplies presence, never timing.** `highway=traffic_signals` carries no cycle,
+no split and no offset, so every number is chosen by a person in
+`inspection/stage-6-signal-builder.html` and the dataset marks the plan
+`synthesised` in `metadata.signals`. `junction-1` has exactly **one** signal node,
+`1927184932`, and it is at the edge of the extract — node 0 of way `1173001826`, in
+no other way, 0 connectors — so Stage 2 bound it to the three lanes it *releases*.
+The page draws it and never selects it.
+
+```bash
+# 1. place lights: open inspection/stage-6-signal-builder.html, add a phase group,
+#    click the lanes it stops, set green/amber/start, download signals.json
+uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yaml \
+  --routes workspaces/junction-1/routes/routes.json \
+  --signals workspaces/junction-1/signals/signals.json
+```
+
+Four things that bite:
+
+- **Signal timing must never go in `config/default.yaml`.** `configuration_checksum`
+  is an input to `generation_fingerprint` (`generation.py:2212`), so a field on
+  `ConverterConfig` invalidates the lane-model review at the next `generate-map`.
+  Same for the lane model schema. Timing is a `convert`-time file, like `--routes`.
+- **`stop_point` sits at the top level of a light entry, not inside `state`.**
+  Everything in `state` is length-checked against the scenario length, and
+  `_get_episode_light_data` reads an in-`state` position as the old Waymo `[T, 2]`
+  format. Getting this wrong fails only on scenarios that are not 3 steps long.
+- **A wrong lane id is silent.** `skip_missing_light` defaults to **True**, so a
+  light keyed on something that is not a map feature is dropped with a log line and
+  no light. `tools/check_dataset.py` checks every key resolves; nothing else does.
+- **A baked tape is the same on every episode**, so an agent learns the step number
+  rather than the light. `tools/signal_control.py` drives the same lights from
+  `metadata.signals` and one offset drawn per episode — one offset for the *whole*
+  plan, because the gaps between groups are what keeps crossing arms apart.
+  `tools/drive.py --lights live` runs it; `--lights tape` is the portable default a
+  stock ScenarioNet consumer sees.
+
+**The clock is written three times** — `signal_plan.colour_at` for the tape,
+`web/src/signal/phase.ts` for the page, `tools/signal_control.py` for the live
+manager — because they run on three different interpreters. The offset means **when
+green starts**. `tests/unit/test_signal_plan.py` and `web/test/signal/phase.test.ts`
+assert the same numbers on purpose.
+
+**To see the ego stop at a red light you must leave replay.**
+`--agent-policy idm` selects `TrajectoryIDMPolicy`, which MetaDrive supports for the
+ego (`agent_manager.py:49` hands it `current_sdc_route`) and which inherits
+`IDMPolicy`'s light check. `ReplayEgoCarPolicy` sets position directly and drives
+through anything. Measured on `junction-1` with a light on the route: the ego stops
+**5.7 m short** of the red and moves off when it goes green. It also ends early with
+`out_of_road` at 4.26 m lateral against `max_lateral_dist=4` — the IDM's lateral
+controller losing the reference line, which says nothing about the data and does not
+happen under replay.
+
 ### Why 3D needs its own runner
 
 2D is fine from any entry point. 3D through `scenarionet.sim` shows roads that stop

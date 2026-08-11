@@ -95,10 +95,15 @@ def build_lane_payload(
     # route builder can measure a drive the way `ego_route.route_polyline` builds it: a
     # junction movement follows the connector, and leaving those out understated the
     # distance by more than a third on a route with eleven of them.
+    #
+    # `junction` is here for the signal builder, which needs to know which movements meet at
+    # the same node before it can say two phase groups conflict. It costs the route builder
+    # nothing and keeps both pages reading one description of the junctions.
     connectors = [
         {
             "from": connector.from_lane_id,
             "to": connector.to_lane_id,
+            "junction": connector.junction_node_id,
             "line": _lonlat(connector.centerline, transformer),
         }
         for connector in sorted(model.connectors, key=lambda item: item.identifier)

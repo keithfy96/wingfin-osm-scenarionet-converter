@@ -221,6 +221,16 @@ def convert(
             "map-only, which MetaDrive can load and check but cannot drive.",
         ),
     ] = None,
+    signals_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--signals",
+            exists=True,
+            dir_okay=False,
+            help="signals.json from the Stage 6 signal builder. Without it the dataset has "
+            "no traffic lights; OSM supplies no signal timing, so the plan is chosen there.",
+        ),
+    ] = None,
 ) -> None:
     """Convert WORKSPACE's validated lane model into a ScenarioNet dataset."""
     try:
@@ -230,7 +240,7 @@ def convert(
             else ConverterConfig(config_version=1)
         )
         scenario_paths, _, _, report_path, html_paths = convert_scenario(
-            workspace=workspace, config=config, routes=routes_path
+            workspace=workspace, config=config, routes=routes_path, signals=signals_path
         )
     except (ConversionError, ValueError, KeyError) as error:
         typer.echo(f"Stage 6 failed: {error}", err=True)
@@ -251,9 +261,17 @@ def convert(
             "  map-only: no ego route, so ScenarioEnv cannot reset. Draw routes in the "
             "route builder and pass --routes to make it drivable."
         )
-    reachability, builder = html_paths
+    plan = report["signals"]
+    if plan:
+        lanes = sum(len(group["lanes"]) for group in plan["groups"])
+        typer.echo(
+            f"  signals: {lanes} lane(s) in {len(plan['groups'])} phase group(s) on a "
+            f"{plan['cycle_seconds']:.0f} s cycle, marked {plan['source']}"
+        )
+    reachability, builder, signals = html_paths
     typer.echo(f"Stage 6 reachability map: {reachability}")
     typer.echo(f"Stage 6 route builder:    {builder}")
+    typer.echo(f"Stage 6 signal builder:   {signals}")
 
 
 if __name__ == "__main__":

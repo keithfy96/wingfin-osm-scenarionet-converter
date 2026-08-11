@@ -207,6 +207,29 @@ def main() -> int:
         action="store_true",
         help="Give traffic behind the ego an IDM policy instead of replaying it",
     )
+    parser.add_argument(
+        "--agent-policy",
+        default="replay",
+        choices=["replay", "idm"],
+        help="`replay` teleports the ego onto its recorded positions, so it passes through "
+        "red lights - it has no dynamics to interrupt. `idm` follows the same recorded route "
+        "as a reference line while braking for obstacles and for the wall a red light puts "
+        "across the lane, so route completion stops being exact by construction.",
+    )
+    parser.add_argument(
+        "--lights",
+        default="tape",
+        choices=["tape", "live"],
+        help="`tape` replays `dynamic_map_states` - the same colour at the same step on every "
+        "episode. `live` drives the same lights from `metadata.signals` and an offset drawn "
+        "per episode, so the step number stops predicting the colour.",
+    )
+    parser.add_argument(
+        "--light-seed",
+        type=int,
+        default=None,
+        help="Seed for --lights live, so a run can be repeated.",
+    )
     arguments = parser.parse_args()
 
     import numpy
@@ -237,8 +260,30 @@ def main() -> int:
 
     from metadrive.component.sensors.rgb_camera import RGBCamera
     from metadrive.envs.scenario_env import ScenarioEnv
+    from metadrive.policy.idm_policy import TrajectoryIDMPolicy
     from metadrive.policy.replay_policy import ReplayEgoCarPolicy
     from metadrive.scenario.utils import get_number_of_scenarios
+
+    # `TrajectoryIDMPolicy` subclasses `IDMPolicy`, whose `lane_change_policy` checks whether
+    # the object in front is a `BaseTrafficLight` - so it is the only ego policy here that
+    # can stop for one. `ReplayEgoCarPolicy` sets the car's position directly each step and
+    # would drive through a wall of any kind.
+    policy = ReplayEgoCarPolicy if arguments.agent_policy == "replay" else TrajectoryIDMPolicy
+    print(
+        "ego policy   {} - {}".format(
+            arguments.agent_policy,
+            "replayed positions; red lights do not stop it"
+            if arguments.agent_policy == "replay"
+            else "driven along the recorded route; it brakes for red lights",
+        )
+    )
+
+    environment_class = ScenarioEnv
+    if arguments.lights == "live":
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from signal_control import live_signal_env
+
+        environment_class = live_signal_env(arguments.light_seed)
 
     count = get_number_of_scenarios(dataset)
     if arguments.scenario_index is not None and not 0 <= arguments.scenario_index < count:
@@ -253,12 +298,12 @@ def main() -> int:
     if arguments.render == "offscreen":
         offscreen = {"image_observation": True, "sensors": {"rgb_camera": (RGBCamera, 320, 240)}}
 
-    env = ScenarioEnv(
+    env = environment_class(
         {
             "data_directory": dataset,
             "num_scenarios": count,
             "use_render": arguments.render == "3D",
-            "agent_policy": ReplayEgoCarPolicy,
+            "agent_policy": policy,
             **offscreen,
             "manual_control": False,
             "reactive_traffic": arguments.reactive,
@@ -305,13 +350,32 @@ def main() -> int:
 
             length = env.engine.data_manager.current_scenario_length
             scenario_id = env.engine.data_manager.current_scenario["id"]
+            lights = getattr(env.engine, "light_manager", None)
+            # Transitions rather than a colour per step: 651 colours is not a report, and the
+            # step a light turns green is the number that answers both questions here - did
+            # the ego wait for it, and does that step move between episodes.
+            changes = {}
+            previous = {}
             heights = []
+            speeds = []
             path = []
             info = {}
             steps = 0
             while steps < length:
                 _, _, terminated, truncated, info = env.step([0, 0])
                 heights.append(float(env.agent.origin.getZ()))
+                speeds.append(float(env.agent.speed))
+                if lights is not None:
+                    # `engine.episode_step`, not the loop counter: the engine increments
+                    # inside `env.step`, so the two differ by one and the whole point of this
+                    # report is that the step number matches the plan's arithmetic.
+                    now = env.engine.episode_step
+                    for light in lights.spawned_objects.values():
+                        was = previous.get(light.id)
+                        if light.status != was:
+                            if was is not None:
+                                changes.setdefault(light.id, []).append((now, light.status))
+                            previous[light.id] = light.status
                 # Every tenth step is plenty: the windows overlap heavily at 0.1 s spacing.
                 if steps % 10 == 0:
                     path.append(tuple(env.agent.position))
@@ -347,7 +411,55 @@ def main() -> int:
                 )
             )
             if not info.get("arrive_dest", False):
+                # `arrive_dest=False` on its own does not say whether the drive was wrong or
+                # merely different. `out_of_road` under `--agent-policy idm`, for instance, is
+                # the lateral controller losing the reference line, which says nothing about
+                # the data. Naming the reason is the difference between the two.
+                named = ("out_of_road", "crash", "crash_object", "crash_vehicle", "max_step")
+                reasons = [name for name in named if info.get(name)]
+                print(
+                    "             did not arrive: {}{}".format(
+                        ", ".join(reasons) or "ran out of recorded steps",
+                        (
+                            "; lateral {:.2f} m against a {} m limit".format(
+                                info["lateral_dist"], env.config["max_lateral_dist"]
+                            )
+                            if info.get("out_of_road") and "lateral_dist" in info
+                            else ""
+                        ),
+                    )
+                )
                 failures += 1
+
+            if lights is not None and lights.spawned_objects:
+                offset = getattr(lights, "episode_offset_seconds", None)
+                print(
+                    "             {} light(s){}".format(
+                        len(lights.spawned_objects),
+                        ""
+                        if offset is None
+                        else f", phase offset {offset:.1f} s drawn for this episode",
+                    )
+                )
+                for light_id, transitions in sorted(changes.items()):
+                    greens = [step for step, status in transitions if status.endswith("GREEN")]
+                    print(
+                        "             {} turns green at step(s) {}".format(
+                            light_id,
+                            ", ".join(str(step) for step in greens[:6]) or "never in this run",
+                        )
+                    )
+                # Only meaningful under `--agent-policy idm`: a replayed ego is placed on its
+                # recorded positions, so its speed is the recording's and no light can change
+                # it. Printed either way, because that is the fact worth seeing.
+                stopped = sum(1 for speed in speeds if speed < 0.2)
+                print(
+                    "             ego was below 0.2 m/s for {} of {} steps (min {:.2f} m/s)".format(
+                        stopped, len(speeds), min(speeds) if speeds else float("nan")
+                    )
+                )
+            elif arguments.lights == "live":
+                print("             no lights: this dataset was converted without --signals")
 
             beside = _ground_around(env.engine, path)
             if beside is not None:

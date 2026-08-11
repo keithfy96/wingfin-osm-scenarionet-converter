@@ -13,8 +13,9 @@ const outfile = resolve(assets, "review-client.js");
 
 mkdirSync(assets, { recursive: true });
 
-/** Shared by both clients. Separate bundles rather than one: the Stage 3 reviewer and the
- * Stage 6 route builder share no code, and a page should not carry the other's.
+/** Shared by every client. Separate bundles rather than one: the Stage 3 reviewer, the Stage 6
+ * route builder and the Stage 6 signal builder share no code, and a page should not carry
+ * another's.
  *
  * @param {string} entry
  * @param {string} out
@@ -40,6 +41,7 @@ const optionsFor = (entry, out) => ({
 const bundles = [
   optionsFor("src/main.ts", outfile),
   optionsFor("src/route/main.ts", resolve(assets, "route-client.js")),
+  optionsFor("src/signal/main.ts", resolve(assets, "signal-client.js")),
 ];
 
 if (process.argv.includes("--watch")) {

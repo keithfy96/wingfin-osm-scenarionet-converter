@@ -64,6 +64,15 @@ from osm_scenario.ego_route import (
 from osm_scenario.lane_model import LaneFeature, PreliminaryLaneModel
 from osm_scenario.reachability_view import render_reachability_html
 from osm_scenario.route_builder_view import render_route_builder_html
+from osm_scenario.signal_builder_view import render_signal_builder_html
+from osm_scenario.signal_plan import (
+    SIGNALS_VERSION,
+    SignalPlan,
+    SignalPlanError,
+    light_states,
+    plan_metadata,
+    read_signal_plan,
+)
 from osm_scenario.stage1b_data_audit import _write_text_atomic
 
 REPORT_VERSION = 1
@@ -426,6 +435,7 @@ def _scenario(
     workspace_name: str,
     manifest: dict[str, Any],
     model_sha256: str,
+    plan: SignalPlan | None,
 ) -> tuple[
     dict[str, Any],
     dict[str, Any],
@@ -467,7 +477,11 @@ def _scenario(
         # for the format to be well formed; it must not imply that anything moves.
         "length": 1,
         "tracks": {},
-        "dynamic_map_states": {},
+        # One step of tape, for the same reason `length` is 1: a map-only scenario still
+        # needs a well-formed envelope. The lights are rebuilt at the real length in
+        # `_with_route`, because `_check_object_state_dict` requires every state array to be
+        # exactly as long as the scenario.
+        "dynamic_map_states": light_states(plan, model=model, steps=1) if plan else {},
         "map_features": features,
         "metadata": {
             "scenario_id": scenario_id,
@@ -489,10 +503,18 @@ def _scenario(
                 "signals": len(model.signals),
                 "stop_lines": len(model.stop_lines),
                 "restrictions": len(model.restrictions),
+                # What OSM supplies and what a person chose are different counts, and the
+                # gap is the point: `signals` is how many signal nodes the survey has,
+                # `signalled_lanes` is how many lanes carry a light in this dataset. In
+                # `junction-1` the first is 1 and it is at the edge of the extract.
+                "signalled_lanes": len(plan.lanes) if plan else 0,
+                "phase_groups": len(plan.groups) if plan else 0,
             },
-            # Signals are counted, never converted. Their timing is not in the source and
-            # is explicitly out of scope; a fabricated phase plan would be indistinguishable
-            # from a surveyed one once it is inside a pickle.
+            # Present only when `--signals` was given, and always marked `synthesised`.
+            # OSM records that a signal exists and carries no cycle, split or offset, so a
+            # phase plan that could not be told apart from a surveyed one is the thing this
+            # field exists to prevent. `signal_plan.plan_metadata` writes it.
+            **({"signals": plan_metadata(plan, model=model)} if plan else {}),
             "routing": routing,
             "provenance": {
                 "generator_version": model.metadata.generator_version,
@@ -577,7 +599,12 @@ def _read_routes(
 
 
 def _with_route(
-    base: dict[str, Any], *, route: Route, track: dict[str, Any]
+    base: dict[str, Any],
+    *,
+    route: Route,
+    track: dict[str, Any],
+    model: PreliminaryLaneModel,
+    plan: SignalPlan | None,
 ) -> dict[str, Any]:
     """The map-only scenario, plus the car that turns it into a drive.
 
@@ -585,6 +612,10 @@ def _with_route(
     each is pickled separately, so sharing the features costs nothing and guarantees the
     routes cannot disagree about the road they are drawn on. `metadata` is rebuilt rather
     than shared, because it is the part that differs.
+
+    The lights are rebuilt rather than shared for a harder reason: every array in a light's
+    `state` is length-checked against the scenario length, so the one-step tape the map-only
+    envelope carries is wrong for every route.
     """
     steps = len(track["state"]["position"])
     scenario_id = f"{base['id']}-{route.name}"
@@ -603,13 +634,37 @@ def _with_route(
         "id": scenario_id,
         "length": steps,
         "tracks": {_EGO_ID: track},
+        "dynamic_map_states": light_states(plan, model=model, steps=steps) if plan else {},
         "metadata": metadata,
     }
 
 
+def _read_signal_plan(
+    path: Path, *, model: PreliminaryLaneModel, model_sha256: str
+) -> SignalPlan:
+    """`signal_plan.read_signal_plan`, with its failures wearing this stage's name.
+
+    Split out for the reason `_read` is: the CLI catches `ConversionError` and nothing else,
+    so a malformed plan would otherwise print a traceback instead of a sentence.
+    """
+    try:
+        return read_signal_plan(
+            _read(path, "signal plan"),
+            model=model,
+            model_sha256=model_sha256,
+            source=path,
+        )
+    except SignalPlanError as error:
+        raise ConversionError(str(error)) from error
+
+
 def convert_scenario(
-    *, workspace: Path, config: ConverterConfig, routes: Path | None = None
-) -> tuple[list[Path], Path, Path, Path, tuple[Path, Path]]:
+    *,
+    workspace: Path,
+    config: ConverterConfig,
+    routes: Path | None = None,
+    signals: Path | None = None,
+) -> tuple[list[Path], Path, Path, Path, tuple[Path, Path, Path]]:
     """Convert WORKSPACE's validated lane model into a ScenarioNet dataset.
 
     Without `routes` the result is map-only: every road, and nothing that moves. MetaDrive
@@ -621,8 +676,17 @@ def convert_scenario(
     dataset has: variety comes from having many scenarios, not from freedom within one, so
     `num_scenarios=N` is what gives a policy different drives to learn across.
 
+    With `signals` - a `signals.json` from the Stage 6 signal builder - every lane in the plan
+    gets a traffic light, and `metadata.signals` carries the phase structure that produced it.
+    Both are needed: MetaDrive replays the tape and nothing else, while anything that wants to
+    *drive* the lights - `tools/signal_control.py`, which re-draws the phase per episode so an
+    agent cannot learn the clock - needs the numbers rather than the colours.
+
     `config` is accepted for symmetry with the other stage entry points; conversion is a
-    faithful restatement of the reviewed model and has nothing left to configure.
+    faithful restatement of the reviewed model and has nothing left to configure. Signal
+    timing deliberately does **not** live there: `configuration_checksum` is an input to the
+    generation fingerprint, so a phase plan in the config would invalidate the lane model
+    review the next time the map was generated.
     """
     workspace = workspace.resolve()
     model_path = workspace / "lane-model" / "reviewed.json"
@@ -630,11 +694,17 @@ def convert_scenario(
     model_sha256 = _sha256(model_path)
 
     model = PreliminaryLaneModel.model_validate(_read(model_path, "reviewed lane model"))
+    plan = (
+        _read_signal_plan(signals, model=model, model_sha256=model_sha256)
+        if signals is not None
+        else None
+    )
     scenario, routing, neighbours, moves = _scenario(
         model=model,
         workspace_name=workspace.name,
         manifest=manifest,
         model_sha256=model_sha256,
+        plan=plan,
     )
 
     selections = (
@@ -659,7 +729,13 @@ def convert_scenario(
             )
             planned.append(route)
             scenarios.append(
-                _with_route(scenario, route=route, track=ego_track(route=route, polyline=polyline))
+                _with_route(
+                    scenario,
+                    route=route,
+                    track=ego_track(route=route, polyline=polyline),
+                    model=model,
+                    plan=plan,
+                )
             )
     except RouteError as error:
         raise ConversionError(str(error)) from error
@@ -722,12 +798,28 @@ def convert_scenario(
         ),
     )
 
+    # Written on every convert for the same reason the route builder is: it is how a dataset
+    # with no lights stops having none, so it has to exist before there is a plan to draw.
+    signal_path = workspace / "inspection" / "stage-6-signal-builder.html"
+    _write_text_atomic(
+        signal_path,
+        render_signal_builder_html(
+            model=model,
+            neighbours=neighbours,
+            moves=moves,
+            workspace_name=workspace.name,
+            model_sha256=model_sha256,
+            signals_version=SIGNALS_VERSION,
+        ),
+    )
+
     artifacts = {}
     for name, path in (
         ("dataset_summary", summary_path),
         ("dataset_mapping", mapping_path),
         ("reachability_html", html_path),
         ("route_builder_html", builder_path),
+        ("signal_builder_html", signal_path),
         *(
             (f"scenario:{item['id']}", path)
             for item, path in zip(scenarios, scenario_paths, strict=True)
@@ -748,6 +840,7 @@ def convert_scenario(
             "reviewed_lane_model": "lane-model/reviewed.json",
             "reviewed_lane_model_sha256": model_sha256,
             "routes": routes.name if routes is not None else None,
+            "signals": signals.name if signals is not None else None,
         },
         "converted": scenario["metadata"]["counts"],
         "map_features": len(scenario["map_features"]),
@@ -758,6 +851,10 @@ def convert_scenario(
         # Empty for a map-only dataset, which is the difference between one MetaDrive can
         # check and one it can drive.
         "routes": [route_summary(route) for route in planned],
+        # None when no plan was given. Reported outside the pickle because the phase numbers
+        # are the first thing to check when a light does not do what was expected, and
+        # reading them back out of a pickle needs MetaDrive's interpreter.
+        "signals": scenario["metadata"].get("signals"),
         "artifacts": artifacts,
     }
 
@@ -771,6 +868,7 @@ def convert_scenario(
         "map_features": report["map_features"],
         "routing": routing,
         "routes": report["routes"],
+        "signals": report["signals"],
         "scenario_files": report["scenario_files"],
         "source_lane_model": {"path": "lane-model/reviewed.json", "sha256": model_sha256},
         "artifacts": artifacts,
@@ -779,4 +877,10 @@ def convert_scenario(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
 
-    return scenario_paths, summary_path, mapping_path, report_path, (html_path, builder_path)
+    return (
+        scenario_paths,
+        summary_path,
+        mapping_path,
+        report_path,
+        (html_path, builder_path, signal_path),
+    )

@@ -110,6 +110,48 @@ def main() -> int:
                 f"map_region_size={region}, {verdict}"
             )
 
+        # The one place a bad traffic light shows up. MetaDrive's `skip_missing_light`
+        # defaults to True, so `ScenarioLightManager.after_reset` drops a light whose key is
+        # not in `road_network.graph` with a log line and carries on - the dataset loads, the
+        # drive runs, and the light simply is not there. Checked here against `map_features`,
+        # which is what that graph is built from.
+        lights = scenario["dynamic_map_states"]
+        if lights:
+            missing = sorted(set(lights) - set(scenario["map_features"]))
+            plan = scenario["metadata"].get("signals") or {}
+            colours = {}
+            for light in lights.values():
+                for colour in light["state"]["object_state"]:
+                    colours[colour] = colours.get(colour, 0) + 1
+            print(
+                "lights       {} light(s) in {} phase group(s), {} s cycle, {}".format(
+                    len(lights),
+                    len(plan.get("groups", ())),
+                    plan.get("cycle_seconds", "?"),
+                    plan.get("source", "no plan in metadata"),
+                )
+            )
+            tally = ", ".join(
+                "{} {}".format(name.split("_")[-1].lower(), count)
+                for name, count in sorted(colours.items())
+            )
+            print(f"             colours over the scenario: {tally}")
+            if missing:
+                print(
+                    "             FAILED: {} light(s) keyed on a lane that is not a map "
+                    "feature, which MetaDrive would skip silently: {}".format(
+                        len(missing), ", ".join(missing[:5])
+                    )
+                )
+                failures += 1
+            else:
+                print("             every light is keyed on a lane in this map")
+        else:
+            print(
+                "lights       none. OSM carries no signal timing, so a plan is drawn in "
+                "inspection/stage-6-signal-builder.html and passed to convert --signals."
+            )
+
         route = scenario["metadata"].get("sdc_route")
         if route:
             print(

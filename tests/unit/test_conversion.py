@@ -20,6 +20,8 @@ from typing import Any
 import numpy as np
 import pytest
 
+from osm_scenario import signal_plan
+from osm_scenario.apply_review import _sha256
 from osm_scenario.config import ConverterConfig
 from osm_scenario.conversion import (
     ConversionError,
@@ -38,6 +40,7 @@ from osm_scenario.lane_model import (
     PreliminaryLaneModel,
 )
 from osm_scenario.reachability_view import render_reachability_html
+from osm_scenario.signal_plan import PhaseGroup, SignalPlan
 
 WIDTH = 4.0
 
@@ -157,12 +160,13 @@ def _side_by_side(**update: Any) -> PreliminaryLaneModel:
     return model.model_copy(update=update) if update else model
 
 
-def _built(model: PreliminaryLaneModel) -> dict[str, Any]:
+def _built(model: PreliminaryLaneModel, plan: SignalPlan | None = None) -> dict[str, Any]:
     scenario, _, _, _ = _scenario(
         model=model,
         workspace_name="test-workspace",
         manifest={"source": {"sha256": "src"}, "stage_5": {"status": "passed"}},
         model_sha256="model",
+        plan=plan,
     )
     return scenario
 
@@ -301,6 +305,94 @@ def test_the_scenario_carries_no_traffic() -> None:
     assert scenario["metadata"]["map_only"] is True
 
 
+# --- traffic lights -------------------------------------------------------------------------
+
+_PLAN = SignalPlan(
+    cycle_seconds=60.0,
+    groups=(
+        PhaseGroup(
+            name="phase-a",
+            lanes=("a",),
+            green_seconds=27.0,
+            yellow_seconds=3.0,
+            offset_seconds=0.0,
+        ),
+    ),
+)
+
+
+def test_without_a_plan_there_are_no_lights_and_nothing_claims_otherwise() -> None:
+    """The default has to stay exactly what it was, because most conversions have no plan."""
+    scenario = _built(_model())
+    assert scenario["dynamic_map_states"] == {}
+    assert "signals" not in scenario["metadata"]
+    assert scenario["metadata"]["counts"]["signalled_lanes"] == 0
+
+
+def test_a_light_is_keyed_on_the_lane_id_metadrive_will_look_up() -> None:
+    """`ScenarioLightManager.after_reset` looks the key up in `road_network.graph`.
+
+    MetaDrive's `skip_missing_light` defaults to True, so a key that is not a map feature is
+    dropped with a log line and no light at all - a failure that looks exactly like a plan
+    that was never applied.
+    """
+    scenario = _built(_model(), _PLAN)
+    assert set(scenario["dynamic_map_states"]) == {"a"}
+    assert set(scenario["dynamic_map_states"]) <= set(scenario["map_features"])
+
+
+def test_the_stop_point_sits_outside_state_where_the_length_check_cannot_reach_it() -> None:
+    """Everything inside `state` is asserted to be as long as the scenario.
+
+    A three-element position there passes only on a three-step scenario, and
+    `_get_episode_light_data` would read it as the old Waymo `[T, 2]` format besides.
+    """
+    light = _built(_model(), _PLAN)["dynamic_map_states"]["a"]
+    assert "stop_point" not in light["state"]
+    assert light["stop_point"].shape == (3,)
+    assert light["stop_point"].dtype == np.float32
+    assert set(light["state"]) == {"object_state"}
+
+
+def test_the_stop_point_is_the_downstream_end_of_the_signalled_lane() -> None:
+    """A light stops the traffic leaving a lane, so the wall goes where that lane ends."""
+    light = _built(_model(), _PLAN)["dynamic_map_states"]["a"]
+    assert light["stop_point"].tolist() == pytest.approx([50.0, 0.0, 0.0])
+
+
+def test_every_state_array_is_exactly_as_long_as_the_scenario() -> None:
+    scenario = _built(_model(), _PLAN)
+    light = scenario["dynamic_map_states"]["a"]
+    assert len(light["state"]["object_state"]) == scenario["length"]
+    assert light["metadata"]["track_length"] == scenario["length"]
+
+
+def test_the_plan_is_recorded_as_synthesised_rather_than_surveyed() -> None:
+    """The whole reason signals were previously left out of the pickle.
+
+    OSM records that a signal exists and no timing whatever, so a phase plan inside a
+    dataset has to carry the fact that a person made it up.
+    """
+    metadata = _built(_model(), _PLAN)["metadata"]
+    assert metadata["signals"]["source"] == "synthesised"
+    assert metadata["signals"]["cycle_seconds"] == 60.0
+    assert [group["name"] for group in metadata["signals"]["groups"]] == ["phase-a"]
+    assert metadata["counts"]["signalled_lanes"] == 1
+    assert metadata["counts"]["phase_groups"] == 1
+
+
+def test_the_counts_keep_surveyed_signals_and_placed_lights_apart() -> None:
+    """Two different numbers, and conflating them would hide that OSM supplied neither.
+
+    `signals` is how many `highway=traffic_signals` nodes the survey has; `signalled_lanes`
+    is how many lanes carry a light in this dataset. In `junction-1` the first is 1, at the
+    edge of the extract, and the second is whatever was placed by hand.
+    """
+    counts = _built(_model(), _PLAN)["metadata"]["counts"]
+    assert counts["signals"] == 0
+    assert counts["signalled_lanes"] == 1
+
+
 def test_every_lane_a_feature_points_at_is_itself_a_feature() -> None:
     scenario = _built(_model())
     features = scenario["map_features"]
@@ -418,6 +510,75 @@ def test_the_scenario_passes_metadrives_own_sanity_check(tmp_path: Path) -> None
         workspace=workspace, config=ConverterConfig(config_version=1)
     )
     schema.sanity_check(pickle.loads(scenario_paths[0].read_bytes()))
+
+
+@pytest.mark.skipif(not METADRIVE_SRC.is_dir(), reason="no MetaDrive checkout on this machine")
+def test_a_scenario_with_traffic_lights_passes_the_same_check(tmp_path: Path) -> None:
+    """`sanity_check` runs `_check_object_state_dict` over `dynamic_map_states` too.
+
+    That is where a `stop_point` in the wrong place fails: every array inside `state` is
+    asserted to be exactly as long as the scenario, so a three-element position there passes
+    only by accident on a three-step scenario.
+    """
+    schema = _load_metadrive_schema()
+    workspace = _workspace(tmp_path, _model())
+    plan_path = workspace / "signals.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "signals_version": 1,
+                "identity": {
+                    "generation_fingerprint": "fingerprint",
+                    "reviewed_lane_model_sha256": _sha256(
+                        workspace / "lane-model" / "reviewed.json"
+                    ),
+                },
+                "cycle_seconds": 60,
+                "groups": [
+                    {
+                        "name": "phase-a",
+                        "lanes": ["a"],
+                        "green_seconds": 27,
+                        "yellow_seconds": 3,
+                        "offset_seconds": 0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    scenario_paths, _, _, _, _ = convert_scenario(
+        workspace=workspace, config=ConverterConfig(config_version=1), signals=plan_path
+    )
+    scenario = pickle.loads(scenario_paths[0].read_bytes())
+    assert set(scenario["dynamic_map_states"]) == {"a"}
+    schema.sanity_check(scenario)
+
+
+@pytest.mark.skipif(not METADRIVE_SRC.is_dir(), reason="no MetaDrive checkout on this machine")
+def test_our_light_colours_are_the_ones_metadrive_defines() -> None:
+    """Spelled from MetaDrive's constants, because a typo here is silent.
+
+    `simplify_light_status` turns anything it does not recognise into `LIGHT_UNKNOWN`, which
+    sets the wall's collision mask to `AllOff` - so a misspelt red is not an error, it is a
+    light nothing stops for.
+    """
+    _load_metadrive_schema()
+    from metadrive.type import MetaDriveType
+
+    for ours, theirs in (
+        (signal_plan.LIGHT_GREEN, MetaDriveType.LIGHT_GREEN),
+        (signal_plan.LIGHT_YELLOW, MetaDriveType.LIGHT_YELLOW),
+        (signal_plan.LIGHT_RED, MetaDriveType.LIGHT_RED),
+    ):
+        assert ours == theirs
+        # `ScenarioTrafficLight.set_status` puts every value through this before switching
+        # the model and the collision mask, so surviving it is what "MetaDrive understands
+        # this colour" actually means.
+        assert MetaDriveType.simplify_light_status(ours) == ours
+
+    # The object type, not a status - it is what `_get_episode_light_data` asserts on.
+    assert signal_plan._LIGHT_TYPE == MetaDriveType.TRAFFIC_LIGHT
 
 
 @pytest.mark.skipif(not METADRIVE_SRC.is_dir(), reason="no MetaDrive checkout on this machine")
@@ -679,18 +840,21 @@ def test_the_page_can_reproduce_the_junction_only_view_exactly() -> None:
     assert len(reached) == strict["best_start_reaches"]
 
 
-def test_both_pages_are_written_and_recorded_beside_the_dataset(tmp_path: Path) -> None:
+def test_all_three_pages_are_written_and_recorded_beside_the_dataset(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path, _model())
-    *_, report_path, (html_path, builder_path) = convert_scenario(
+    *_, report_path, (html_path, builder_path, signal_path) = convert_scenario(
         workspace=workspace, config=ConverterConfig(config_version=1)
     )
     assert html_path == workspace / "inspection" / "stage-6-reachability.html"
     # Written even for a map-only dataset, because it is how a map-only dataset stops being
     # map-only: there is nowhere else to pick the routes that make it drivable.
     assert builder_path == workspace / "inspection" / "stage-6-route-builder.html"
+    # Same argument for the lights: a dataset with none is how every dataset starts, and the
+    # page is the only place a plan can be made.
+    assert signal_path == workspace / "inspection" / "stage-6-signal-builder.html"
     # In `inspection/`, not in `scenarionet/`: MetaDrive reads that directory and it must
     # hold the dataset and nothing else.
-    for path in (html_path, builder_path):
+    for path in (html_path, builder_path, signal_path):
         assert not (workspace / "scenarionet" / path.name).exists()
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -699,6 +863,9 @@ def test_both_pages_are_written_and_recorded_beside_the_dataset(tmp_path: Path) 
     )
     assert report["artifacts"]["route_builder_html"]["path"] == (
         "inspection/stage-6-route-builder.html"
+    )
+    assert report["artifacts"]["signal_builder_html"]["path"] == (
+        "inspection/stage-6-signal-builder.html"
     )
     manifest = json.loads((workspace / "source" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["stage_6"]["artifacts"]["reachability_html"] == (
