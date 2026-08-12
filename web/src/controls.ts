@@ -170,6 +170,14 @@ const SPECS: Record<string, ControlSpec> = {
       { kind: "text", key: "note", label: "What changes", placeholder: "e.g. applies to the kerbside lane only" },
     ],
   },
+  restriction_enforced_leg: {
+    question: "This restriction was applied by removing one movement of its route. Is that the right one?",
+    acceptLabel: "Keep it",
+    overrideLabel: null,
+    acceptEffect: "Keeps the movement removed. Nothing else on the route changes.",
+    overrideEffect: null,
+    fields: [],
+  },
 };
 
 const FALLBACK: ControlSpec = {

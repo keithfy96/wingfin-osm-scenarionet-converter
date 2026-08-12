@@ -525,6 +525,50 @@ that cuts the drivable network on the strength of a magic number. Already enforc
 in `_side_filtered_candidates` and `_stranded_permission_fallback`; follow the same
 rule anywhere else the two sources of truth meet.
 
+### A turn restriction names a route; a connector is one step of one
+
+A `no_*` relation forbids the sequence FROM → VIA → TO. A `ConnectorFeature` is
+`from-lane → to-lane` at one node and remembers neither the road before it nor the road
+after, so enforcing the relation means **deleting one step of the route — and that stops
+everyone who uses that step**, not only the drivers on the prohibited route.
+
+There are two candidates and each has its own test, and they look in opposite directions:
+
+- delete the **last** step (VIA → TO) — exact only if **nothing else feeds VIA**
+- delete the **first** step (FROM → VIA) — exact only if **VIA leads nowhere else**
+
+`via_way_resolution` deleted the last one unconditionally until 2026-08-12, which on
+`10421009` deleted Persiaran Meranti's own right turn — named by `turn:lanes=right|right`,
+and not mentioned anywhere in the relation — and left way `39619063` with **no exit at
+all**. See
+`docs/mapping-algo-changes/2026-08-12-18:33:44-a-turn-restriction-deleted-the-wrong-movement.md`.
+
+Three things not to re-derive:
+
+- **The adjacency the test reads is an upper bound on purpose.** `topology.way_adjacency`
+  counts per *way*, not per lane or per direction, so it can over-count what reaches a way
+  and never under-count it. Over-counting sends the restriction to review; under-counting
+  would delete a movement carrying legal traffic. Do not "tighten" it without moving the
+  whole test to lane level.
+- **The last step wins when both are exact.** Not taste — every restriction enforced before
+  the change removed the last step, and re-deciding a settled one moves a forbidden
+  connector id and costs the review decision attached to it.
+- **When neither is exact, nothing is deducible.** A gyratory is the usual shape: each
+  segment carries traffic from several entries by design. The movements come back as
+  `review_required`, which is already excluded from the lane graph, so holding them does
+  not make the prohibited route drivable. `RestrictionEffect.forbidden_connector_ids` stays
+  empty there — it forbade nothing and must not claim to — and the held ids ride on the
+  findings.
+
+**Node-via restrictions are a different thing and are correct as they stand.** A node
+restriction names from-way, via-node and to-way, which is exactly the triple a connector
+encodes, so it cannot over-forbid. `mosque`'s gyratory movements stay forbidden through
+this change because three node-via `no_right_turn` relations name them precisely.
+
+`restriction_enforced_leg` is a **warning** carrying which step was removed and why the
+other was rejected. Only blockers gate export, so it asks nothing; it exists because the
+generator now chooses between two defensible enforcements.
+
 ### Starved middle lanes: mostly fixed, one left
 
 Two allocation rules now run before the proportional mapping, and between them they

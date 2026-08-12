@@ -53,6 +53,7 @@ from osm_scenario.topology import MovementCandidate
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "osm" / "tiny.osm"
 SIGNALS = Path(__file__).parents[1] / "fixtures" / "osm" / "signals.osm"
 SINGLE_LANE = Path(__file__).parents[1] / "fixtures" / "osm" / "single-lane.osm"
+VIA_WAY_RESTRICTION = Path(__file__).parents[1] / "fixtures" / "osm" / "via-way-restriction.osm"
 
 
 def _workspace(tmp_path: Path) -> Path:
@@ -1527,3 +1528,131 @@ def test_a_single_lane_way_generates_one_centred_lane_when_stage_1_read_it_one_w
         for finding in model.findings
         if finding.rule == "lane_count_inference" and "300" in finding.source_ids
     ]
+
+
+def _via_way_model(tmp_path: Path) -> PreliminaryLaneModel:
+    workspace = tmp_path / "workspace"
+    acquire_osm(workspace=workspace, driving_side="left", osm_file=VIA_WAY_RESTRICTION)
+    normalize_workspace(workspace=workspace, config=ConverterConfig(config_version=1))
+    generate_lane_model(workspace=workspace, config=ConverterConfig(config_version=1))
+    return PreliminaryLaneModel.model_validate_json(
+        (workspace / "lane-model" / "preliminary.json").read_bytes()
+    )
+
+
+def _movement(model: PreliminaryLaneModel, source: str, target: str) -> ConnectorFeature:
+    matches = [
+        connector
+        for connector in model.connectors
+        if connector.from_way_id == source and connector.to_way_id == target
+    ]
+    assert len(matches) == 1, f"expected one {source} -> {target} movement, got {len(matches)}"
+    return matches[0]
+
+
+def test_a_via_way_restriction_removes_the_step_that_carries_only_its_own_route(
+    tmp_path: Path,
+) -> None:
+    """A prohibition names a route and the model can only delete one movement of it.
+
+    Deleting the last one regardless — which is what this did until 2026-08-12 — deleted
+    way 130's turn as well, which relation 900 never mentions, and left way 110 with no
+    exit at all. Way 110 leads nowhere but 120, so deleting the *first* movement blocks
+    the route and costs nothing.
+    """
+    model = _via_way_model(tmp_path)
+
+    assert _movement(model, "100", "110").status == "forbidden"
+    assert _movement(model, "110", "120").status == "active"
+    assert _movement(model, "130", "110").status == "active"
+
+    # Way 110 is still drivable: the point of moving the cut was that it stays that way.
+    exits = [
+        reference
+        for lane in model.lanes
+        if "110" in lane.source_way_ids
+        for reference in lane.exit_lanes
+    ]
+    assert exits, "the via way must not be sealed off by the restriction"
+
+    # ...and the way that lost its movement before did not lose it here.
+    effect = next(item for item in model.restrictions if item.source_relation_id == "900")
+    assert effect.status == "enforced"
+    assert effect.forbidden_connector_ids == [_movement(model, "100", "110").identifier]
+    assert "prefix removed" in effect.reason and "way 130" in effect.reason
+
+
+def test_a_via_way_restriction_still_removes_the_last_step_when_that_is_the_clean_one(
+    tmp_path: Path,
+) -> None:
+    """Nothing but 200 feeds way 210, so the last movement carries only the prohibited
+    route. Enforcing it the old way is still right, and has to keep producing the same
+    connector id or a settled review decision moves for no reason."""
+    model = _via_way_model(tmp_path)
+
+    assert _movement(model, "210", "220").status == "forbidden"
+    assert _movement(model, "200", "210").status == "active"
+    assert _movement(model, "210", "230").status == "active"
+
+    effect = next(item for item in model.restrictions if item.source_relation_id == "910")
+    assert effect.reason == "prohibited via-way suffix removed"
+
+
+def test_a_via_way_restriction_with_traffic_at_both_ends_is_asked_rather_than_guessed(
+    tmp_path: Path,
+) -> None:
+    """Way 330 also feeds 310 and 340 also leaves it, so neither movement carries only
+    the prohibited route. The generator holds the movement instead of picking: held is
+    not active, so the prohibited route is not drivable while the question is open."""
+    model = _via_way_model(tmp_path)
+
+    held = _movement(model, "310", "320")
+    assert held.status == "review_required"
+    assert _movement(model, "330", "310").status == "active"
+    assert _movement(model, "310", "340").status == "active"
+
+    # `review_required` keeps it out of the lane graph exactly as `forbidden` does.
+    assert not [
+        reference
+        for lane in model.lanes
+        for reference in lane.exit_lanes + lane.entry_lanes
+        if reference == held.identifier
+    ]
+
+    effect = next(item for item in model.restrictions if item.source_relation_id == "920")
+    assert effect.status == "review_required"
+    assert effect.forbidden_connector_ids == [], "it forbade nothing, and must not claim to"
+
+    blocker = next(
+        finding
+        for finding in model.findings
+        if finding.rule == "ambiguous_connector" and held.identifier in finding.affected_feature_ids
+    )
+    assert blocker.severity == "blocker"
+    assert blocker.proposed_value["ambiguity_causes"][0] == "restriction_not_expressible"
+    assert blocker.proposed_value["restriction_relation_ids"] == ["920"]
+
+    relation_finding = next(
+        finding
+        for finding in model.findings
+        if finding.rule == "restriction_effect_review" and "920" in finding.source_ids
+    )
+    assert relation_finding.affected_feature_ids == [held.identifier]
+
+
+def test_every_via_way_restriction_the_generator_enforces_itself_says_so(
+    tmp_path: Path,
+) -> None:
+    """A warning, not a blocker: there is nothing to act on. It exists so that a choice
+    the generator made between two defensible enforcements is on the record."""
+    model = _via_way_model(tmp_path)
+
+    notes = {
+        finding.source_ids[0]: finding
+        for finding in model.findings
+        if finding.rule == "restriction_enforced_leg"
+    }
+    assert sorted(notes) == ["900", "910"], "one per relation enforced, none for the held one"
+    assert {finding.severity for finding in notes.values()} == {"warning"}
+    assert notes["900"].affected_feature_ids == [_movement(model, "100", "110").identifier]
+    assert notes["900"].proposed_value["chain"] == ["100", "110", "120"]

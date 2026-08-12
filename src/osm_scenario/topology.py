@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -290,8 +291,55 @@ def forbidden_by_node_restriction(candidate: MovementCandidate, relation: Any) -
     )
 
 
+def way_adjacency(
+    candidates: list[MovementCandidate],
+) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """Which ways feed each way, and which ways it feeds, from the movements alone.
+
+    A way, not a lane and not a direction: a two-way way appears as both source and target
+    of its own traffic, so the count is an upper bound on what really reaches it. That is
+    the right way round for `via_way_resolution`, whose only use for it is to ask whether
+    removing a movement would take anything else with it — an over-count sends the
+    restriction to review, an under-count would remove a movement that carries legal
+    traffic. Generation merges its straight-through continuations in for the same reason.
+    """
+    entries: dict[str, set[str]] = {}
+    exits: dict[str, set[str]] = {}
+    for candidate in candidates:
+        if candidate.from_way_id == candidate.to_way_id:
+            continue
+        entries.setdefault(candidate.to_way_id, set()).add(candidate.from_way_id)
+        exits.setdefault(candidate.from_way_id, set()).add(candidate.to_way_id)
+    return entries, exits
+
+
+def _leg_collateral(
+    chain: list[str],
+    leg: int,
+    way_entries: Mapping[str, set[str]],
+    way_exits: Mapping[str, set[str]],
+) -> set[str]:
+    """Ways whose traffic would also lose a movement if step `leg` of `chain` were removed.
+
+    A connector is one step of a route and remembers neither what came before it nor what
+    follows, so removing it stops *everyone* who uses that step. Everyone who uses it is on
+    the prohibited route only if they had to arrive along the earlier ways of the chain and
+    have to carry on along the later ones. Anything else that reaches an earlier way, or
+    leaves a later one, is traffic the relation never named.
+    """
+    collateral: set[str] = set()
+    for position in range(1, leg + 1):
+        collateral |= way_entries.get(chain[position], set()) - {chain[position - 1]}
+    for position in range(leg + 1, len(chain) - 1):
+        collateral |= way_exits.get(chain[position], set()) - {chain[position + 1]}
+    return collateral
+
+
 def via_way_resolution(
-    relation: Any, candidates: list[MovementCandidate]
+    relation: Any,
+    candidates: list[MovementCandidate],
+    way_entries: Mapping[str, set[str]],
+    way_exits: Mapping[str, set[str]],
 ) -> tuple[str, set[int], str]:
     """Enforce a via-way restriction only when its connector chain is unique."""
     roles = restriction_roles(relation)
@@ -318,7 +366,48 @@ def via_way_resolution(
     final_source = chain[-2]
     final_target = chain[-1]
     if restriction.startswith("no_"):
-        return "enforced", set(matching_steps[-1]), "prohibited via-way suffix removed"
+        # A prohibition names a route, and the model can only delete one step of it. Both
+        # ends of the chain are candidates and they ask opposite questions: removing the
+        # last step is exact when nothing else *feeds* the via way, removing the first is
+        # exact when the via way *leads* nowhere else. Removing the last regardless — which
+        # is what this did until 2026-08-12 — deleted a right turn `turn:lanes` named
+        # explicitly and left its way with no exit at all.
+        exact = [
+            leg
+            for leg in range(len(matching_steps))
+            if not _leg_collateral(chain, leg, way_entries, way_exits)
+        ]
+        if exact:
+            # The last when both are exact, so a restriction already enforced correctly
+            # keeps forbidding the same connector id and settled review decisions stay put.
+            leg = exact[-1]
+            if leg == len(matching_steps) - 1:
+                # Word for word what this said before the first step became a candidate, so
+                # entries either side of the change stay comparable.
+                return "enforced", set(matching_steps[leg]), "prohibited via-way suffix removed"
+            rejected = sorted(
+                _leg_collateral(chain, len(matching_steps) - 1, way_entries, way_exits)
+            )
+            return (
+                "enforced",
+                set(matching_steps[leg]),
+                "prohibited via-way prefix removed: removing the suffix would also have "
+                "removed movements from " + ", ".join(f"way {way}" for way in rejected),
+            )
+        blocked = sorted(
+            {
+                way
+                for leg in range(len(matching_steps))
+                for way in _leg_collateral(chain, leg, way_entries, way_exits)
+            }
+        )
+        return (
+            "review_required",
+            set(matching_steps[-1]),
+            "no single movement on this route carries only the prohibited traffic: removing "
+            "one would also remove movements the restriction does not name, from "
+            + ", ".join(f"way {way}" for way in blocked),
+        )
     if restriction.startswith("only_"):
         junction = candidates[matching_steps[-1][0]].junction_node_id
         removed = {

@@ -58,9 +58,10 @@ from osm_scenario.topology import (
     tagged_movement_side,
     uturn_evidence_status,
     via_way_resolution,
+    way_adjacency,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v18"
+GENERATOR_VERSION = "direct-osm-stage2-v19"
 LANE_MODEL_SCHEMA_VERSION = 3
 
 # How much clear road to leave beyond the crossing carriageway when a lane is cut back at a
@@ -947,6 +948,7 @@ _BORDERLINE_TURN_BAND = (30.0, 40.0)
 
 # How each ambiguity trigger reads when it is not the headline reason.
 _CAUSE_LABELS = {
+    "restriction_not_expressible": "a turn restriction that cannot be applied to one movement",
     "uturn_without_evidence": "U-turn without evidence",
     "unproven_sharp_movement": "sharp doubling back without a turn:lanes permission",
     "competing_movements": "competing movements in the same turn family",
@@ -989,7 +991,13 @@ def _ambiguity_reason(candidate: MovementCandidate, *, sharp_movement_min_degree
     causes = candidate.ambiguity_causes
     headline = causes[0] if causes else ""
     low, high = _BORDERLINE_TURN_BAND
-    if headline == "uturn_without_evidence":
+    if headline == "restriction_not_expressible":
+        text = (
+            "a turn restriction forbids a route through this movement, but the movement also "
+            "carries traffic the restriction does not name, so removing it is a judgement "
+            "rather than a deduction"
+        )
+    elif headline == "uturn_without_evidence":
         text = (
             f"U-turn at {candidate.angle_degrees:.1f} degrees and nothing in the tags "
             "permits a U-turn here"
@@ -2099,15 +2107,48 @@ def build_lane_model(
                     )
                 )
 
+    # Which ways feed which, so a via-way restriction can be told whether removing one step
+    # of its route would also remove traffic it does not name. The reading is at way level
+    # and so cannot tell a way's two directions apart: it can over-count what reaches a way,
+    # never under-count it, and over-counting sends the restriction to review rather than
+    # removing the wrong movement. That asymmetry is the whole safety of the test.
+    #
+    # Continuations are merged in for the same reason, not because a case is known: a
+    # continuation only exists where a node joins exactly two ways, and the chain's own
+    # movements are connectors, so the two cannot meet at the same node. Neither workspace
+    # has one that changes an answer. It is here so the count stays an upper bound if that
+    # ever stops being true.
+    way_entries, way_exits = way_adjacency(movement_candidates)
+    for _node_id, source_lane_id, target_lane_id in continuation_links:
+        source_way = lane_lookup[source_lane_id].source_way_ids[0]
+        target_way = lane_lookup[target_lane_id].source_way_ids[0]
+        if source_way == target_way:
+            continue
+        way_entries.setdefault(target_way, set()).add(source_way)
+        way_exits.setdefault(source_way, set()).add(target_way)
+
     relation_status: dict[str, tuple[str, set[int], str]] = {}
     forbidden_indexes: set[int] = set()
+    # Movements a via-way restriction covers but cannot remove on its own, held for the
+    # reviewer. `review_required` keeps them out of the lane graph exactly as `forbidden`
+    # does, so nothing prohibited becomes drivable while the question is open.
+    review_indexes: set[int] = set()
+    restriction_of_index: dict[int, list[str]] = {}
     for relation in sorted(snapshot.relations.values(), key=lambda item: item.identifier):
         if relation.tags.get("type") != "restriction":
             continue
         roles = restriction_roles(relation)
         via_way_ids = [value for kind, value in roles["via"] if kind == "way"]
         if via_way_ids:
-            status, removed, reason = via_way_resolution(relation, movement_candidates)
+            status, removed, reason = via_way_resolution(
+                relation, movement_candidates, way_entries, way_exits
+            )
+            if status == "review_required" and removed:
+                review_indexes.update(removed)
+                for index in removed:
+                    restriction_of_index.setdefault(index, []).append(relation.identifier)
+                relation_status[relation.identifier] = (status, removed, reason)
+                continue
         else:
             removed = {
                 index
@@ -2122,6 +2163,20 @@ def build_lane_model(
             )
         relation_status[relation.identifier] = (status, removed, reason)
         forbidden_indexes.update(removed)
+
+    # A movement a restriction covers but cannot claim on its own is ambiguous in the same
+    # sense a geometric one is: something real says it may be wrong and only a person can
+    # settle it. Marked on the candidate rather than handled beside it, so the status rule
+    # and the finding below need no second path.
+    for index in sorted(review_indexes):
+        held = movement_candidates[index]
+        movement_candidates[index] = MovementCandidate(
+            **{
+                **held.__dict__,
+                "ambiguous": True,
+                "ambiguity_causes": ("restriction_not_expressible", *held.ambiguity_causes),
+            }
+        )
 
     connectors: list[ConnectorFeature] = []
     for index, candidate in enumerate(movement_candidates):
@@ -2184,6 +2239,11 @@ def build_lane_model(
                         "to_lane_id": candidate.to_lane_id,
                         "ambiguity_causes": list(candidate.ambiguity_causes),
                         "turn_angle_degrees": round(candidate.angle_degrees, 3),
+                        **(
+                            {"restriction_relation_ids": sorted(restriction_of_index[index])}
+                            if index in restriction_of_index
+                            else {}
+                        ),
                     },
                     confidence="low",
                     reason=_ambiguity_reason(
@@ -2368,7 +2428,11 @@ def build_lane_model(
             for role, members in typed_roles.items()
         }
         status, removed, reason = relation_status[relation.identifier]
-        forbidden_ids = [connectors[index].identifier for index in sorted(removed)]
+        covered_ids = [connectors[index].identifier for index in sorted(removed)]
+        # Only movements this actually forbade. A restriction held for review covers
+        # movements it has not removed, and they are carried on the findings instead:
+        # naming them here would tell Stage 4 and `validation` they were forbidden.
+        forbidden_ids = [] if status == "review_required" else covered_ids
         restriction = RestrictionEffect(
             identifier=deterministic_id("restriction-effect", relation.identifier),
             source_relation_id=relation.identifier,
@@ -2388,9 +2452,38 @@ def build_lane_model(
                     severity="blocker",
                     source_type="relation",
                     source_ids=[relation.identifier],
-                    affected_feature_ids=forbidden_ids,
-                    proposed_value=restriction.model_dump(mode="json"),
+                    # The movements it covers, whether or not it managed to remove them, so
+                    # the page can put the relation and the held turns on the same map.
+                    affected_feature_ids=covered_ids,
+                    # Only when there is something to hold. `evidence_checksum` covers the
+                    # proposed value, so an always-present empty key would re-identify the
+                    # findings raised on chains that resolve to nothing and cost their
+                    # review decisions for no change in what is being asked.
+                    proposed_value={
+                        **restriction.model_dump(mode="json"),
+                        **({"held_connector_ids": covered_ids} if covered_ids else {}),
+                    },
                     confidence="low",
+                    reason=reason,
+                )
+            )
+        elif status == "enforced" and any(kind == "way" for kind, _ in typed_roles["via"]):
+            # Which step of the route was removed, and why the other one was not. A
+            # via-way prohibition can be enforced two ways and the generator picks; this
+            # is the record of the pick, so the choice is not made out of sight.
+            findings.append(
+                _finding(
+                    rule="restriction_enforced_leg",
+                    severity="warning",
+                    source_type="relation",
+                    source_ids=[relation.identifier],
+                    affected_feature_ids=forbidden_ids,
+                    proposed_value={
+                        "restriction": restriction.restriction,
+                        "chain": roles["from"] + roles["via"] + roles["to"],
+                        "removed_connector_ids": forbidden_ids,
+                    },
+                    confidence="high",
                     reason=reason,
                 )
             )

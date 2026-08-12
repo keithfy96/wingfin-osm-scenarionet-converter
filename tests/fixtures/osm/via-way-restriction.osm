@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Three via-way turn restrictions, one per shape the resolver has to tell apart. A
+  prohibition names a route FROM = VIA = TO, and the model can only delete one step of it,
+  so each case answers "which step, if any, carries nothing but the prohibited traffic".
+
+  Every way is one-way and single-lane, so each movement is exactly one connector.
+
+  case A, ways 100 = 110 = 120, relation 900
+      way 130 also feeds the via way, so removing the LAST step would take 130's movement
+      with it. The via way leads nowhere but 120, so removing the FIRST step is exact.
+
+      130 (from the south)
+            \
+   100 ====== 1 ====== 110 ====== 2 ====== 120        way 140 also arrives at node 2,
+                                 /                     which is what makes node 2 a
+                              140 (from the south)     junction rather than a bend
+
+  case B, ways 200 = 210 = 220, relation 910
+      nothing but 200 feeds the via way, so removing the LAST step is exact. The via way
+      also leads to 230, so removing the FIRST step would take that with it.
+
+   200 ====== 3 ====== 210 ====== 4 ====== 220
+              \                    \
+             240 (to the south)   230 (to the south)
+
+  case C, ways 300 = 310 = 320, relation 920
+      both: 330 also feeds the via way and 340 also leaves it, so neither step carries
+      only the prohibited traffic and the movements are held for review.
+
+      330 (from the south)
+            \
+   300 ====== 5 ====== 310 ====== 6 ====== 320
+                                   \
+                                  340 (to the south)
+-->
+<osm version="0.6" generator="osm-scenario-test">
+  <!-- case A -->
+  <node id="1" lat="3.1500" lon="101.7000" />
+  <node id="2" lat="3.1500" lon="101.7010" />
+  <node id="10" lat="3.1500" lon="101.6990" />
+  <node id="11" lat="3.1500" lon="101.7020" />
+  <node id="12" lat="3.1490" lon="101.7000" />
+  <node id="13" lat="3.1490" lon="101.7010" />
+
+  <!-- case B -->
+  <node id="3" lat="3.1600" lon="101.7000" />
+  <node id="4" lat="3.1600" lon="101.7010" />
+  <node id="20" lat="3.1600" lon="101.6990" />
+  <node id="21" lat="3.1600" lon="101.7020" />
+  <node id="22" lat="3.1590" lon="101.7010" />
+  <node id="23" lat="3.1590" lon="101.7000" />
+
+  <!-- case C -->
+  <node id="5" lat="3.1700" lon="101.7000" />
+  <node id="6" lat="3.1700" lon="101.7010" />
+  <node id="30" lat="3.1700" lon="101.6990" />
+  <node id="31" lat="3.1700" lon="101.7020" />
+  <node id="32" lat="3.1690" lon="101.7000" />
+  <node id="33" lat="3.1690" lon="101.7010" />
+
+  <way id="100">
+    <nd ref="10" />
+    <nd ref="1" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="110">
+    <nd ref="1" />
+    <nd ref="2" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="120">
+    <nd ref="2" />
+    <nd ref="11" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="130">
+    <nd ref="12" />
+    <nd ref="1" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="140">
+    <nd ref="13" />
+    <nd ref="2" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+
+  <way id="200">
+    <nd ref="20" />
+    <nd ref="3" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="210">
+    <nd ref="3" />
+    <nd ref="4" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="220">
+    <nd ref="4" />
+    <nd ref="21" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="230">
+    <nd ref="4" />
+    <nd ref="22" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="240">
+    <nd ref="3" />
+    <nd ref="23" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+
+  <way id="300">
+    <nd ref="30" />
+    <nd ref="5" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="310">
+    <nd ref="5" />
+    <nd ref="6" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="320">
+    <nd ref="6" />
+    <nd ref="31" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="330">
+    <nd ref="32" />
+    <nd ref="5" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="340">
+    <nd ref="6" />
+    <nd ref="33" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+
+  <relation id="900">
+    <member type="way" ref="100" role="from" />
+    <member type="way" ref="110" role="via" />
+    <member type="way" ref="120" role="to" />
+    <tag k="type" v="restriction" />
+    <tag k="restriction" v="no_straight_on" />
+  </relation>
+  <relation id="910">
+    <member type="way" ref="200" role="from" />
+    <member type="way" ref="210" role="via" />
+    <member type="way" ref="220" role="to" />
+    <tag k="type" v="restriction" />
+    <tag k="restriction" v="no_straight_on" />
+  </relation>
+  <relation id="920">
+    <member type="way" ref="300" role="from" />
+    <member type="way" ref="310" role="via" />
+    <member type="way" ref="320" role="to" />
+    <tag k="type" v="restriction" />
+    <tag k="restriction" v="no_straight_on" />
+  </relation>
+</osm>

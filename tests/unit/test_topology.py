@@ -16,6 +16,7 @@ from osm_scenario.topology import (
     tagged_movement_side,
     uturn_evidence_status,
     via_way_resolution,
+    way_adjacency,
 )
 
 
@@ -186,9 +187,15 @@ def test_node_only_restriction_forbids_other_transition() -> None:
     assert forbidden_by_node_restriction(candidate("a", "exit"), restriction)
 
 
+def resolve(restriction: Relation, candidates: list[MovementCandidate]):
+    """Resolve against the adjacency the candidates themselves describe."""
+    entries, exits = way_adjacency(candidates)
+    return via_way_resolution(restriction, candidates, entries, exits)
+
+
 def test_unique_via_way_chain_is_enforced() -> None:
     restriction = relation("no_straight_on", (("way", "b"),))
-    status, removed, _ = via_way_resolution(
+    status, removed, _ = resolve(
         restriction, [candidate("a", "b", "1"), candidate("b", "c", "2")]
     )
     assert status == "enforced"
@@ -215,17 +222,107 @@ def test_via_way_enforcement_accepts_multiple_lane_connectors_at_one_junction() 
             }
         ),
     ]
-    status, removed, _ = via_way_resolution(restriction, candidates)
+    status, removed, _ = resolve(restriction, candidates)
     assert status == "enforced"
     assert removed == {2, 3}
 
 
 def test_branching_via_way_chain_requires_review() -> None:
     restriction = relation("no_straight_on", (("way", "b"),))
-    status, removed, reason = via_way_resolution(
+    status, removed, reason = resolve(
         restriction,
         [candidate("a", "b", "1"), candidate("a", "b", "9"), candidate("b", "c", "2")],
     )
     assert status == "review_required"
     assert removed == set()
     assert "branching" in reason
+
+
+def test_the_via_way_suffix_is_kept_when_something_else_feeds_the_via_way() -> None:
+    """The defect Keith found: `x` never appears in the relation and lost its movement.
+
+    A connector is one step of a route and remembers nothing either side of itself, so
+    removing `b -> c` removes it for `x` too. Here `b` leads nowhere but `c`, so anyone
+    entering `b` from `a` was going to make the prohibited turn and removing `a -> b`
+    costs nothing.
+    """
+    restriction = relation("no_straight_on", (("way", "b"),))
+    status, removed, reason = resolve(
+        restriction,
+        [candidate("a", "b", "1"), candidate("x", "b", "1"), candidate("b", "c", "2")],
+    )
+    assert status == "enforced"
+    assert removed == {0}, "the first step, not the last"
+    assert "prefix removed" in reason
+    assert "way x" in reason
+
+
+def test_the_via_way_prefix_is_kept_when_the_via_way_leads_somewhere_else() -> None:
+    """The mirror: `b -> z` is legal, so removing `a -> b` would take it with it."""
+    restriction = relation("no_straight_on", (("way", "b"),))
+    status, removed, reason = resolve(
+        restriction,
+        [candidate("a", "b", "1"), candidate("b", "c", "2"), candidate("b", "z", "2")],
+    )
+    assert status == "enforced"
+    assert removed == {1}
+    assert reason == "prohibited via-way suffix removed"
+
+
+def test_the_suffix_wins_when_removing_either_step_would_be_exact() -> None:
+    """Identity, not taste. Every via-way restriction enforced before this change removed
+    the suffix, and re-deciding a settled one would move a forbidden connector id for no
+    reason and cost the review decision attached to it."""
+    restriction = relation("no_straight_on", (("way", "b"),))
+    status, removed, reason = resolve(
+        restriction, [candidate("a", "b", "1"), candidate("b", "c", "2")]
+    )
+    assert status == "enforced"
+    assert removed == {1}
+    assert reason == "prohibited via-way suffix removed"
+
+
+def test_a_via_way_with_traffic_at_both_ends_is_held_for_review() -> None:
+    """Neither step carries only the prohibited route, so there is nothing to deduce.
+
+    The movements come back so the caller can hold them: leaving them alone would let the
+    prohibited route be driven, and removing one would take legal traffic with it.
+    """
+    restriction = relation("no_straight_on", (("way", "b"),))
+    status, removed, reason = resolve(
+        restriction,
+        [
+            candidate("a", "b", "1"),
+            candidate("x", "b", "1"),
+            candidate("b", "c", "2"),
+            candidate("b", "z", "2"),
+        ],
+    )
+    assert status == "review_required"
+    assert removed == {2}, "the movements to hold, not the ones to forbid"
+    assert "way x" in reason and "way z" in reason
+
+
+def test_a_two_via_chain_asks_about_every_way_before_and_after_the_step() -> None:
+    """No workspace has a chain this long, so this is the only cover the branch gets.
+
+    `a -> b -> d -> c`, and `d` also leads to `z`. Removing the last step is exact only
+    if nothing else feeds `b` or `d`; removing an earlier one is exact only if nothing
+    later leads anywhere else, and `d -> z` is exactly that.
+    """
+    restriction = relation("no_straight_on", (("way", "b"), ("way", "d")))
+    candidates = [
+        candidate("a", "b", "1"),
+        candidate("b", "d", "2"),
+        candidate("d", "c", "3"),
+        candidate("d", "z", "3"),
+    ]
+    status, removed, reason = resolve(restriction, candidates)
+    assert status == "enforced"
+    assert removed == {2}, "only the last step is unaffected by d -> z"
+    assert reason == "prohibited via-way suffix removed"
+
+    # Give `d` a second entry as well and no step is clean any more.
+    status, _removed, reason = resolve(restriction, [*candidates, candidate("x", "d", "2")])
+    assert status == "review_required"
+    assert "way x" in reason and "way z" in reason
