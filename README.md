@@ -64,7 +64,10 @@ signals.
 ### Inspect — the visual checkpoints
 
 ```bash
-uv run osm-scenario inspect --workspace workspaces/junction-1 --view stage-1
+uv run osm-scenario inspect --osm-file ./workspaces/mosque/source/map.osm \
+  --workspace workspaces/mosque \
+  --driving-side left
+
 ```
 
 `--view` takes five values:
