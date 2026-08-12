@@ -1519,7 +1519,13 @@ const map=L.map('map',{preferCanvas:true});L.tileLayer('https://tile.openstreetm
 // drawn layer in place kept its z-order, and source ways sit at the bottom of it —
 // a searched way turned yellow underneath the lane and connector geometry covering
 // it, which is indistinguishable from nothing having happened.
-map.createPane('focus');map.getPane('focus').style.zIndex=650;const focusLayer=L.layerGroup().addTo(map);
+// The pane must not take clicks. `preferCanvas` gives every pane its own canvas, and a
+// Leaflet canvas is the size of the whole viewport rather than the size of what is drawn
+// on it — so the first highlight laid a full-screen sheet at z-index 650 over the map,
+// hit-testing only its own two or three shapes and swallowing every other click. Emptying
+// the layer did not help: Leaflet keeps a pane's renderer for the life of the map, so the
+// map stayed dead until the page was reloaded.
+map.createPane('focus');map.getPane('focus').style.zIndex=650;map.getPane('focus').style.pointerEvents='none';const focusLayer=L.layerGroup().addTo(map);
 const groups={source_way:L.layerGroup(),source_node:L.layerGroup(),lane_polygon:L.layerGroup(),lane_centerline:L.layerGroup(),lane_direction:L.layerGroup(),connector_polygon:L.layerGroup(),active:L.layerGroup(),review_required:L.layerGroup(),forbidden:L.layerGroup(),stop_line:L.layerGroup()};const byId=new Map(),propsById=new Map(),featuresById=new Map(),allLayers=[];let selected=[],lastFocused=null;
 // A connector is drawn twice: a hairline centreline, filed under its status, and a
 // lane-width band, filed under 'Connector bands'. A Leaflet overlay is one checkbox to
@@ -1566,7 +1572,10 @@ function popup(p){
         +`<tr><td><strong>Leaves to</strong></td><td>${linkTable(laneLinks(p,false))}</td></tr></table>`;
   }
   return `<strong>${esc(p.kind)}</strong>${head}<table class="popup-table">${Object.entries(p).map(([k,v])=>`<tr><td>${esc(k)}</td><td>${esc(Array.isArray(v)?v.join(', '):v)}</td></tr>`).join('')}</table>`}
-for(const feature of payload.features.features){const p=feature.properties;const layer=L.geoJSON(feature,{style:()=>styleFor(p),pointToLayer:(_f,latlng)=>L.circleMarker(latlng,styleFor(p)),onEachFeature:(_f,l)=>l.bindPopup(()=>popup(p))});propsById.set(p.id,p);if(!featuresById.has(p.id))featuresById.set(p.id,[]);featuresById.get(p.id).push(feature);layer.eachLayer(l=>{l._baseStyle=styleFor(p);allLayers.push(l);if(!byId.has(p.id))byId.set(p.id,[]);byId.get(p.id).push(l)});const key=p.kind==='connector'?p.status:p.kind;groups[key].addLayer(layer);if(p.kind==='connector_polygon'&&bandsByStatus[p.status])bandsByStatus[p.status].push(layer)}
+// Clicking a feature focuses it, so the yellow always marks the thing being read and
+// moves on to the next one — following a link and then clicking somewhere else is the
+// whole loop of using this page.
+for(const feature of payload.features.features){const p=feature.properties;const layer=L.geoJSON(feature,{style:()=>styleFor(p),pointToLayer:(_f,latlng)=>L.circleMarker(latlng,styleFor(p)),onEachFeature:(_f,l)=>{l.bindPopup(()=>popup(p));l.on('click',()=>focusSource(p.id,false))}});propsById.set(p.id,p);if(!featuresById.has(p.id))featuresById.set(p.id,[]);featuresById.get(p.id).push(feature);layer.eachLayer(l=>{l._baseStyle=styleFor(p);allLayers.push(l);if(!byId.has(p.id))byId.set(p.id,[]);byId.get(p.id).push(l)});const key=p.kind==='connector'?p.status:p.kind;groups[key].addLayer(layer);if(p.kind==='connector_polygon'&&bandsByStatus[p.status])bandsByStatus[p.status].push(layer)}
 groups.source_way.addTo(map);groups.source_node.addTo(map);groups.lane_centerline.addTo(map);groups.lane_direction.addTo(map);groups.connector_polygon.addTo(map);groups.active.addTo(map);groups.review_required.addTo(map);groups.forbidden.addTo(map);groups.stop_line.addTo(map);L.control.layers(null,{'Source OSM ways':groups.source_way,'Source OSM nodes':groups.source_node,'Lane polygons':groups.lane_polygon,'Lane centrelines':groups.lane_centerline,'Lane direction arrows':groups.lane_direction,'Connector bands':groups.connector_polygon,'Active connectors':groups.active,'Review-required connectors':groups.review_required,'Forbidden connectors':groups.forbidden,'Stop lines':groups.stop_line},{collapsed:false}).addTo(map);
 // Only the control fires these — the addTo calls above do not — so the opening state,
 // with every box ticked, needs no special case.
@@ -1607,9 +1616,13 @@ const FOCUS_CASING={color:'#111318',weight:13,opacity:.95,fill:false},FOCUS_LINE
 // Drawn as its own geometry in the focus pane rather than as a restyle of the layer
 // already on the map, so the highlight sits above everything and stays visible when
 // the group it belongs to is switched off in the layer control.
-function drawFocus(key,features){
+function drawFocus(features){
   focusLayer.clearLayers();const drawn=[];
-  const add=(feature,options)=>{const layer=L.geoJSON(feature,Object.assign({pane:'focus'},options));layer.bindPopup(()=>describeId(key));focusLayer.addLayer(layer);drawn.push(layer)};
+  // No popup on the highlight: the pane ignores pointers, so one could never open, and it
+  // would only repeat what focusSource has already written into the detail pane. Leaving
+  // the highlight transparent to clicks is the point — the popup a reviewer wants over a
+  // highlighted lane is the lane's own, with its Entered from / Leaves to links.
+  const add=(feature,options)=>{const layer=L.geoJSON(feature,Object.assign({pane:'focus'},options));focusLayer.addLayer(layer);drawn.push(layer)};
   for(const feature of features){
     const type=String(feature.geometry.type);
     if(type.indexOf('Point')>=0)add(feature,{pointToLayer:(_f,ll)=>L.circleMarker(ll,{pane:'focus',radius:11,color:'#111318',weight:4,fillColor:'#ffd43b',fillOpacity:1})});
@@ -1618,11 +1631,15 @@ function drawFocus(key,features){
     // basemap and the lane geometry it runs through.
     else{add(feature,{style:()=>FOCUS_CASING});add(feature,{style:()=>FOCUS_LINE})}}
   return drawn}
-function focusSource(key){
+// `pan` is false when the reviewer clicked the thing on the map: it is already in view and
+// under the cursor, and moving the map out from under a click is disorienting. A chip in a
+// popup or a searched ID needs the opposite — the lane it names is usually off-screen — so
+// those pan, and close the popup they were clicked in rather than towing it somewhere else.
+function focusSource(key,pan){
   clearSelection();const features=featuresFor(key);
   if(!features.length){document.getElementById('detail').innerHTML=`<p class="muted">Nothing on this map or in the source OSM carries the ID ${esc(key)}.</p>`;return}
-  lastFocused=key;const bounds=L.featureGroup(drawFocus(key,features)).getBounds();
-  if(bounds.isValid())map.fitBounds(bounds.pad(.35),{maxZoom:19});
+  lastFocused=key;const bounds=L.featureGroup(drawFocus(features)).getBounds();
+  if(pan!==false&&bounds.isValid()){map.closePopup();map.fitBounds(bounds.pad(.35),{maxZoom:19})}
   document.getElementById('detail').innerHTML=describeId(key)}
 // An ID that matches nothing has to say so. Silence is indistinguishable from a typo,
 // and from the map having quietly failed to highlight what was found.

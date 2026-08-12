@@ -1325,6 +1325,22 @@ def test_generate_lane_model_writes_deterministic_stage_2_artifacts(tmp_path: Pa
     # on the map: source ways sit at the bottom of the z-order, so a restyled way went
     # yellow underneath the lane and connector geometry covering it.
     assert "createPane('focus')" in html and "function drawFocus" in html
+    # ...and that pane must never take a click. `preferCanvas` gives it a canvas the size
+    # of the viewport, not of the highlight, so the first focus laid a full-screen sheet
+    # over the map and nothing else on it could be clicked again until the page reloaded.
+    # Emptying the layer did not undo it: Leaflet keeps a pane's renderer for the life of
+    # the map.
+    assert "map.getPane('focus').style.pointerEvents='none'" in html
+    # The highlight's own popup went with it - unreachable through a pane that ignores
+    # pointers, and a duplicate of what focusSource writes into the detail pane. What a
+    # reviewer wants over a highlighted lane is the lane's popup, with its links.
+    assert "describeId(key));focusLayer" not in html
+    # Clicking a feature focuses it without panning: the map must not move out from under
+    # a click, and following a link then clicking elsewhere is how the page is used.
+    assert "l.on('click',()=>focusSource(p.id,false))" in html
+    # A chip or a searched id does pan, and closes the popup it was clicked in rather
+    # than towing it across the map.
+    assert "map.closePopup();map.fitBounds" in html
     # An id that matches nothing has to say so; silence reads as a typo.
     assert "in source/map.osm" in html
     report = json.loads(report_path.read_text())
