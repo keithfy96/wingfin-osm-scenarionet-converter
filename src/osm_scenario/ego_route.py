@@ -783,46 +783,45 @@ def plan_route(
     )
 
 
-def route_polyline(
-    *,
-    model: PreliminaryLaneModel,
-    route_lanes: tuple[str, ...] | list[str],
-    lane_changes: tuple[int, ...],
-) -> np.ndarray:
-    """The path a car actually drives along a chain of lanes.
+def _junction_nodes(model: PreliminaryLaneModel) -> set[str]:
+    """Nodes where roads meet, as opposed to where one road is merely split in two.
 
-    Junction movements follow the connector; lane changes cross diagonally over the second
-    half of one lane and the first half of the next; everything else is the lane centreline.
+    The same test `generation._node_setbacks` uses, re-derived here from `source_edge`
+    rather than passed in, because putting it on the lane model would move the schema
+    version and with it the generation fingerprint - which would invalidate a live review
+    to carry a fact both sides can work out for themselves.
+
+    More than two distinct neighbours, not more than two edges: a two-way road already
+    puts four directed edges on every node along it.
     """
+    adjacency: dict[str, set[str]] = {}
+    for lane in model.lanes:
+        start, end = lane.source_edge[0], lane.source_edge[1]
+        adjacency.setdefault(start, set()).add(end)
+        adjacency.setdefault(end, set()).add(start)
+    return {node for node, neighbours in adjacency.items() if len(neighbours) > 2}
 
-    def _junction_nodes(model: PreliminaryLaneModel) -> set[str]:
-        """Nodes where roads meet, as opposed to where one road is merely split in two.
 
-        The same test `generation._node_setbacks` uses, re-derived here from `source_edge`
-        rather than passed in, because putting it on the lane model would move the schema
-        version and with it the generation fingerprint - which would invalidate a live review
-        to carry a fact both sides can work out for themselves.
+def _bend_deg(before: LaneFeature, after: LaneFeature) -> float:
+    """How far the road turns between the end of one lane and the start of the next."""
+    a0, a1 = before.centerline[-2], before.centerline[-1]
+    b0, b1 = after.centerline[0], after.centerline[1]
+    entry = math.atan2(a1.y - a0.y, a1.x - a0.x)
+    leave = math.atan2(b1.y - b0.y, b1.x - b0.x)
+    return abs(math.degrees(math.atan2(math.sin(leave - entry), math.cos(leave - entry))))
 
-        More than two distinct neighbours, not more than two edges: a two-way road already
-        puts four directed edges on every node along it.
-        """
-        adjacency: dict[str, set[str]] = {}
-        for lane in model.lanes:
-            start, end = lane.source_edge[0], lane.source_edge[1]
-            adjacency.setdefault(start, set()).add(end)
-            adjacency.setdefault(end, set()).add(start)
-        return {node for node, neighbours in adjacency.items() if len(neighbours) > 2}
 
-    def _bend_deg(before: LaneFeature, after: LaneFeature) -> float:
-        """How far the road turns between the end of one lane and the start of the next."""
-        a0, a1 = before.centerline[-2], before.centerline[-1]
-        b0, b1 = after.centerline[0], after.centerline[1]
-        entry = math.atan2(a1.y - a0.y, a1.x - a0.x)
-        leave = math.atan2(b1.y - b0.y, b1.x - b0.x)
-        return abs(math.degrees(math.atan2(math.sin(leave - entry), math.cos(leave - entry))))
+def junction_crossings(model: PreliminaryLaneModel) -> set[tuple[str, str]]:
+    """Every lane-to-lane step that crosses a junction, as `(from_lane_id, to_lane_id)`.
 
-    lanes = {lane.identifier: lane for lane in model.lanes}
-    changing = set(lane_changes)
+    Which side of `MAX_JOIN_M` / `MAX_CROSSING_M` a step is judged against, and nothing
+    else. Lifted out of `route_polyline` so the Stage 6 pages can be handed the answer
+    instead of working it out again: the browser previews the drive and Python re-derives
+    it, and the two disagreeing is how a route the converter builds came to be refused on
+    the page. The browser cannot reproduce this test anyway - 21 of `junction-1`'s 26
+    straight-through cases turn on `source_edge`, which the payload does not carry - and a
+    second implementation would be a second thing to drift.
+    """
     # The connectors say *which* steps cross a junction, which is all they are asked for
     # here. Their geometry is not used: `topology.connector_curve` builds a marker for the
     # inspection map, and splicing it in as a drive line is what put a 180° flip at 55 of
@@ -849,6 +848,7 @@ def route_polyline(
     # more than two roads meet, and the bend fillet, which applies at a through node the road
     # visibly turns at. `BEND_FILLET_MIN_DEGREES` is imported rather than restated so the two
     # modules cannot drift.
+    lanes = {lane.identifier: lane for lane in model.lanes}
     junctions = _junction_nodes(model)
     crossings |= {
         (before.identifier, after.identifier)
@@ -860,6 +860,23 @@ def route_polyline(
             or _bend_deg(before, after) >= BEND_FILLET_MIN_DEGREES
         )
     }
+    return crossings
+
+
+def route_polyline(
+    *,
+    model: PreliminaryLaneModel,
+    route_lanes: tuple[str, ...] | list[str],
+    lane_changes: tuple[int, ...],
+) -> np.ndarray:
+    """The path a car actually drives along a chain of lanes.
+
+    Junction movements follow the connector; lane changes cross diagonally over the second
+    half of one lane and the first half of the next; everything else is the lane centreline.
+    """
+    lanes = {lane.identifier: lane for lane in model.lanes}
+    changing = set(lane_changes)
+    crossings = junction_crossings(model)
 
     finished: list[np.ndarray] = []
     current: np.ndarray | None = None

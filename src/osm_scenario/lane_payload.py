@@ -7,6 +7,10 @@ and there would be no way to tell which page was lying.
 
 So the payload is built once, here, from the `neighbours` and `moves` the scenario itself
 was built from. Neither page recomputes the network.
+
+The same applies to which of those joins cross a junction. That is `ego_route`'s answer,
+carried in `crossings`, because it is the question the drive is judged on and the page had
+been answering it differently.
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ from typing import Any
 from pyproj import Transformer
 
 from osm_scenario.comparison_view import _lonlat
+from osm_scenario.ego_route import junction_crossings
 from osm_scenario.lane_model import PreliminaryLaneModel
 
 
@@ -110,9 +115,20 @@ def build_lane_payload(
         if connector.status == "active"
     ]
 
+    # Which steps cross a junction, decided once by `ego_route.junction_crossings` and
+    # carried rather than re-derived. It is not the same question as "is there a connector":
+    # a road running straight through a junction is a plain continuation with no connector,
+    # and since generation started cutting lanes back to the junction edge those steps have
+    # a whole junction to span. The page judged them against `MAX_JOIN_M` (5 m) instead of
+    # `MAX_CROSSING_M` (20 m) and refused them - 77% of the destinations it painted blue on
+    # `mosque` could not be drawn. The browser cannot work this out for itself either: most
+    # of those cases turn on `source_edge`, which no lane entry carries.
+    crossings = sorted(junction_crossings(model))
+
     return {
         "lanes": lanes,
         "connectors": connectors,
+        "crossings": [[before, after] for before, after in crossings],
         "ways": ways,
         "center": center,
         "bounds": bounds,

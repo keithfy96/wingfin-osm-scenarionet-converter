@@ -27,9 +27,20 @@ export interface RouteConnector {
   line: [number, number][];
 }
 
+/** A step from one lane to another, `[from, to]`. */
+export type LanePair = [string, string];
+
 export interface RouteBuilderPayload {
   lanes: RouteLane[];
   connectors: RouteConnector[];
+  /**
+   * The steps that cross a junction, decided by `ego_route.junction_crossings` and carried
+   * rather than worked out here. Having a connector is not the same question: a road
+   * running straight through a junction is a plain continuation with no connector, and
+   * most such cases turn on `source_edge`, which no lane entry carries. Optional only so a
+   * page generated before this field existed still loads.
+   */
+  crossings?: LanePair[];
   ways: { id: string; lanes: number }[];
   center: [number, number];
   bounds: [[number, number], [number, number]] | null;

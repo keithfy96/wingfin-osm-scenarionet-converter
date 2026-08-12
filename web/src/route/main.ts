@@ -5,10 +5,10 @@
 // it; the downloaded routes.json is what `osm-scenario convert --routes` turns into
 // scenarios.
 
-import { routeGeometry, type RouteGeometry } from "./geometry.js";
+import { routeGeometry, RouteGeometryError, type RouteGeometry } from "./geometry.js";
 import { RouteGraph, type FoundRoute } from "./path.js";
 import { nameProblem, parseRoutes, RoutesFileError, serializeRoutes } from "./routes-file.js";
-import type { ChosenRoute, RouteBuilderPayload, RouteLane } from "./types.js";
+import type { ChosenRoute, LanePair, RouteBuilderPayload, RouteLane } from "./types.js";
 import type { LeafletLayer, LeafletMap } from "../types-dom.js";
 
 // Before anything is picked every lane is IDLE, so IDLE has to be legible on its own - the
@@ -53,6 +53,10 @@ function boot(): void {
 
   const graph = new RouteGraph(payload.lanes);
   const byId = new Map(payload.lanes.map((lane) => [lane.id, lane]));
+  // A page generated before `crossings` existed falls back to what it used to do, rather
+  // than losing every junction and refusing everything.
+  const crossings: LanePair[] =
+    payload.crossings ?? payload.connectors.map((c): LanePair => [c.from, c.to]);
 
   // Canvas hit-testing accepts a click within half the line's weight of it, which for a
   // 3 px lane is a 3 px target - unusably precise for something the page asks you to click.
@@ -157,9 +161,21 @@ function boot(): void {
 
   function refresh(): void {
     found = start && end ? graph.find(start, end) : null;
-    geometry = found
-      ? routeGeometry(graph, found.lanes, found.laneChanges, payload.connectors)
-      : null;
+    // A route this cannot draw must say so. `routeGeometry` throws, and the throw used to
+    // escape the click handler from here - before a single line of the panel had been
+    // written - so the page kept whatever it last said, left the Add button as it was and
+    // never redrew. A refusal read as the previous answer, which is how a route the
+    // converter builds happily came to look like "no drive exists".
+    let refusal: string | null = null;
+    geometry = null;
+    if (found) {
+      try {
+        geometry = routeGeometry(graph, found.lanes, found.laneChanges, crossings);
+      } catch (error) {
+        if (!(error instanceof RouteGeometryError)) throw error;
+        refusal = error.message;
+      }
+    }
     if (!start) {
       status.textContent = "Click a lane to start from.";
       detail.textContent = "";
@@ -175,6 +191,11 @@ function boot(): void {
       detail.textContent =
         "Most pairs have none, because the map is one-way in most places. Pick an end " +
         "that is drawn in blue.";
+    } else if (refusal) {
+      status.textContent = "That drive cannot be built.";
+      detail.textContent =
+        `The lanes join up, but ${refusal}. The converter builds this route the same way, ` +
+        "so it would refuse it too. Pick an end that does not need this step.";
     } else {
       const junctions = found.lanes.length - 1 - found.laneChanges.length;
       status.textContent = `${geometry!.distanceM.toFixed(0)} m over ${found.lanes.length} lanes.`;
@@ -184,7 +205,9 @@ function boot(): void {
         "(drawn in amber). The converter re-derives this route from the same map, so what " +
         "you see here is what gets built.";
     }
-    addButton.disabled = !found;
+    // A route the page cannot draw is one the converter cannot build, so it must not be
+    // addable either - `geometry`, not `found`, is the test.
+    addButton.disabled = !geometry;
     redraw();
   }
 

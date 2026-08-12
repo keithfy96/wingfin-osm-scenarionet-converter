@@ -16,7 +16,7 @@
 // because a radius in degrees is a different radius north-south than east-west.
 
 import { crossingKey, lineLength, type RouteGraph } from "./path.js";
-import type { RouteConnector } from "./types.js";
+import type { LanePair } from "./types.js";
 
 /** All of these mirror the constant of the same name in `ego_route`. */
 export const TURN_RADIUS_M = 9;
@@ -371,11 +371,17 @@ export function routeGeometry(
   graph: RouteGraph,
   routeLanes: string[],
   laneChanges: number[],
-  connectors: RouteConnector[],
+  crossingPairs: LanePair[],
 ): RouteGeometry {
-  // The connectors say *which* steps cross a junction. Their geometry is not used - see the
-  // note at the top of this file, and `ego_route`'s module docstring for the measurements.
-  const crossings = new Set(connectors.map((c) => crossingKey(c.from, c.to)));
+  // Which steps cross a junction, and so are judged against `MAX_CROSSING_M` rather than
+  // `MAX_JOIN_M`. Handed over by `ego_route.junction_crossings` in the payload, not worked
+  // out here. This used to be read off the connectors, and a connector is not the same
+  // question: a road running straight through a junction is a plain continuation with no
+  // connector, and once generation started cutting lanes back to the junction edge those
+  // steps had a whole junction to span. Judged as plain joins they were refused - 77% of
+  // the destinations this page painted blue on `mosque` could not be drawn, while the
+  // converter built them without complaint.
+  const crossings = new Set(crossingPairs.map(([from, to]) => crossingKey(from, to)));
   const changing = new Set(laneChanges);
 
   const first = graph.lanes.get(routeLanes[0] ?? "");

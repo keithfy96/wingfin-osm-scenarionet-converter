@@ -22,6 +22,7 @@ from osm_scenario.ego_route import (
     ACCEL_MPS2,
     BRAKE_MPS2,
     LATERAL_ACCEL_MPS2,
+    MAX_CROSSING_M,
     MAX_JOIN_M,
     MAX_VERTEX_TURN_DEG,
     STOP_LINE_SETBACK_M,
@@ -32,6 +33,7 @@ from osm_scenario.ego_route import (
     _project_along,
     _refuse_reversals,
     ego_track,
+    junction_crossings,
     plan_route,
     route_polyline,
     route_summary,
@@ -602,6 +604,67 @@ def test_no_route_on_the_real_map_turns_more_than_the_gate_allows() -> None:
     assert refused == 0, f"{refused} of {built + refused} drivable pairs were refused"
     assert over == 0, f"{over} of {built} built routes turn more than 30° at a vertex"
     assert worst < 30.0
+
+
+def test_every_step_too_wide_for_a_plain_join_is_named_as_a_junction() -> None:
+    """A step wider than `MAX_JOIN_M` must be one `junction_crossings` knows about.
+
+    Any that is not is a drive that gets refused, and the map does not say so anywhere - the
+    route builder paints the destination blue off the same graph and then cannot draw it.
+    That is what happened on `mosque`: 25 continuations opened past 5 m when generation
+    started cutting lanes back to the junction edge, and 77% of the destinations the page
+    called reachable could not be built.
+
+    Both directions are asserted. Every wide step is a crossing, so nothing is refused; and
+    every wide step still fits inside `MAX_CROSSING_M`, so calling it a crossing is not a
+    way of waving through a hole in the road.
+    """
+    model = _real_model()
+    if model is None:
+        pytest.skip("workspaces/junction-1 is gitignored and not present")
+    lanes = {lane.identifier: lane for lane in model.lanes}
+    crossings = junction_crossings(model)
+
+    wide, unnamed, widest = 0, [], 0.0
+    for before in model.lanes:
+        for identifier in before.exit_lanes:
+            after = lanes.get(identifier)
+            if after is None:
+                continue
+            end, start = before.centerline[-1], after.centerline[0]
+            gap = math.hypot(start.x - end.x, start.y - end.y)
+            if gap <= MAX_JOIN_M:
+                continue
+            wide += 1
+            widest = max(widest, gap)
+            if (before.identifier, after.identifier) not in crossings:
+                unnamed.append((before.identifier, after.identifier, round(gap, 2)))
+
+    assert wide > 0, "no step on the real map is wider than a plain join; the test is inert"
+    assert not unnamed, (
+        f"{len(unnamed)} of {wide} wide steps are not named as crossings: {unnamed[:5]}"
+    )
+    assert widest <= MAX_CROSSING_M, f"widest step is {widest:.2f} m, past MAX_CROSSING_M"
+
+
+def test_the_crossings_a_route_is_judged_on_include_more_than_the_connectors() -> None:
+    """A road running straight through a junction has no connector, and still crosses one.
+
+    Nothing happens topologically at such a node - lane names lane - so reading "crossing"
+    off the connectors alone misses every one of them. Kept as its own assertion because it
+    is the difference the browser was getting wrong.
+    """
+    model = _real_model()
+    if model is None:
+        pytest.skip("workspaces/junction-1 is gitignored and not present")
+    connectors = {
+        (connector.from_lane_id, connector.to_lane_id)
+        for connector in model.connectors
+        if connector.status == "active"
+    }
+    crossings = junction_crossings(model)
+    assert connectors <= crossings
+    assert crossings - connectors, "no straight-through crossing found; the widening is dead code"
 
 
 def test_a_change_that_ends_a_short_lane_leaves_room_for_the_junction_after_it() -> None:

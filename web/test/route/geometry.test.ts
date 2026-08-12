@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 import { cut, routeGeometry } from "../../src/route/geometry.js";
 import { lineLength, RouteGraph } from "../../src/route/path.js";
-import type { RouteConnector, RouteLane } from "../../src/route/types.js";
+import type { LanePair, RouteLane } from "../../src/route/types.js";
 
 function lane(id: string, from: number, to: number, lat = 0, extra: Partial<RouteLane> = {}): RouteLane {
   return {
@@ -33,9 +33,7 @@ const LANES: RouteLane[] = [
   lane("a2", 0, 0.001, 0.0001, { sideways: ["a"] }),
   lane("b", 0.0011, 0.002, 0, { exits: [] }),
 ];
-const CONNECTORS: RouteConnector[] = [
-  { from: "a", to: "b", line: [[0, 0.001], [0.0001, 0.00105], [0, 0.0011]] },
-];
+const CROSSINGS: LanePair[] = [["a", "b"]];
 
 describe("cut", () => {
   const line: [number, number][] = [
@@ -85,7 +83,7 @@ const CORNER: RouteLane[] = [
   { ...lane("n", 0, 0), line: [at(0, 0), at(60, 0)], exits: ["e"], sideways: [] },
   { ...lane("e", 0, 0), line: [at(63, 3), at(63, 63)], exits: [], sideways: [] },
 ];
-const CORNER_CROSSING: RouteConnector[] = [{ from: "n", to: "e", line: [at(60, 0), at(63, 3)] }];
+const CORNER_CROSSING: LanePair[] = [["n", "e"]];
 
 function headings(line: [number, number][]): number[] {
   const out: number[] = [];
@@ -109,7 +107,7 @@ describe("routeGeometry", () => {
   const corner = new RouteGraph(CORNER);
 
   it("includes the first lane, which an earlier estimate left out entirely", () => {
-    const g = routeGeometry(graph, ["a", "b"], [], CONNECTORS);
+    const g = routeGeometry(graph, ["a", "b"], [], CROSSINGS);
     expect(g.distanceM).toBeGreaterThan(lineLength(LANES[0]!.line));
   });
 
@@ -126,9 +124,29 @@ describe("routeGeometry", () => {
   });
 
   it("refuses a gap too wide for a junction to span", () => {
-    // Without a connector saying the step crosses a junction, the same 11 m is a hole in a
-    // road rather than a crossroads, and a car would drive straight over it.
+    // Nothing saying the step crosses a junction makes the same 11 m a hole in a road
+    // rather than a crossroads, and a car would drive straight over it.
     expect(() => routeGeometry(graph, ["a", "b"], [], [])).toThrow(/gap before lane b/);
+  });
+
+  it("spans a junction a road runs straight through, which has no connector", () => {
+    // The case that took a screenshot to find. Generation cuts every lane back to the edge
+    // of its junction, so a road going straight on across one is parted by the setback -
+    // 10.00 m at node 1239566959 on `mosque`, dead straight, 3 arms. Topologically nothing
+    // happens there, so there is no connector, and the page used to read "no connector" as
+    // "not a junction" and refuse a drive the converter built without complaint. Which
+    // steps cross a junction now comes from `ego_route.junction_crossings` in the payload.
+    const straight: RouteLane[] = [
+      { ...lane("u", 0, 0), line: [at(0, 0), at(0, 40)], exits: ["v"], sideways: [] },
+      { ...lane("v", 0, 0), line: [at(0, 50), at(0, 90)], exits: [], sideways: [] },
+    ];
+    const through = new RouteGraph(straight);
+    expect(() => routeGeometry(through, ["u", "v"], [], [])).toThrow(
+      /leaves a 10 m gap before lane v/,
+    );
+    const g = routeGeometry(through, ["u", "v"], [], [["u", "v"]]);
+    expect(g.distanceM).toBeGreaterThan(80);
+    expect(worstTurnDeg(g.line)).toBeLessThan(1);
   });
 
   it("spans a lane change over one lane's worth of road, not two", () => {
@@ -181,9 +199,9 @@ describe("a manoeuvre must leave room for the one after it", () => {
       { ...lane("m", 0, 0), line: [at(42, 2), at(42, 16)], exits: ["l"], sideways: [] },
       { ...lane("l", 0, 0), line: [at(44, 18), at(90, 18)], exits: [], sideways: [] },
     ];
-    const crossings: RouteConnector[] = [
-      { from: "f", to: "m", line: [at(40, 0), at(42, 2)] },
-      { from: "m", to: "l", line: [at(42, 16), at(44, 18)] },
+    const crossings: LanePair[] = [
+      ["f", "m"],
+      ["m", "l"],
     ];
     const g = routeGeometry(new RouteGraph(lanes), ["f", "m", "l"], [], crossings);
     expect(worstTurnDeg(g.line)).toBeLessThan(30);
