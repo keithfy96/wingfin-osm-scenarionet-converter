@@ -31,7 +31,9 @@ Four things about the geometry are worth knowing before reading the code.
 * **Speed follows the geometry.** A car does not take a 90° junction at the speed limit, and
   a track that says it did teaches an agent that it can. `speed_profile` caps the speed at
   every vertex by the curvature there, then bounds how fast it may change, so the recorded car
-  slows before a turn and picks up after it.
+  slows before a turn and picks up after it. How hard it is allowed to corner is set by
+  `LATERAL_ACCEL_MPS2`, and that constant is pinned to the drivability gate in
+  `tools/check_dataset.py` rather than to a comfort figure - see the comment on it.
 
 * **The route is generated, and says so.** Nothing in the OSM says a car drove here. What
   the source does supply is every metre of the geometry, so the invention is confined to
@@ -158,10 +160,13 @@ _STRAIGHT_DEG = 1.0
 # own routes. That step is not a manoeuvre and the car should not slow for it.
 _SMOOTHING_MAX_DEG = 20.0
 
-# The radius a shallow join is smoothed to, in metres. Chosen so that shifting sideways at
-# 50 km/h stays inside `LATERAL_ACCEL_MPS2`: v² / a = 13.89² / 1.8 = 107 m. Rounded up, and
-# the arithmetic is here rather than computed because this is a property of the road, not of
-# whichever route happens to be driven over it.
+# The radius a shallow join is smoothed to, in metres. It was chosen so that shifting sideways
+# at 50 km/h stayed inside the old 1.8 m/s² lateral cap: v² / a = 13.89² / 1.8 = 107 m, rounded
+# up. Against the present 8.5 the same sum asks for only 22.7 m, so 110 is now generous rather
+# than exact - and it stays that way deliberately. A larger radius asks for a *longer*, gentler
+# crossing; shrinking it to match the cap would tighten every lane change, which is already the
+# sharpest thing on a drive line. The arithmetic is here rather than computed because this is a
+# property of the road, not of whichever route happens to be driven over it.
 SMOOTHING_RADIUS_M = 110.0
 
 # How finely the speed profile is worked out. The line it runs on is mostly two-point lanes
@@ -181,17 +186,35 @@ PROFILE_SAMPLE_M = 0.1
 # is drawn as a curve and so turns a few degrees per vertex however sharp it is.
 MAX_VERTEX_TURN_DEG = 150.0
 
-# Comfortable lateral acceleration through a bend, in m/s² - about 0.18 g, which is roughly
-# the side friction urban junction design assumes and roughly what a driver uses. It is what
-# decides the speed through a turn: 9 m of radius comes out at about 15 km/h.
-LATERAL_ACCEL_MPS2 = 1.8
+# Lateral acceleration through a bend, in m/s², and what decides the speed through a turn:
+# 9 m of radius comes out at about 31 km/h.
+#
+# This was 1.8 - about 0.18 g, the side friction urban junction design assumes - and at that
+# figure the recorded car crawled. Over 120 real `junction-1` routes it averaged 25.0 km/h on
+# roads posted at 50, took a 9 m junction turn at 15 km/h, and its worst route sat at 3.6 km/h.
+#
+# 8.5 is not a comfort figure and is not chosen as one. It is the edge of the drivability gate
+# `tools/check_dataset.py` already enforces - no more than 30° of heading change in one 0.1 s
+# step - which is what really caps the pace, because degrees per step scale with speed while
+# the geometry underneath does not. Measured over those same 120 routes, cruising at the posted
+# limit: 7.0 gives 39.5 km/h with a worst step of 26.9°; 8.5 gives 41.5 km/h at 29.6°, still
+# nothing over the gate; 9.0 gives 41.8 km/h and puts one step over it; 12.0 gives 44.7 km/h
+# and puts 22 over. Past 8.5 the gain is a percent and the cost is a failing dataset.
+LATERAL_ACCEL_MPS2 = 8.5
 
 # How fast the recorded car may gain and lose speed, in m/s². Braking is allowed to be
 # firmer than acceleration, as it is in a car. Without these the speed would step from the
 # limit to the corner speed between two samples, which is not a drive and would differentiate
 # into an impossible acceleration.
-ACCEL_MPS2 = 1.2
-BRAKE_MPS2 = 2.0
+#
+# These were 1.2 and 2.0, and they were the other half of the crawl: at 1.2 m/s² the car needed
+# 11.6 s and 80 m to reach 50 km/h, and at 2.0 it began braking 37 m before a corner, so on a
+# map whose lanes are tens of metres long it was accelerating or braking nearly all the time.
+# 5.0 and 6.0 are brisk rather than sedate - about 0.5 g and 0.6 g - and buy the pace the
+# lateral figure above is there to allow. Raising them further to 6.0 and 7.0 was measured at
+# one percent more speed, which is not worth another tenth of a g.
+ACCEL_MPS2 = 5.0
+BRAKE_MPS2 = 6.0
 
 # The slowest the recorded car moves while it is still moving. A floor is needed at all
 # because a sample much shorter than a centimetre has no reliable direction in it; at 1 m/s
@@ -200,10 +223,14 @@ BRAKE_MPS2 = 2.0
 # It was 2.0, on the reasoning that nothing `_turn` builds is tight enough to demand less.
 # That is not true of a *lane change*: crossing 3.5 m sideways inside a 7.11 m lane - which
 # `junction-1` has, and which the route search will happily use - is an S-curve of about 2 m
-# of radius, and 2 m/s through 2 m of radius is 2.0 m/s² of lateral acceleration against a
-# 1.8 comfort cap. The floor, not the geometry, was what broke the cap, and a floor that
-# quietly overrides the comfort limit is a track that says a car took a swerve faster than it
-# could have. Stopping at a red already put a legitimate zero in the profile.
+# of radius, and 2 m/s through 2 m of radius is 2.0 m/s² of lateral acceleration, which broke
+# the 1.8 cap of the day. A floor that quietly overrides the lateral limit is a track that says
+# a car took a swerve faster than it could have.
+#
+# `LATERAL_ACCEL_MPS2` is 8.5 now, so that particular sum no longer bites - but the floor stays
+# at 1.0, because the sharpest kinks a lane change leaves measure 0.36 m of radius, where the
+# cap on its own allows 1.75 m/s. A floor of 2.0 would override it there instead. Stopping at a
+# red already put a legitimate zero in the profile.
 MIN_SPEED_MPS = 1.0
 
 # Two points closer than this are the same point. A millimetre is far below anything a map

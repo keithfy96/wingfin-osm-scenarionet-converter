@@ -304,17 +304,41 @@ and `atan2` over 78 µm returns noise that reads as an exact 90° turn. That was
 vertex in **390 of 813** swept routes.
 
 **The drive also has a speed profile now.** `speed_profile` caps the speed at every point by
-the curvature there (`LATERAL_ACCEL_MPS2`, 1.8 m/s²), then bounds how fast it may change, so
-the car brakes *before* a junction rather than at it. `Route.duration_s` is therefore not
-`distance / speed`, and `metadata.sdc_route` reports `slowest_kph` beside `speed_kph` so a
-reader who divides one by the other can see why.
+the curvature there (`LATERAL_ACCEL_MPS2`), then bounds how fast it may change
+(`ACCEL_MPS2`, `BRAKE_MPS2`), so the car brakes *before* a junction rather than at it.
+`Route.duration_s` is therefore not `distance / speed`, and `metadata.sdc_route` reports
+`slowest_kph` beside `speed_kph` so a reader who divides one by the other can see why.
 
-Two constants there are tied to each other and to the track. **`PROFILE_SAMPLE_M` must be at
+**Those three constants are pinned to the 30°-per-step gate, not to a comfort figure**, and
+that is the second round of this work: at the original 1.8 / 1.2 / 2.0 the car crawled — 25.0
+km/h averaged over 120 real `junction-1` routes on roads posted at 50, a 9 m junction turn
+taken at 15 km/h, 11.6 s to reach 50 km/h and braking begun 37 m out. They are **8.5 / 5.0 /
+6.0**, which gives 41.5 km/h over the same 120 routes with a worst step of 29.6° and nothing
+over the gate. 9.0 puts one step over; 12.0 puts 22 over. The gate is the real ceiling because
+degrees per step scale with speed while the geometry underneath does not — so do not raise
+these to buy pace without re-running the sweep.
+
+**The posted speed limit is a harder ceiling than the profile**, and it is worth knowing before
+promising anyone a faster drive: a car obeying a 50 km/h road cannot average more than 50
+however the profile is tuned, so on `junction-1` the whole tuning range is 1.0× to at most
+1.68×. `convert --speed-kph` overrides the limit and is the only way past it — a per-dataset
+decision, so an argument and not a config field, for the same fingerprint reason as `--routes`.
+
+**What is left of the slowing down is lane changes, not junctions.** Measured across the same
+sample: routes with a lane change have a tightest drive-line radius of 1.38 m median (68 of 91
+under 2 m) and crawl to 10.0 km/h median; routes without measure 5.61 m and 17.9 km/h.
+`_lane_change` fits the crossing inside the *one* pair of lanes it moves between, and this map
+has 5.8–7 m lanes, so a 3.5 m shift becomes a sub-2 m S. On the `test` route those two kinks —
+0.63 m and 0.61 m of radius — are the only reason it is not at 50 km/h for the whole drive:
+78.9% of the distance already is, and the slowing costs 6.6 s of 64.8.
+
+Two more constants are tied to each other and to the track. **`PROFILE_SAMPLE_M` must be at
 least as fine as the track it decides the speed for** — at 0.25 m against a track sampling
 0.1 m, curvature is measured over a longer window than the car meets, and the drive exceeds
 the very lateral limit the profile was computed to keep. And **`MIN_SPEED_MPS` is 1.0, not
-2.0**: a lane change across a 7.11 m lane is an S of about 2 m of radius, and 2 m/s through
-2 m of radius is 2.0 m/s² against a 1.8 cap — the floor, not the geometry, broke the limit.
+2.0** — originally because a lane change across a 7.11 m lane is an S of about 2 m of radius
+and 2 m/s through it broke the 1.8 cap of the day; still 1.0 because the sharpest kinks measure
+0.36 m of radius, where 8.5 allows only 1.75 m/s and a floor of 2.0 would override it there.
 
 `tools/check_dataset.py` reports the worst per-step heading change in the ego track and
 **fails above 30°**, and reports the tightest radius the drive line turns through, which the

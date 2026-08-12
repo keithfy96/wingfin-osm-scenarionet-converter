@@ -161,19 +161,101 @@ uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yam
 Writes the ScenarioNet dataset into `<workspace>/scenarionet/`. Without a route this
 is **map-only**: MetaDrive can load it and check it, but not drive it.
 
-To make it drivable you have to choose a route, because `ScenarioEnv` has no
-start-and-end setting — it navigates by replaying a recorded car's positions, so the
-route has to be *in the file*:
+Two things are drawn by hand in the browser and passed in as files — a route, and
+optionally a set of traffic lights. Both are exchange files between the page and the
+CLI, exactly like Stage 3's `review.json`: a browser can't write to disk.
+
+### Stage 6, routes — pick where the car drives (browser, manual)
+
+Open `inspection/stage-6-route-builder.html` from the workspace. Click a **start
+lane**, click an **end lane**, give the route a name, press add, and repeat for as
+many routes as you want. The page draws the drive it would produce as you go. When
+you're done it downloads `routes.json` — save it to `<workspace>/routes/`.
 
 ```bash
-# 1. pick routes: open inspection/stage-6-route-builder.html, click a start lane,
-#    click an end lane, name it, add it, download routes.json
-# 2. rebuild with the routes
 uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yaml \
   --routes workspaces/junction-1/routes/routes.json
 ```
 
 Each named route becomes one scenario with a synthetic ego car driving it.
+
+A route is needed because `ScenarioEnv` has no start-and-end setting. It navigates by
+replaying a recorded car's positions, so the route has to be *in the file* —
+`tracks["ego"]["state"]["position"]`. MetaDrive never reads `routes.json` itself.
+
+`routes.json` records which lane model it was drawn on, and `convert` refuses it if
+that model has moved since. That's not a fault: re-running Stage 4, or any change that
+moves the generation fingerprint, means the lane IDs the file names may no longer mean
+the same thing. Re-open the page and pick the routes again.
+
+### Stage 6, lights — place the traffic signals (browser, manual)
+
+Optional. Without it the dataset has no traffic lights at all.
+
+Open `inspection/stage-6-signal-builder.html`. Set the **cycle** — one length shared by
+the whole plan — then add a **phase group**, click the lanes it stops, and give it a
+`green`, a `yellow` and an `offset` (when its green starts within the cycle). Add a
+second group for the crossing arm with an offset that keeps the two apart. A slider
+steps the preview through the cycle and recolours every lane at once, and the page
+tells you outright which groups end up green together and for how long. It downloads
+`signals.json` — save it to `<workspace>/signals/`.
+
+```bash
+uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yaml \
+  --routes workspaces/junction-1/routes/routes.json \
+  --signals workspaces/junction-1/signals/signals.json
+```
+
+**Every number in there is chosen by you, because OSM has none.**
+`highway=traffic_signals` records that a junction is signalled and nothing else — no
+cycle, no split, no offset — so the dataset marks the plan `synthesised` in
+`metadata.signals` rather than implying it was surveyed. Timing is deliberately a
+`convert`-time file and not a config field: the config checksum feeds the generation
+fingerprint, so a phase plan in `config/default.yaml` would invalidate the lane-model
+review the next time the map was generated.
+
+A light in a MetaDrive dataset is a **tape** — a colour spelled out for every 0.1 s
+step — because MetaDrive has no light controller of its own. The recorded car's stops
+are baked into its positions to match, since a replayed car drives through a red
+however correct the tape is. `tools/drive.py --lights live` re-drives the same lights
+from `metadata.signals` with a fresh offset each episode, so an agent can't learn the
+step number instead of the colour; `--lights tape` is the portable default.
+
+One consequence worth knowing before you watch it. A replayed car has no dynamics to
+interrupt — it is placed on its recorded positions every step — so it only stops at a
+red because the wait is *in those positions*, computed against the tape. Under
+`--lights live` the offset moves and the baked waits no longer line up; `drive.py`
+warns when you ask for that combination. For training, the answer is
+`--agent-policy idm` with `--lights live`, which brakes for the light itself rather
+than for a recording of it.
+
+### Stage 6, speed — how fast the recorded car drives
+
+By default the car obeys the road's own speed limit, slowing for corners and picking
+up again afterwards. That limit is also a ceiling on the whole drive: however hard the
+car is allowed to corner, one obeying a 50 km/h road can never average more than 50
+over the route. On `junction-1` the default already runs at 41.5 km/h averaged over
+120 routes, against a hard ceiling of 50 — so there is very little left to win inside
+the limit.
+
+`--speed-kph` overrides the posted limit, and is the only way past that ceiling:
+
+```bash
+uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yaml \
+  --routes workspaces/junction-1/routes/routes.json --speed-kph 100
+```
+
+Measured on `junction-1`'s 808 m `test` route: **64.8 s** at the posted 50 km/h,
+**48.1 s** at `--speed-kph 100` — 60.5 km/h average, twice the drive this repo
+produced before the profile was retuned — and both still pass the drivability check
+in `tools/check_dataset.py`, which fails any track whose car turns more than 30° in a
+single 0.1 s step. It is off by default; nothing changes unless you pass it.
+
+The car still slows for corners at any speed. How hard it may corner is
+`LATERAL_ACCEL_MPS2` in `src/osm_scenario/ego_route.py`, and that constant is pinned
+to the 30°-per-step check rather than to a comfort figure — degrees per step rise with
+speed while the road's shape does not, so that check is what really caps the pace.
+Raising it without re-running the route sweep will produce datasets that fail.
 
 ### Simulate
 

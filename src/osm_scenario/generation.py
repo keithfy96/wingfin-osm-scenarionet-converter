@@ -775,6 +775,49 @@ def _balanced_merge_assignment(
     return assignment
 
 
+def _merge_side(
+    approach: list[LaneFeature],
+    feeding: list[list[LaneFeature]],
+    targets: list[LaneFeature],
+    *,
+    driving_side: str,
+) -> str | None:
+    """Which side of a shared destination an approach merges onto.
+
+    A road that joins another joins it from one side, and it has to land on that side.
+    Sent across instead, its traffic crosses the traffic it is merging with — which is a
+    thing the lane model can state and a thing no driver does.
+
+    The side is a *comparison* between the roads meeting here, not a property of any one
+    of them, so it is read from `_kerb_first_key` — the ordering
+    `_balanced_merge_assignment` already deals by — rather than from an angle against a
+    threshold. That is the whole point of a separate rule: `movement_side` calls anything
+    under `side_movement_min_degrees` sideless, which is right for a turn and wrong for a
+    merge, because a road can join another dead straight and still join it from the kerb.
+
+    Only an approach kerbward of every other, or centreward of every other, is answered.
+    One in the middle of three is genuinely ambiguous, and the rules that already run are
+    left to it.
+    """
+    if len(feeding) < 2:
+        return None
+    key = _kerb_first_key(approach[0], targets[0], driving_side)
+    edge = tuple(approach[0].source_edge)
+    others = [
+        _kerb_first_key(block[0], targets[0], driving_side)
+        for block in feeding
+        if tuple(block[0].source_edge) != edge
+    ]
+    if not others:
+        return None
+    # `_kerb_first_key` ranks most kerbward first, so the smallest key is nearest the kerb.
+    if all(key < other for other in others):
+        return "nearside"
+    if all(key > other for other in others):
+        return "offside"
+    return None
+
+
 def _side_filtered_candidates(
     candidates: list[MovementCandidate],
     *,
@@ -1942,6 +1985,15 @@ def build_lane_model(
                 blocks, outgoing_groups, driving_side=driving_side
             )
         )
+        # Which approaches share each destination, for `_merge_side`. A merge is a fact
+        # about a group of roads, so it has to be seen before any one of them is asked
+        # where to land. Read the same way `_balanced_merge_assignment` reads it: an
+        # approach feeds a group unless the group is its own reverse.
+        blocks_by_group: dict[GroupKey, list[list[LaneFeature]]] = {}
+        for block in blocks:
+            for key, group_targets in outgoing_groups.items():
+                if not _is_exact_reverse(block[0], group_targets[0]):
+                    blocks_by_group.setdefault(key, []).append(block)
         for from_id in incoming:
             source = lane_lookup[from_id]
             source_line = LineString((point.x, point.y) for point in source.centerline)

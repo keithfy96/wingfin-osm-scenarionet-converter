@@ -436,7 +436,11 @@ def test_the_car_slows_for_a_turn_and_speeds_up_again() -> None:
     assert speed[0] == pytest.approx(10.0), "the car does not start at the cruising speed"
     assert speed[-1] == pytest.approx(10.0), "the car never picks up again after the turn"
     slowest = int(speed.argmin())
-    assert speed[slowest] < 6.0, "the car does not slow for the turn at all"
+    # Against the cruising speed rather than a bare number. What this test is for is that the
+    # car slows for the corner at all; how far it slows is `LATERAL_ACCEL_MPS2`'s business, and
+    # writing that figure in here twice means retuning the profile breaks a test about
+    # something else. It measured 3.10 m/s at the old 1.8 m/s² cap and 6.73 at the present 8.5.
+    assert speed[slowest] < 0.8 * 10.0, "the car does not slow for the turn at all"
     # And it slows *before* the turn rather than at it, which is what the two passes buy.
     braking = travelled[slowest] - travelled[int(np.argmax(speed < 9.9))]
     assert braking > 5.0

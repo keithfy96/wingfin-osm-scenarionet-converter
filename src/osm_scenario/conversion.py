@@ -1104,6 +1104,7 @@ def convert_scenario(
     config: ConverterConfig,
     routes: Path | None = None,
     signals: Path | None = None,
+    speed_kph: float | None = None,
 ) -> tuple[list[Path], Path, Path, Path, tuple[Path, Path, Path]]:
     """Convert WORKSPACE's validated lane model into a ScenarioNet dataset.
 
@@ -1121,6 +1122,13 @@ def convert_scenario(
     Both are needed: MetaDrive replays the tape and nothing else, while anything that wants to
     *drive* the lights - `tools/signal_control.py`, which re-draws the phase per episode so an
     agent cannot learn the clock - needs the numbers rather than the colours.
+
+    `speed_kph` is the speed the recorded car cruises at, and overrides the road's own posted
+    limit, which is what it uses when this is `None`. It exists because the limit is the ceiling
+    on how quick a drive can be made to look: the profile can be freed to corner and accelerate
+    hard, but a car obeying a 50 km/h road cannot beat 50 km/h over the route however it is
+    tuned. Passing a number here is the only way past that, and it is a per-dataset decision
+    rather than a property of the map, which is why it is an argument and not a config field.
 
     `config` is accepted for symmetry with the other stage entry points; conversion is a
     faithful restatement of the reviewed model and has nothing left to configure. Signal
@@ -1166,6 +1174,7 @@ def convert_scenario(
                 name=selection["name"],
                 start_lane=selection["start_lane"],
                 end_lane=selection["end_lane"],
+                speed_kph=speed_kph,
                 signals=signal_timings,
             )
             polyline = route_polyline(

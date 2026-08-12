@@ -231,6 +231,17 @@ def convert(
             "no traffic lights; OSM supplies no signal timing, so the plan is chosen there.",
         ),
     ] = None,
+    speed_kph: Annotated[
+        float | None,
+        typer.Option(
+            "--speed-kph",
+            min=1.0,
+            help="Cruising speed for the recorded car, overriding the road's posted limit. "
+            "Without it the car obeys the limit, which is also the ceiling on how quick the "
+            "drive can be: it still slows for corners, but it can never average more than the "
+            "road allows.",
+        ),
+    ] = None,
 ) -> None:
     """Convert WORKSPACE's validated lane model into a ScenarioNet dataset."""
     try:
@@ -240,7 +251,11 @@ def convert(
             else ConverterConfig(config_version=1)
         )
         scenario_paths, _, _, report_path, html_paths = convert_scenario(
-            workspace=workspace, config=config, routes=routes_path, signals=signals_path
+            workspace=workspace,
+            config=config,
+            routes=routes_path,
+            signals=signals_path,
+            speed_kph=speed_kph,
         )
     except (ConversionError, ValueError, KeyError) as error:
         typer.echo(f"Stage 6 failed: {error}", err=True)
