@@ -155,3 +155,48 @@ describe("routeGeometry", () => {
     expect(g.distanceM).toBeGreaterThan(pieces);
   });
 });
+
+describe("a manoeuvre must leave room for the one after it", () => {
+  // Mirrors `test_a_change_that_ends_a_short_lane_leaves_room_for_the_junction_after_it`
+  // and `test_two_junctions_on_one_lane_both_get_room_to_turn` in
+  // `tests/unit/test_ego_route.py`. Both sides drive the same shapes deliberately: a page
+  // that drew a fold the converter had smoothed away would be offering a different drive.
+
+  it("does not fold when a lane change ends a short lane just before a turn", () => {
+    // `q` is 8 m long and `r` leaves it at a right angle, so the turn needs room the
+    // crossing would otherwise use. Unreserved, this built an 82° cusp on `junction-1`.
+    const lanes: RouteLane[] = [
+      { ...lane("p", 0, 0), line: [at(0, 0), at(0, 8)], exits: [], sideways: ["q"] },
+      { ...lane("q", 0, 0), line: [at(4, 0), at(4, 8)], exits: ["r"], sideways: ["p"] },
+      { ...lane("r", 0, 0), line: [at(8, 8), at(60, 8)], exits: [], sideways: [] },
+    ];
+    const g = routeGeometry(new RouteGraph(lanes), ["p", "q", "r"], [1], []);
+    expect(worstTurnDeg(g.line)).toBeLessThan(30);
+    expect(g.line.length).toBeGreaterThan(10);
+  });
+
+  it("does not starve the second of two junctions on one lane", () => {
+    const lanes: RouteLane[] = [
+      { ...lane("f", 0, 0), line: [at(0, 0), at(40, 0)], exits: ["m"], sideways: [] },
+      { ...lane("m", 0, 0), line: [at(42, 2), at(42, 16)], exits: ["l"], sideways: [] },
+      { ...lane("l", 0, 0), line: [at(44, 18), at(90, 18)], exits: [], sideways: [] },
+    ];
+    const crossings: RouteConnector[] = [
+      { from: "f", to: "m", line: [at(40, 0), at(42, 2)] },
+      { from: "m", to: "l", line: [at(42, 16), at(44, 18)] },
+    ];
+    const g = routeGeometry(new RouteGraph(lanes), ["f", "m", "l"], [], crossings);
+    expect(worstTurnDeg(g.line)).toBeLessThan(30);
+  });
+
+  it("treats two points a fraction of a millimetre apart as one point", () => {
+    // The 90° readings came from a segment too short to have a direction in it. At the old
+    // 1e-6 m tolerance these survived and were the worst vertex in 390 of 813 swept routes.
+    const lanes: RouteLane[] = [
+      { ...lane("s", 0, 0), line: [at(0, 0), at(0, 10)], exits: ["t"], sideways: [] },
+      { ...lane("t", 0, 0), line: [at(0.00008, 10.00001), at(0, 30)], exits: [], sideways: [] },
+    ];
+    const g = routeGeometry(new RouteGraph(lanes), ["s", "t"], [], []);
+    expect(worstTurnDeg(g.line)).toBeLessThan(5);
+  });
+});

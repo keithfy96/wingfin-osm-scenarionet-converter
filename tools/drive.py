@@ -105,6 +105,30 @@ def _region_for(dataset: str) -> tuple[int, float, str]:
     return _next_power_of_two(2 * furthest), furthest, where
 
 
+def _longest_red(scenario) -> int:
+    """How many steps the longest red in this scenario's plan lasts.
+
+    The headroom a self-driving policy needs on top of the recording: a car that stops has to
+    wait out a whole red in the worst case, and the recording is only as long as a drive that
+    never stopped. Zero when the scenario carries no plan, which is most of them.
+    """
+    plan = (scenario.get("metadata") or {}).get("signals")
+    if not plan:
+        return 0
+    cycle = float(plan["cycle_seconds"])
+    step = float(plan["time_step_s"])
+    longest = max(
+        cycle - float(group["green_seconds"]) - float(group["yellow_seconds"])
+        for group in plan["groups"]
+    )
+    return int(round(max(longest, 0.0) / step))
+
+
+def _baked_stops(scenario) -> list[dict]:
+    """The reds the recorded car was written to stop for, if any."""
+    return list(((scenario.get("metadata") or {}).get("sdc_route") or {}).get("stops") or [])
+
+
 def _set_semantic_detail(pixels_per_meter: int) -> None:
     """Pin the semantic texture's resolution.
 
@@ -266,15 +290,17 @@ def main() -> int:
 
     # `TrajectoryIDMPolicy` subclasses `IDMPolicy`, whose `lane_change_policy` checks whether
     # the object in front is a `BaseTrafficLight` - so it is the only ego policy here that
-    # can stop for one. `ReplayEgoCarPolicy` sets the car's position directly each step and
-    # would drive through a wall of any kind.
+    # *reacts* to one. `ReplayEgoCarPolicy` sets the car's position directly each step and
+    # would drive through a wall of any kind; it stops at a red only because the converter
+    # wrote the stop into the positions, which is why the two lines below differ in where the
+    # stopping comes from rather than in whether it happens.
     policy = ReplayEgoCarPolicy if arguments.agent_policy == "replay" else TrajectoryIDMPolicy
     print(
         "ego policy   {} - {}".format(
             arguments.agent_policy,
-            "replayed positions; red lights do not stop it"
+            "replayed positions; it stops only where the recording stops"
             if arguments.agent_policy == "replay"
-            else "driven along the recorded route; it brakes for red lights",
+            else "driven along the recorded route; it brakes for red lights itself",
         )
     )
 
@@ -349,8 +375,31 @@ def main() -> int:
                     )
 
             length = env.engine.data_manager.current_scenario_length
-            scenario_id = env.engine.data_manager.current_scenario["id"]
+            scenario = env.engine.data_manager.current_scenario
+            scenario_id = scenario["id"]
             lights = getattr(env.engine, "light_manager", None)
+
+            # The recording's length is the right bound for a replayed car - there is nothing
+            # after the last recorded position - and the wrong one for any policy that drives
+            # itself. A car of its own that stops at a red needs more steps than the recording
+            # has, and cutting it off there reports `did not arrive` for a car that was still
+            # driving. MetaDrive itself does not impose this: `horizon` is 100000 above and
+            # `ScenarioEnv`'s `allowed_more_steps` defaults to None.
+            allowance = 0 if arguments.agent_policy == "replay" else _longest_red(scenario)
+            budget = length + allowance
+
+            # A baked stop is computed against the plan's written offsets, so it is right
+            # under `--lights tape` and wrong under `--lights live`, which draws a fresh
+            # offset every episode. The recorded car will stand still at a green, or drive
+            # through a red, and neither is a fault in the data - it is the wrong pairing.
+            stops = _baked_stops(scenario)
+            if stops and arguments.lights == "live" and arguments.agent_policy == "replay":
+                print(
+                    f"             note: this track has {len(stops)} baked stop(s), written "
+                    "against the plan's own offsets. --lights live redraws the offset, so the "
+                    "car will wait at the wrong moment. Use --lights tape, or "
+                    "--agent-policy idm."
+                )
             # Transitions rather than a colour per step: 651 colours is not a report, and the
             # step a light turns green is the number that answers both questions here - did
             # the ego wait for it, and does that step move between episodes.
@@ -361,7 +410,7 @@ def main() -> int:
             path = []
             info = {}
             steps = 0
-            while steps < length:
+            while steps < budget:
                 _, _, terminated, truncated, info = env.step([0, 0])
                 heights.append(float(env.agent.origin.getZ()))
                 speeds.append(float(env.agent.speed))
@@ -417,9 +466,14 @@ def main() -> int:
                 # the data. Naming the reason is the difference between the two.
                 named = ("out_of_road", "crash", "crash_object", "crash_vehicle", "max_step")
                 reasons = [name for name in named if info.get(name)]
+                ran_out = (
+                    "ran out of recorded steps"
+                    if allowance == 0
+                    else f"ran out of steps ({budget}: the recording plus {allowance} for a red)"
+                )
                 print(
                     "             did not arrive: {}{}".format(
-                        ", ".join(reasons) or "ran out of recorded steps",
+                        ", ".join(reasons) or ran_out,
                         (
                             "; lateral {:.2f} m against a {} m limit".format(
                                 info["lateral_dist"], env.config["max_lateral_dist"]

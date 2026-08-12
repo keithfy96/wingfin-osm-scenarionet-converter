@@ -30,6 +30,8 @@ export const STRAIGHT_DEG = 1;
 export const MAX_VERTEX_TURN_DEG = 150;
 export const MAX_JOIN_M = 5;
 export const MAX_CROSSING_M = 20;
+export const COINCIDENT_M = 1e-3;
+export const MAX_CURVE_TURN_DEG = 20;
 
 const EARTH_RADIUS_M = 6_371_000;
 
@@ -179,20 +181,10 @@ function projectAlong(line: Metres[], point: Metres): number {
   return bestAt;
 }
 
-/** A cubic Bezier leaving `start` along one direction and reaching `end` along another. */
-function turnCurve(
-  start: Metres,
-  startDirection: Metres,
-  end: Metres,
-  endDirection: Metres,
-  turned: number,
-): Metres[] {
-  const chord = span(start, end);
-  if (chord < 1e-6) return [];
-  const handle = handleFraction(turned) * chord;
-  const p1: Metres = [start[0] + startDirection[0] * handle, start[1] + startDirection[1] * handle];
-  const p2: Metres = [end[0] - endDirection[0] * handle, end[1] - endDirection[1] * handle];
-  const count = Math.max(8, Math.ceil((chord + 2 * handle) / TURN_SAMPLE_M));
+/** A cubic through four control points, sampled at `TURN_SAMPLE_M`. See `_bezier`. */
+function bezier(start: Metres, p1: Metres, p2: Metres, end: Metres): Metres[] {
+  const bound = span(start, p1) + span(p1, p2) + span(p2, end);
+  const count = Math.max(8, Math.ceil(bound / TURN_SAMPLE_M));
   const points: Metres[] = [];
   for (let i = 0; i <= count; i += 1) {
     const t = i / count;
@@ -205,14 +197,74 @@ function turnCurve(
   return points;
 }
 
+/** The sharpest change of heading at any vertex, in degrees. See `_worst_turn_deg`. */
+export function worstTurnDeg(raw: Metres[]): number {
+  const line = dropRepeats(raw);
+  if (line.length < 3) return 0;
+  let previous = Math.atan2(line[1]![1] - line[0]![1], line[1]![0] - line[0]![0]);
+  let worst = 0;
+  for (let i = 2; i < line.length; i += 1) {
+    const heading = Math.atan2(line[i]![1] - line[i - 1]![1], line[i]![0] - line[i - 1]![0]);
+    let turned = (heading - previous) % (2 * Math.PI);
+    if (turned > Math.PI) turned -= 2 * Math.PI;
+    if (turned < -Math.PI) turned += 2 * Math.PI;
+    worst = Math.max(worst, (Math.abs(turned) * 180) / Math.PI);
+    previous = heading;
+  }
+  return worst;
+}
+
+/** A cubic Bezier leaving `start` along one direction and reaching `end` along another.
+ *
+ * Shortening the handle straightens the curve towards the chord, so the search terminates: at
+ * zero it *is* the chord. See `_turn_curve` for why tangency is the right thing to trade.
+ */
+function turnCurve(
+  start: Metres,
+  startDirection: Metres,
+  end: Metres,
+  endDirection: Metres,
+  turned: number,
+): Metres[] {
+  const chord = span(start, end);
+  if (chord < COINCIDENT_M) return [];
+  let handle = handleFraction(turned) * chord;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const p1: Metres = [start[0] + startDirection[0] * handle, start[1] + startDirection[1] * handle];
+    const p2: Metres = [end[0] - endDirection[0] * handle, end[1] - endDirection[1] * handle];
+    const curve = bezier(start, p1, p2, end);
+    if (worstTurnDeg(curve) <= MAX_CURVE_TURN_DEG) return curve;
+    handle /= 2;
+  }
+  return bezier(start, start, end, end);
+}
+
 interface Join {
   head: Metres[];
   curve: Metres[];
   tail: Metres[];
 }
 
+/** How much of `joining` the junction turn after it needs left over. See `_turn_reserve`. */
+function turnReserve(joining: Metres[], following: Metres[], what: string): number {
+  const end = joining[joining.length - 1]!;
+  const directionIn = unit(joining[joining.length - 2]!, end, what);
+  const directionOut = unit(following[0]!, following[1]!, what);
+  const across: Metres = [following[0]![0] - end[0], following[0]![1] - end[1]];
+  const sideways = Math.abs(across[0] * -directionIn[1] + across[1] * directionIn[0]);
+  const wanted = wantedTrim(turnBetween(directionIn, directionOut), sideways);
+  return Math.min(wanted, spare(totalLength(following))) + MIN_TANGENT_M;
+}
+
+/** How far back into each lane a turn wants to cut. See `_wanted_trim`. */
+function wantedTrim(angle: number, sideways: number): number {
+  const trim = TURN_RADIUS_M * Math.tan(Math.min(Math.abs(angle), (170 * Math.PI) / 180) / 2);
+  if (Math.abs((angle * 180) / Math.PI) < SMOOTHING_MAX_DEG) return Math.max(trim, smoothingSpan(sideways));
+  return trim;
+}
+
 /** Join two lanes: the trimmed approach, the turn between them, the trimmed exit. */
-function turn(arriving: Metres[], leaving: Metres[], what: string, crossing: boolean): Join {
+function turn(arriving: Metres[], leaving: Metres[], what: string, crossing: boolean, reserve = 0): Join {
   const allowed = crossing ? MAX_CROSSING_M : MAX_JOIN_M;
   const gap = span(arriving[arriving.length - 1]!, leaving[0]!);
   if (gap > allowed) {
@@ -241,27 +293,31 @@ function turn(arriving: Metres[], leaving: Metres[], what: string, crossing: boo
     return { head: arriving, curve: [], tail: ahead };
   }
 
-  let trim = TURN_RADIUS_M * Math.tan(Math.min(Math.abs(angle), (170 * Math.PI) / 180) / 2);
-  if (Math.abs((angle * 180) / Math.PI) < SMOOTHING_MAX_DEG) {
-    trim = Math.max(trim, smoothingSpan(sideways));
-  }
-  trim = Math.min(trim, spare(totalLength(arriving)), spare(totalLength(ahead)));
-  const head = trimEnd(arriving, trim);
-  const tail = trimStart(ahead, trim);
+  // Cut independently rather than by the smaller of the two - see `_turn` in `ego_route`.
+  const wanted = wantedTrim(angle, sideways);
+  const aheadLength = totalLength(ahead);
+  const head = trimEnd(arriving, Math.min(wanted, spare(totalLength(arriving))));
+  const tail = trimStart(ahead, Math.min(wanted, spare(aheadLength), Math.max(0, aheadLength - reserve)));
   const curve = turnCurve(head[head.length - 1]!, directionIn, tail[0]!, directionOut, angle);
   return { head, curve: curve.slice(1, -1), tail };
 }
 
 /** Cross into a lane alongside: the run-up, the crossing, the run-out. See `_lane_change`. */
-function laneChange(leaving: Metres[], joining: Metres[], what: string): Join {
+function laneChange(leaving: Metres[], joining: Metres[], what: string, reserve = 0): Join {
   const entry = projectAlong(joining, leaving[0]!);
   const exit = projectAlong(joining, leaving[leaving.length - 1]!);
   if (exit - entry < 1e-6) return { head: leaving, curve: [], tail: joining };
   const spanJoining = totalLength(joining);
-  const middle = (entry + exit) / 2;
+  let middle = (entry + exit) / 2;
   const abreast = cutMetres(joining, true, middle / spanJoining).slice(-1)[0]!;
   const sideways = span(abreast, leaving[leaving.length - 1]!);
-  const reach = Math.min(smoothingSpan(sideways), CHANGE_MAX_FRACTION * (exit - entry));
+  let reach = Math.min(smoothingSpan(sideways), CHANGE_MAX_FRACTION * (exit - entry));
+
+  // The reserve yields first, and can yield to nothing - see `_lane_change` in `ego_route`.
+  const held = Math.min(reserve, Math.max(0, spanJoining - entry - 2 * MIN_TANGENT_M));
+  const latest = spanJoining - held;
+  reach = Math.min(reach, (latest - entry) / 2);
+  middle = Math.min(Math.max(middle, entry + reach), latest - reach);
 
   const at = (middle - reach - entry) / (exit - entry);
   const head = cutMetres(leaving, true, Math.min(Math.max(at, 1e-6), 1));
@@ -283,7 +339,7 @@ function dropRepeats(line: Metres[]): Metres[] {
   if (line.length < 2) return line;
   const kept: Metres[] = [line[0]!];
   for (const point of line.slice(1)) {
-    if (span(kept[kept.length - 1]!, point) > 1e-6) kept.push(point);
+    if (span(kept[kept.length - 1]!, point) > COINCIDENT_M) kept.push(point);
   }
   return kept;
 }
@@ -349,9 +405,23 @@ export function routeGeometry(
       position = last;
     }
     const centre = lane.line.map((p) => frame.to(p as Point));
+    // What comes next decides how much of this lane the manoeuvre may use. A lane change
+    // after this one needs nothing held back: it places itself in the window the two lanes
+    // share rather than at the far end. See `route_polyline`.
+    const after = graph.lanes.get(routeLanes[position + 1] ?? "");
+    const reserve =
+      after && after.line.length >= 2 && !changing.has(position + 1)
+        ? turnReserve(centre, after.line.map((p) => frame.to(p as Point)), `lane ${laneId}`)
+        : 0;
     const join: Join = isChange
-      ? laneChange(current, centre, `lane ${laneId}`)
-      : turn(current, centre, `lane ${laneId}`, crossings.has(crossingKey(routeLanes[position - 1]!, laneId)));
+      ? laneChange(current, centre, `lane ${laneId}`, reserve)
+      : turn(
+          current,
+          centre,
+          `lane ${laneId}`,
+          crossings.has(crossingKey(routeLanes[position - 1]!, laneId)),
+          reserve,
+        );
     finished.push(join.head);
     if (join.curve.length > 0) {
       finished.push(join.curve);

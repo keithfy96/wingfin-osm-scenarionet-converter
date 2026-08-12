@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+from osm_scenario.ego_route import TIME_STEP_S
 from osm_scenario.lane_model import LaneFeature, Point2D, PreliminaryLaneModel
 from osm_scenario.signal_plan import (
     LIGHT_GREEN,
@@ -291,7 +292,7 @@ def test_a_plan_with_no_groups_is_refused() -> None:
 def test_the_tape_is_one_colour_per_tenth_of_a_second() -> None:
     """MetaDrive steps at 0.1 s and `after_step` indexes by `episode_step`, so the tape has
     to be sampled at exactly that interval or the plan runs at the wrong speed."""
-    states = light_states(_read(), model=_model(), steps=601)
+    states = light_states(_read(), model=_model(), steps=601, time_step_s=TIME_STEP_S)
     tape = states["a"]["state"]["object_state"]
     assert len(tape) == 601
     assert tape[0] == LIGHT_GREEN
@@ -304,13 +305,13 @@ def test_the_tape_is_one_colour_per_tenth_of_a_second() -> None:
 def test_each_lane_gets_its_own_tape_rather_than_a_shared_one() -> None:
     groups = _raw()["groups"]
     groups[0]["lanes"] = ["a", "b"]
-    states = light_states(_read(groups=groups), model=_model(), steps=10)
+    states = light_states(_read(groups=groups), model=_model(), steps=10, time_step_s=TIME_STEP_S)
     assert states["a"]["state"]["object_state"] == states["b"]["state"]["object_state"]
     assert states["a"]["state"]["object_state"] is not states["b"]["state"]["object_state"]
 
 
 def test_the_stop_point_is_a_float32_triple_outside_state() -> None:
-    light = light_states(_read(), model=_model(), steps=10)["a"]
+    light = light_states(_read(), model=_model(), steps=10, time_step_s=TIME_STEP_S)["a"]
     assert "stop_point" not in light["state"]
     assert isinstance(light["stop_point"], np.ndarray)
     assert light["stop_point"].dtype == np.float32
@@ -318,7 +319,7 @@ def test_the_stop_point_is_a_float32_triple_outside_state() -> None:
 
 
 def test_the_metadata_names_the_group_a_light_belongs_to() -> None:
-    light = light_states(_read(), model=_model(), steps=10)["a"]
+    light = light_states(_read(), model=_model(), steps=10, time_step_s=TIME_STEP_S)["a"]
     assert light["metadata"]["phase_group"] == "phase-a"
     assert light["metadata"]["track_length"] == 10
 
@@ -329,7 +330,7 @@ def test_the_metadata_names_the_group_a_light_belongs_to() -> None:
 def test_plan_metadata_carries_every_number_needed_to_rebuild_the_tape() -> None:
     """`tools/signal_control.py` re-derives the colours per episode from this and nothing
     else, so anything missing here is a light it cannot drive."""
-    metadata = plan_metadata(_read(), model=_model())
+    metadata = plan_metadata(_read(), model=_model(), time_step_s=TIME_STEP_S)
     assert metadata["source"] == "synthesised"
     assert metadata["cycle_seconds"] == 60.0
     assert metadata["time_step_s"] == 0.1
@@ -347,7 +348,7 @@ def test_plan_metadata_carries_every_number_needed_to_rebuild_the_tape() -> None
 def test_plan_metadata_holds_no_arrays() -> None:
     """It travels in `dataset_summary.pkl` and into the JSON conversion report, and it is
     read under MetaDrive's numpy 1 where an array written by numpy 2 would not open."""
-    metadata = plan_metadata(_read(), model=_model())
+    metadata = plan_metadata(_read(), model=_model(), time_step_s=TIME_STEP_S)
 
     def walk(value: Any) -> None:
         assert not isinstance(value, np.ndarray)

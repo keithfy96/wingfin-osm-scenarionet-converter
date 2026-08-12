@@ -222,17 +222,65 @@ def main() -> int:
             lateral = float((turn / 0.1 * speed[:-1]).max()) if len(turn) else 0.0
             worst_turn = float(numpy.degrees(turn).max()) if len(turn) else 0.0
             slowest, fastest = speed.min() * 3.6, speed.max() * 3.6
+            # The radius the drive line actually turns through, which the heading change alone
+            # hides: at walking pace a car can turn through anything, so a track can pass the
+            # 30 degree rule and still describe a corner no car could take at any speed. A
+            # small car needs about 5 m.
+            track = numpy.asarray(state["position"])[:, :2]
+            moved = numpy.linalg.norm(numpy.diff(track, axis=0), axis=1)
+            spans = (moved[:-1] + moved[1:]) / 2.0 if len(moved) > 1 else numpy.zeros(0)
+            turning = turn[: len(spans)] > numpy.radians(0.05)
+            radius = spans[turning] / turn[: len(spans)][turning] if turning.any() else None
             print(
                 f"drivability  worst turn {worst_turn:.1f} deg per 0.1 s step, {snaps} "
                 f"step(s) over 30 deg; speed {slowest:.0f}-{fastest:.0f} km/h; "
                 f"peak lateral {lateral:.1f} m/s^2"
             )
+            if radius is not None and len(radius):
+                tight = int((radius < 5.0).sum())
+                print(
+                    f"             tightest radius {float(radius.min()):.1f} m; {tight} "
+                    "step(s) under 5 m, which is tighter than a small car turns"
+                )
             if snaps:
                 print(
                     f"             FAILED: the recorded car turns more than 30 deg in a "
                     f"single 0.1 s step {snaps} time(s). Replayed, it spins on the spot."
                 )
                 failures += 1
+
+            # A baked stop and the tape are two derivations of one clock, so they can drift.
+            # A car standing still through a green, or pulling away on a red, is a dataset
+            # that contradicts itself - and it would look like a simulator fault, not a
+            # converter one. Read straight off the tape MetaDrive will play.
+            for stop in (route or {}).get("stops", ()):
+                tape = lights.get(stop["lane_id"], {}).get("state", {}).get("object_state")
+                if not tape:
+                    print(
+                        "             FAILED: the car is recorded stopping for "
+                        f"{stop['lane_id']}, which carries no light in this scenario"
+                    )
+                    failures += 1
+                    continue
+                arrived = int(round(stop["arrived_s"] / 0.1))
+                left = int(round((stop["arrived_s"] + stop["waited_s"]) / 0.1))
+                held, moved = tape[min(arrived, len(tape) - 1)], tape[min(left, len(tape) - 1)]
+                print(
+                    "             stops {:.0f} s at {} for {:.1f} s; the tape reads {} on "
+                    "arrival and {} on moving off".format(
+                        stop["arrived_s"],
+                        stop["lane_id"],
+                        stop["waited_s"],
+                        held.split("_")[-1].lower(),
+                        moved.split("_")[-1].lower(),
+                    )
+                )
+                if not held.endswith("RED") or not moved.endswith("GREEN"):
+                    print(
+                        "             FAILED: the baked stop and the tape disagree. The car "
+                        "waits when the light is not red, or moves off before it is green."
+                    )
+                    failures += 1
 
         try:
             ScenarioDescription.sanity_check(scenario)

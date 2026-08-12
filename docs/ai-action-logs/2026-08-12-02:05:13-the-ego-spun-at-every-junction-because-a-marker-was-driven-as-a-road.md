@@ -119,6 +119,13 @@ the drive is drivable — it passed throughout.
 
 ## Verification
 
+> **These figures were wrong, and the fix they describe was incomplete.** The worst-turn
+> numbers below were measured on a route that had been replaced by the time they were
+> written, and the sweep counted only refusals - it never applied the 30° criterion the gate
+> uses, so 440 of the 813 routes it called clean carried a vertex over 30°. Corrected and
+> finished in
+> `2026-08-12-10:56:22-a-manoeuvre-that-uses-a-whole-lane-starves-the-next-one.md`.
+
 `uv run pytest` **300 passed** (was 289). `uv run ruff check` clean. In `web/`:
 `npm run typecheck` clean, `npm run test` **130 passed** (was 129), `npm run build`
 regenerates all three bundles.

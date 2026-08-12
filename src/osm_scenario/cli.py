@@ -251,11 +251,19 @@ def convert(
         f"{len(scenario_paths)} scenario(s) -> {scenario_paths[0].parent}"
     )
     for route in report["routes"]:
+        # The slowest speed is 0 whenever the car stops for a light, so the stops have to be
+        # named beside it or the line reads as a route with an impossibly tight corner on it.
+        stops = route.get("stops") or []
+        held = (
+            f", stopping {len(stops)}x for {route['waiting_s']:.0f} s at a red light"
+            if stops
+            else ""
+        )
         typer.echo(
             f"  route {route['name']}: {route['distance_m']:.0f} m in "
             f"{route['duration_s']:.0f} s, {route['slowest_kph']:.0f}-"
             f"{route['speed_kph']:.0f} km/h, {route['junction_movements']} junction "
-            f"movement(s), {route['lane_changes']} lane change(s)"
+            f"movement(s), {route['lane_changes']} lane change(s){held}"
         )
     if not report["routes"]:
         typer.echo(

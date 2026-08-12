@@ -8,7 +8,10 @@ anything, so they have to be caught on this side.
 
 from __future__ import annotations
 
+import json
 import math
+import random
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -21,8 +24,12 @@ from osm_scenario.ego_route import (
     LATERAL_ACCEL_MPS2,
     MAX_JOIN_M,
     MAX_VERTEX_TURN_DEG,
+    STOP_LINE_SETBACK_M,
     TIME_STEP_S,
     RouteError,
+    SignalTiming,
+    _drop_repeats,
+    _project_along,
     _refuse_reversals,
     ego_track,
     plan_route,
@@ -31,6 +38,7 @@ from osm_scenario.ego_route import (
     speed_profile,
 )
 from osm_scenario.lane_model import ConnectorFeature, LaneFeature, Point2D, PreliminaryLaneModel
+from osm_scenario.signal_plan import LIGHT_GREEN, LIGHT_RED, colour_at
 
 WIDTH = 4.0
 _METADATA = {
@@ -187,6 +195,20 @@ def _tightest_radius_m(line: np.ndarray) -> float:
     if not bending.any():
         return math.inf
     return float((span[bending] / turn[bending]).min())
+
+
+def _real_model() -> PreliminaryLaneModel | None:
+    """`junction-1`'s reviewed model, when the workspace is there.
+
+    `workspaces/` is gitignored, so this is absent on a clean checkout and the sweep that
+    uses it skips - the same arrangement `test_conversion` makes for the MetaDrive schema.
+    A fixture cannot stand in here: what is being swept is the awkward geometry a real map
+    has and a hand-written one does not.
+    """
+    path = Path(__file__).resolve().parents[2] / "workspaces/junction-1/lane-model/reviewed.json"
+    if not path.exists():
+        return None
+    return PreliminaryLaneModel.model_validate(json.loads(path.read_text()))
 
 
 def _plan(model: PreliminaryLaneModel, start: str, end: str, name: str = "r") -> Any:
@@ -527,3 +549,234 @@ def test_the_summary_says_the_route_was_generated() -> None:
     cruising = summary["distance_m"] / (summary["speed_kph"] / 3.6)
     # Both figures are rounded for reading, so they meet to the rounding rather than exactly.
     assert summary["duration_s"] >= cruising - 0.01
+
+
+# --- the criterion the dataset gate actually applies ---------------------------------------
+
+
+def test_no_route_on_the_real_map_turns_more_than_the_gate_allows() -> None:
+    """The check that would have caught what shipped, run on this side of the interpreter gap.
+
+    `tools/check_dataset.py` fails a dataset whose recorded car turns more than 30° in one
+    0.1 s step, and it is the only thing that asks whether a drive is drivable. It runs in
+    MetaDrive's Python on one built dataset, so it sees one route; this sweeps the map.
+
+    The count matters as much as the assertion. An earlier version of this work swept the same
+    pairs, counted only the routes `route_polyline` *refused*, reported "0 refused" and
+    shipped - while 440 of the 813 it built carried a vertex over 30°. So the built total is
+    asserted too: a fix that reached zero by refusing routes the map permits would not be one.
+    """
+    model = _real_model()
+    if model is None:
+        pytest.skip("workspaces/junction-1 is gitignored and not present")
+    neighbours, moves = _lane_neighbours(model), _lane_change_moves(model)
+    identifiers = [lane.identifier for lane in model.lanes]
+
+    random.seed(7)
+    built, refused, over, worst = 0, 0, 0, 0.0
+    for _ in range(1500):
+        start, end = random.choice(identifiers), random.choice(identifiers)
+        if start == end:
+            continue
+        try:
+            route = plan_route(
+                model=model, neighbours=neighbours, moves=moves, name="x",
+                start_lane=start, end_lane=end,
+            )
+        except RouteError as error:
+            # A pair with no drive between them is the normal answer on a one-way map, and is
+            # not a refusal. `plan_route` builds the geometry itself, so a geometry refusal
+            # arrives here too and has to be told apart from that.
+            if "no drive exists" not in str(error):
+                refused += 1
+            continue
+        line = route_polyline(
+            model=model, route_lanes=route.lanes, lane_changes=route.lane_changes
+        )
+        built += 1
+        turned = float(_turns(_drop_repeats(line)).max())
+        worst = max(worst, turned)
+        over += turned > 30.0
+
+    assert built > 300, f"only {built} routes built; the sweep is not exercising the map"
+    assert refused == 0, f"{refused} of {built + refused} drivable pairs were refused"
+    assert over == 0, f"{over} of {built} built routes turn more than 30° at a vertex"
+    assert worst < 30.0
+
+
+def test_a_change_that_ends_a_short_lane_leaves_room_for_the_junction_after_it() -> None:
+    """The shape that shipped an 82° cusp: cross into a lane, then immediately turn out of it.
+
+    A lane change places itself in the window the two lanes share and, unasked, uses all of
+    it. On `junction-1` three changes in a row onto a 7.11 m lane left the −89° turn that
+    followed a 0.32 m approach, and the cubic built between a 0.20 m trim and a 4.20 m chord
+    folded back on itself. Matched by `web/test/route/geometry.test.ts`.
+    """
+    # `q` is short and `r` leaves it at a right angle, so the turn needs room `p`'s crossing
+    # would otherwise take.
+    p = _free("p", [(0.0, 0.0), (8.0, 0.0)], left_neighbor="q", lane_count=2)
+    q = _free("q", [(0.0, 4.0), (8.0, 4.0)], right_neighbor="p", lane_count=2,
+              lane_index=1, exit_lanes=["r"], source_edge=["1", "2", "1"])
+    r = _free("r", [(8.0, 8.0), (8.0, 60.0)], entry_lanes=["q"], source_edge=["2", "3", "0"])
+    model = PreliminaryLaneModel.model_validate(
+        {
+            "metadata": _METADATA,
+            "lanes": [item.model_dump() for item in (p, q, r)],
+            "connectors": [],
+        }
+    )
+    built = route_polyline(model=model, route_lanes=("p", "q", "r"), lane_changes=(1,))
+    line = _drop_repeats(built)
+    assert _turns(line).max() < 30.0
+    # A fold shows up as a curve doubling back, so the drive would be longer than the road.
+    assert len(line) > 10
+
+
+def test_two_junctions_on_one_lane_both_get_room_to_turn() -> None:
+    """The same starvation between two turns rather than a change and a turn.
+
+    A 14.58 m lane between two junctions in `junction-1` had 9.7 m taken by the first turn,
+    which left the second a 1 m approach to swing a 90° turn out of.
+    """
+    first = _free("f", [(0.0, 0.0), (0.0, 40.0)], exit_lanes=["m"])
+    middle = _free("m", [(2.0, 42.0), (16.0, 42.0)], entry_lanes=["f"], exit_lanes=["l"],
+                   source_edge=["2", "3", "0"])
+    last = _free("l", [(18.0, 44.0), (18.0, 90.0)], entry_lanes=["m"],
+                 source_edge=["3", "4", "0"])
+    model = PreliminaryLaneModel.model_validate(
+        {
+            "metadata": _METADATA,
+            "lanes": [item.model_dump() for item in (first, middle, last)],
+            "connectors": [],
+        }
+    )
+    line = _drop_repeats(route_polyline(model=model, route_lanes=("f", "m", "l"), lane_changes=()))
+    assert _turns(line).max() < 30.0
+
+
+def test_two_points_a_fraction_of_a_millimetre_apart_are_one_point() -> None:
+    """Where the 90° readings came from: a segment too short to have a direction.
+
+    Trimming a lane at a length computed from its own vertices lands a fraction of a
+    millimetre off the endpoint, and `atan2` over that distance returns noise. At the old
+    1e-6 m tolerance those survived and were the worst vertex in 390 of 813 swept routes.
+    """
+    line = np.array([[0.0, 0.0], [10.0, 0.0], [10.0 + 8e-5, 1e-5], [20.0, 0.0]])
+    assert len(_drop_repeats(line)) == 3
+    assert _turns(_drop_repeats(line)).max() < 1.0
+
+
+# --- stopping at a red light ---------------------------------------------------------------
+
+
+def _light(lane: str, at: tuple[float, float], **timing: float) -> SignalTiming:
+    return SignalTiming(
+        lane_id=lane,
+        stop_point=at,
+        cycle_seconds=timing.get("cycle", 60.0),
+        green_seconds=timing.get("green", 10.0),
+        yellow_seconds=timing.get("yellow", 3.0),
+        offset_seconds=timing.get("offset", 0.0),
+    )
+
+
+def _plan_with(model: PreliminaryLaneModel, start: str, end: str, signals: Any) -> Any:
+    return plan_route(
+        model=model,
+        neighbours=_lane_neighbours(model),
+        moves=_lane_change_moves(model),
+        name="r",
+        start_lane=start,
+        end_lane=end,
+        signals=signals,
+    )
+
+
+def test_a_car_that_reaches_a_red_light_waits_for_the_green() -> None:
+    """`ReplayEgoCarPolicy` teleports the car, so a red light is a wall it goes through.
+
+    Waiting has to be in the recorded positions or it does not happen at all under the
+    default policy - which is what `--agent-policy idm` was working around.
+    """
+    model = _chain()
+    # `b` ends at x=210; the car covers 310 m at 10 m/s, so it arrives well inside the red.
+    route = _plan_with(model, "a", "d", (_light("b", (210.0, 0.0)),))
+    assert len(route.waits) == 1
+    wait = route.waits[0]
+    assert wait.lane_id == "b"
+    # Stopped short of the line, not on it: MetaDrive builds its wall at the stop point.
+    assert wait.at_m == pytest.approx(_project_along(
+        route_polyline(model=model, route_lanes=route.lanes, lane_changes=route.lane_changes),
+        np.array([210.0, 0.0]),
+    ) - STOP_LINE_SETBACK_M, abs=1e-6)
+    assert colour_at(
+        seconds=wait.arrived_s, cycle_seconds=60.0, green_seconds=10.0,
+        yellow_seconds=3.0, offset_seconds=0.0,
+    ) == LIGHT_RED
+    # It moves off exactly when the tape turns green, and not before.
+    assert colour_at(
+        seconds=wait.arrived_s + wait.waited_s, cycle_seconds=60.0, green_seconds=10.0,
+        yellow_seconds=3.0, offset_seconds=0.0,
+    ) == LIGHT_GREEN
+    assert route.duration_s == pytest.approx(route.driving_duration_s + wait.waited_s)
+
+
+def test_a_car_that_reaches_a_green_light_does_not_stop() -> None:
+    """A light on the route is not a stop; only a red one is."""
+    model = _chain()
+    # Green from 20 s to 30 s, which is when the car gets there.
+    route = _plan_with(model, "a", "d", (_light("b", (210.0, 0.0), green=20.0, offset=15.0),))
+    assert route.waits == ()
+    assert route.duration_s == pytest.approx(route.driving_duration_s)
+
+
+def test_a_light_on_a_lane_the_route_never_uses_is_ignored() -> None:
+    model = _chain()
+    route = _plan_with(model, "a", "d", (_light("a2", (100.0, WIDTH)),))
+    assert route.waits == ()
+
+
+def test_the_stopped_car_stands_still_and_keeps_facing_the_way_it_was_going() -> None:
+    """`atan2(0, 0)` is due east, so a car recorded at rest would swing east and back.
+
+    Replayed, that is the same spin this whole check exists to catch - it would simply happen
+    while stationary instead of at a junction.
+    """
+    model = _chain()
+    route = _plan_with(model, "a", "d", (_light("b", (210.0, 0.0)),))
+    line = route_polyline(model=model, route_lanes=route.lanes, lane_changes=route.lane_changes)
+    state = ego_track(route=route, polyline=line)["state"]
+    speed = np.linalg.norm(state["velocity"], axis=1)
+
+    standing = speed < 0.05
+    assert standing.sum() > 100, "a 39 s wait should be hundreds of stationary steps"
+    # Every stationary sample is at the same place and faces the same way.
+    assert np.ptp(state["position"][standing][:, :2], axis=0).max() < 0.01
+    assert np.ptp(state["heading"][standing]) < 1e-9
+    # And the track is still drivable by the gate's own rule.
+    swing = np.abs((np.diff(state["heading"]) + np.pi) % (2 * np.pi) - np.pi)
+    assert np.degrees(swing).max() < 30.0
+
+
+def test_the_track_grows_by_exactly_the_time_spent_waiting() -> None:
+    """The scenario's length comes from the track, and the light tape is rebuilt at it."""
+    model = _chain()
+    free = _plan_with(model, "a", "d", ())
+    held = _plan_with(model, "a", "d", (_light("b", (210.0, 0.0)),))
+    line = route_polyline(model=model, route_lanes=held.lanes, lane_changes=held.lane_changes)
+    without = len(ego_track(route=free, polyline=line)["state"]["position"])
+    with_stop = len(ego_track(route=held, polyline=line)["state"]["position"])
+    # Not exactly the wait: braking to a stop and pulling away take time of their own, which
+    # is why `driving_duration_s` is reported beside `duration_s` rather than derived from it.
+    assert with_stop - without >= held.waits[0].waited_s / TIME_STEP_S - 1
+    assert held.driving_duration_s > free.driving_duration_s
+
+
+def test_the_summary_records_where_the_car_stopped_and_for_how_long() -> None:
+    """A reader dividing distance by speed and getting the wrong duration needs to see why."""
+    model = _chain()
+    summary = route_summary(_plan_with(model, "a", "d", (_light("b", (210.0, 0.0)),)))
+    assert len(summary["stops"]) == 1
+    assert summary["stops"][0]["lane_id"] == "b"
+    assert summary["waiting_s"] == pytest.approx(summary["stops"][0]["waited_s"])
+    assert summary["duration_s"] > summary["driving_duration_s"]

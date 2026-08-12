@@ -63,6 +63,7 @@ from osm_scenario.ego_route import (
     TIME_STEP_S,
     Route,
     RouteError,
+    SignalTiming,
     ego_track,
     plan_route,
     route_polyline,
@@ -79,6 +80,7 @@ from osm_scenario.signal_plan import (
     light_states,
     plan_metadata,
     read_signal_plan,
+    stop_points,
 )
 from osm_scenario.stage1b_data_audit import _write_text_atomic
 
@@ -580,7 +582,9 @@ def _scenario(
         # needs a well-formed envelope. The lights are rebuilt at the real length in
         # `_with_route`, because `_check_object_state_dict` requires every state array to be
         # exactly as long as the scenario.
-        "dynamic_map_states": light_states(plan, model=model, steps=1) if plan else {},
+        "dynamic_map_states": (
+            light_states(plan, model=model, steps=1, time_step_s=TIME_STEP_S) if plan else {}
+        ),
         "map_features": features,
         "metadata": {
             "scenario_id": scenario_id,
@@ -631,7 +635,11 @@ def _scenario(
             # OSM records that a signal exists and carries no cycle, split or offset, so a
             # phase plan that could not be told apart from a surveyed one is the thing this
             # field exists to prevent. `signal_plan.plan_metadata` writes it.
-            **({"signals": plan_metadata(plan, model=model)} if plan else {}),
+            **(
+                {"signals": plan_metadata(plan, model=model, time_step_s=TIME_STEP_S)}
+                if plan
+                else {}
+            ),
             "routing": routing,
             "provenance": {
                 "generator_version": model.metadata.generator_version,
@@ -643,6 +651,27 @@ def _scenario(
         },
     }
     return scenario, routing, neighbours, moves
+
+
+def _signal_timings(plan: SignalPlan, *, model: PreliminaryLaneModel) -> tuple[SignalTiming, ...]:
+    """The plan flattened to one entry per signalled lane, for the route builder.
+
+    The same `stop_points` the tape keys its walls on, so a baked stop and the wall it stops
+    at cannot end up in different places.
+    """
+    points = stop_points(plan, model)
+    return tuple(
+        SignalTiming(
+            lane_id=lane_id,
+            stop_point=(points[lane_id][0], points[lane_id][1]),
+            cycle_seconds=plan.cycle_seconds,
+            green_seconds=group.green_seconds,
+            yellow_seconds=group.yellow_seconds,
+            offset_seconds=group.offset_seconds,
+        )
+        for group in plan.groups
+        for lane_id in group.lanes
+    )
 
 
 def _read_routes(
@@ -751,7 +780,9 @@ def _with_route(
         "id": scenario_id,
         "length": steps,
         "tracks": {_EGO_ID: track},
-        "dynamic_map_states": light_states(plan, model=model, steps=steps) if plan else {},
+        "dynamic_map_states": (
+            light_states(plan, model=model, steps=steps, time_step_s=TIME_STEP_S) if plan else {}
+        ),
         "metadata": metadata,
     }
 
@@ -829,6 +860,9 @@ def convert_scenario(
         if routes is not None
         else []
     )
+    # The lights the route builder has to obey. Read once here rather than inside `ego_route`,
+    # which must not depend on a plan being present - most datasets have none.
+    signal_timings = _signal_timings(plan, model=model) if plan else ()
     planned: list[Route] = []
     scenarios: list[dict[str, Any]] = []
     try:
@@ -840,6 +874,7 @@ def convert_scenario(
                 name=selection["name"],
                 start_lane=selection["start_lane"],
                 end_lane=selection["end_lane"],
+                signals=signal_timings,
             )
             polyline = route_polyline(
                 model=model, route_lanes=route.lanes, lane_changes=route.lane_changes

@@ -40,7 +40,6 @@ from typing import Any
 
 import numpy as np
 
-from osm_scenario.ego_route import TIME_STEP_S
 from osm_scenario.lane_model import PreliminaryLaneModel
 
 # The version of `signals.json` this converter reads. The signal builder writes the same
@@ -116,6 +115,29 @@ def colour_at(
     if phase < green_seconds + yellow_seconds:
         return LIGHT_YELLOW
     return LIGHT_RED
+
+
+def seconds_until_green(
+    *,
+    seconds: float,
+    cycle_seconds: float,
+    green_seconds: float,
+    offset_seconds: float,
+) -> float:
+    """How long a car arriving at `seconds` waits before this group turns green.
+
+    Zero while it is already green. Yellow is *not* green here: a car that has come to rest
+    at the line waits for the next green rather than moving off on the amber it stopped for.
+
+    Here rather than in `ego_route` deliberately. The clock is written three times already -
+    the tape, the page, the live manager - because they run on three interpreters; a fourth
+    copy inside the route builder would be a fourth chance for the recorded car to stop at a
+    moment the tape says was green.
+    """
+    phase = (seconds - offset_seconds) % cycle_seconds
+    if phase < green_seconds:
+        return 0.0
+    return cycle_seconds - phase
 
 
 def _positive(value: Any, *, label: str) -> float:
@@ -246,7 +268,7 @@ def read_signal_plan(
     return SignalPlan(cycle_seconds=cycle, groups=tuple(groups))
 
 
-def _stop_points(
+def stop_points(
     plan: SignalPlan, model: PreliminaryLaneModel
 ) -> dict[str, tuple[float, float, float]]:
     """Where each wall goes: the downstream end of the signalled lane.
@@ -269,7 +291,7 @@ def _stop_points(
 
 
 def light_states(
-    plan: SignalPlan, *, model: PreliminaryLaneModel, steps: int
+    plan: SignalPlan, *, model: PreliminaryLaneModel, steps: int, time_step_s: float
 ) -> dict[str, dict[str, Any]]:
     """`dynamic_map_states`, keyed by lane id, in the shape MetaDrive's own converters write.
 
@@ -286,12 +308,12 @@ def light_states(
     `skip_missing_light` defaults to **True**, so a wrong key is skipped with a log line and
     no light - which is why `tools/check_dataset.py` checks the keys resolve.
     """
-    points = _stop_points(plan, model)
+    points = stop_points(plan, model)
     states: dict[str, dict[str, Any]] = {}
     for group in plan.groups:
         tape = [
             colour_at(
-                seconds=step * TIME_STEP_S,
+                seconds=step * time_step_s,
                 cycle_seconds=plan.cycle_seconds,
                 green_seconds=group.green_seconds,
                 yellow_seconds=group.yellow_seconds,
@@ -319,7 +341,9 @@ def light_states(
     return states
 
 
-def plan_metadata(plan: SignalPlan, *, model: PreliminaryLaneModel) -> dict[str, Any]:
+def plan_metadata(
+    plan: SignalPlan, *, model: PreliminaryLaneModel, time_step_s: float
+) -> dict[str, Any]:
     """The phase structure itself, for anything that wants to drive the lights rather than
     replay them.
 
@@ -331,7 +355,7 @@ def plan_metadata(plan: SignalPlan, *, model: PreliminaryLaneModel) -> dict[str,
     Plain floats and lists rather than arrays: this travels in `dataset_summary.pkl` and into
     the conversion report, and `tools/signal_control.py` reads it under MetaDrive's numpy 1.
     """
-    points = _stop_points(plan, model)
+    points = stop_points(plan, model)
     return {
         "source": "synthesised",
         "signals_version": SIGNALS_VERSION,
@@ -340,7 +364,7 @@ def plan_metadata(plan: SignalPlan, *, model: PreliminaryLaneModel) -> dict[str,
             "Every number here was chosen in the Stage 6 signal builder, not surveyed."
         ),
         "cycle_seconds": plan.cycle_seconds,
-        "time_step_s": TIME_STEP_S,
+        "time_step_s": time_step_s,
         "groups": [
             {
                 "name": group.name,
