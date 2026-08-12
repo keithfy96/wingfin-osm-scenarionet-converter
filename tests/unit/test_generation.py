@@ -1278,6 +1278,14 @@ def test_generate_lane_model_writes_deterministic_stage_2_artifacts(tmp_path: Pa
     assert "function laneLinks" in html and "function linkTable" in html
     assert "connector_polygon" in html
     assert "Connector bands" in html
+    # A band belongs to two checkboxes — its status and the band layer — and Leaflet
+    # gives an overlay only one group. Unchecking a category used to hide its
+    # centrelines and leave its bands over the map, opaque and still taking clicks,
+    # so the band is moved in and out of the band group as its status is toggled.
+    assert "const bandsByStatus=" in html
+    assert "bandsByStatus[p.status].push(layer)" in html
+    assert "map.on('overlayadd overlayremove'" in html
+    assert "groups.connector_polygon.removeLayer(band)" in html
     assert "'way:'+q" in html and "'node:'+q" in html
     assert "OpenStreetMap contributors" in html
 

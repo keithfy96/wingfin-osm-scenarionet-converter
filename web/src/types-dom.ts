@@ -26,12 +26,21 @@ export interface LeafletLayer {
 
 export interface LeafletLayerGroup extends LeafletLayer {
   addLayer(layer: LeafletLayer): LeafletLayerGroup;
+  removeLayer(layer: LeafletLayer): LeafletLayerGroup;
   clearLayers(): LeafletLayerGroup;
+}
+
+/** What `L.control.layers` passes when a checkbox is ticked or unticked. */
+export interface LeafletOverlayEvent {
+  type: string;
+  name: string;
+  layer: LeafletLayer;
 }
 
 export interface LeafletMap {
   setView(center: [number, number], zoom: number): LeafletMap;
   fitBounds(bounds: LatLngBoundsLike, options?: Record<string, unknown>): LeafletMap;
+  on(event: string, handler: (event: LeafletOverlayEvent) => void): LeafletMap;
 }
 
 export interface LeafletStatic {

@@ -1513,6 +1513,15 @@ const map=L.map('map',{preferCanvas:true});L.tileLayer('https://tile.openstreetm
 // it, which is indistinguishable from nothing having happened.
 map.createPane('focus');map.getPane('focus').style.zIndex=650;const focusLayer=L.layerGroup().addTo(map);
 const groups={source_way:L.layerGroup(),source_node:L.layerGroup(),lane_polygon:L.layerGroup(),lane_centerline:L.layerGroup(),lane_direction:L.layerGroup(),connector_polygon:L.layerGroup(),active:L.layerGroup(),review_required:L.layerGroup(),forbidden:L.layerGroup(),stop_line:L.layerGroup()};const byId=new Map(),propsById=new Map(),featuresById=new Map(),allLayers=[];let selected=[],lastFocused=null;
+// A connector is drawn twice: a hairline centreline, filed under its status, and a
+// lane-width band, filed under 'Connector bands'. A Leaflet overlay is one checkbox to
+// one group, so the band cannot sit in both — and filing it under its status alone
+// would cost the master switch that clears every band at once. Instead the band stays
+// in connector_polygon and is added to or removed from it as its status is toggled,
+// which makes a band visible only when both boxes are ticked. Without this, unchecking
+// a category hid its centrelines and left the bands lying over the map, still opaque
+// and still swallowing the clicks meant for the connectors left showing.
+const bandsByStatus={active:[],review_required:[],forbidden:[]};
 const statusColor=s=>s==='forbidden'?'#c92a2a':s==='review_required'?'#f08c00':'#2b8a3e';
 function styleFor(p){if(p.kind==='source_way')return{color:'#868e96',weight:1.5,opacity:.55,dashArray:'2 4'};if(p.kind==='source_node')return{color:'#868e96',weight:1,radius:4,fillColor:'#adb5bd',fillOpacity:.8,opacity:.8};if(p.kind==='lane_polygon')return{color:'#74c0fc',weight:1,fillColor:'#74c0fc',fillOpacity:.08};if(p.kind==='lane_centerline')return{color:'#277da1',weight:2,opacity:.75};if(p.kind==='lane_direction')return{color:'#0b4f7a',weight:3,opacity:.95,lineCap:'butt',lineJoin:'miter'};if(p.kind==='connector_polygon')return{color:statusColor(p.status),weight:1,fillColor:statusColor(p.status),fillOpacity:.22,opacity:.5};if(p.kind==='stop_line')return{color:'#7048e8',weight:6};return{color:statusColor(p.status),weight:p.status==='review_required'?5:3,dashArray:p.status==='review_required'?'7 5':null,opacity:.9}}
 // A lane, connector or source id, described the way a reviewer reads it off the map.
@@ -1549,8 +1558,12 @@ function popup(p){
         +`<tr><td><strong>Leaves to</strong></td><td>${linkTable(laneLinks(p,false))}</td></tr></table>`;
   }
   return `<strong>${esc(p.kind)}</strong>${head}<table class="popup-table">${Object.entries(p).map(([k,v])=>`<tr><td>${esc(k)}</td><td>${esc(Array.isArray(v)?v.join(', '):v)}</td></tr>`).join('')}</table>`}
-for(const feature of payload.features.features){const p=feature.properties;const layer=L.geoJSON(feature,{style:()=>styleFor(p),pointToLayer:(_f,latlng)=>L.circleMarker(latlng,styleFor(p)),onEachFeature:(_f,l)=>l.bindPopup(()=>popup(p))});propsById.set(p.id,p);if(!featuresById.has(p.id))featuresById.set(p.id,[]);featuresById.get(p.id).push(feature);layer.eachLayer(l=>{l._baseStyle=styleFor(p);allLayers.push(l);if(!byId.has(p.id))byId.set(p.id,[]);byId.get(p.id).push(l)});const key=p.kind==='connector'?p.status:p.kind;groups[key].addLayer(layer)}
+for(const feature of payload.features.features){const p=feature.properties;const layer=L.geoJSON(feature,{style:()=>styleFor(p),pointToLayer:(_f,latlng)=>L.circleMarker(latlng,styleFor(p)),onEachFeature:(_f,l)=>l.bindPopup(()=>popup(p))});propsById.set(p.id,p);if(!featuresById.has(p.id))featuresById.set(p.id,[]);featuresById.get(p.id).push(feature);layer.eachLayer(l=>{l._baseStyle=styleFor(p);allLayers.push(l);if(!byId.has(p.id))byId.set(p.id,[]);byId.get(p.id).push(l)});const key=p.kind==='connector'?p.status:p.kind;groups[key].addLayer(layer);if(p.kind==='connector_polygon'&&bandsByStatus[p.status])bandsByStatus[p.status].push(layer)}
 groups.source_way.addTo(map);groups.source_node.addTo(map);groups.lane_centerline.addTo(map);groups.lane_direction.addTo(map);groups.connector_polygon.addTo(map);groups.active.addTo(map);groups.review_required.addTo(map);groups.forbidden.addTo(map);groups.stop_line.addTo(map);L.control.layers(null,{'Source OSM ways':groups.source_way,'Source OSM nodes':groups.source_node,'Lane polygons':groups.lane_polygon,'Lane centrelines':groups.lane_centerline,'Lane direction arrows':groups.lane_direction,'Connector bands':groups.connector_polygon,'Active connectors':groups.active,'Review-required connectors':groups.review_required,'Forbidden connectors':groups.forbidden,'Stop lines':groups.stop_line},{collapsed:false}).addTo(map);
+// Only the control fires these — the addTo calls above do not — so the opening state,
+// with every box ticked, needs no special case.
+const bandOwner=new Map([[groups.active,'active'],[groups.review_required,'review_required'],[groups.forbidden,'forbidden']]);
+map.on('overlayadd overlayremove',e=>{const status=bandOwner.get(e.layer);if(!status)return;for(const band of bandsByStatus[status]){if(e.type==='overlayadd')groups.connector_polygon.addLayer(band);else groups.connector_polygon.removeLayer(band)}});
 const allGeometry=L.featureGroup(allLayers);if(allGeometry.getBounds().isValid())map.fitBounds(allGeometry.getBounds().pad(.04));
 document.getElementById('summary').innerHTML=Object.entries(payload.summary).map(([k,v])=>`<div class="metric"><b>${v}</b>${esc(k.replaceAll('_',' '))}</div>`).join('');const rules=[...new Set(payload.findings.map(f=>f.rule))].sort();document.getElementById('rule').innerHTML+=[...rules].map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
 const EMPTY_DETAIL='Select a review item to focus its affected geometry.';

@@ -3,7 +3,13 @@
 // Layer names and colours deliberately match the read-only Stage 2 audit so a
 // reviewer moving between the two sees the same map, with decision state added.
 
-import type { GeoJsonFeature, LeafletLayer, LeafletLayerGroup, LeafletMap } from "./types-dom.js";
+import type {
+  GeoJsonFeature,
+  LeafletLayer,
+  LeafletLayerGroup,
+  LeafletMap,
+  LeafletOverlayEvent,
+} from "./types-dom.js";
 
 const STATUS_COLOR: Record<string, string> = {
   active: "#2f9e44",
@@ -119,7 +125,12 @@ export interface OverlayIndex {
    */
   baseStyle: Map<LeafletLayer, Record<string, unknown>>;
   groups: Record<string, LeafletLayerGroup>;
+  /** Every movement band, by the status whose checkbox governs it. */
+  bandsByStatus: Record<string, LeafletLayer[]>;
 }
+
+/** The statuses that have a checkbox of their own, and so a band group of their own. */
+const BAND_STATUSES = ["active", "review_required", "forbidden"] as const;
 
 export function buildOverlays(
   map: LeafletMap,
@@ -129,16 +140,21 @@ export function buildOverlays(
   const groups: Record<string, LeafletLayerGroup> = {};
   const byId = new Map<string, LeafletLayer[]>();
   const baseStyle = new Map<LeafletLayer, Record<string, unknown>>();
+  const bandsByStatus: Record<string, LeafletLayer[]> = {};
 
   for (const name of Object.keys(LAYER_LABELS)) {
     groups[name] = L.layerGroup();
+  }
+  for (const status of BAND_STATUSES) {
+    bandsByStatus[status] = [];
   }
 
   for (const feature of features) {
     const properties = feature.properties ?? {};
     const kind = String(properties.kind ?? "");
-    // Connectors carry their status as the group so the three movement layers
-    // can be toggled independently of the band that shows their footprint.
+    // A movement's centreline is filed under its status, so the three movement
+    // layers toggle separately. Its band goes to connector_polygon and is governed
+    // by both boxes — see the overlay handler below.
     const groupName = kind === "connector" ? String(properties.status ?? "active") : kind;
     const group = groups[groupName];
     if (!group) continue;
@@ -168,6 +184,8 @@ export function buildOverlays(
       else byId.set(identifier, [layer]);
     }
     group.addLayer(layer);
+    const bands = kind === "connector_polygon" ? bandsByStatus[String(properties.status)] : undefined;
+    if (bands) bands.push(layer);
   }
 
   const overlayControl: Record<string, LeafletLayer> = {};
@@ -176,8 +194,47 @@ export function buildOverlays(
     if (DEFAULT_ON.has(name)) group.addTo(map);
   }
   L.control.layers(null, overlayControl, { collapsed: true }).addTo(map);
+  linkBandsToStatus(map, groups, bandsByStatus);
 
-  return { byId, baseStyle, groups };
+  return { byId, baseStyle, groups, bandsByStatus };
+}
+
+/**
+ * Make a movement band visible only when its own status is ticked as well as the
+ * band layer itself.
+ *
+ * A Leaflet overlay is one checkbox to one layer group, so a band cannot belong to
+ * both its status and "Connector lanes". Filing it under its status alone would work
+ * but costs the master switch that clears every band at once — which is what makes
+ * the lane polygons underneath readable. So the band stays in connector_polygon and
+ * joins or leaves that group as its status is toggled. Left unlinked, unchecking a
+ * category hid its centrelines and left its bands lying over the map, opaque and
+ * still taking the clicks meant for the movements still showing.
+ *
+ * Only the layer control fires these events; the `addTo` calls that set the opening
+ * state do not, so every band starts in the group and nothing has to be replayed.
+ */
+function linkBandsToStatus(
+  map: LeafletMap,
+  groups: Record<string, LeafletLayerGroup>,
+  bandsByStatus: Record<string, LeafletLayer[]>,
+): void {
+  const bandOwner = new Map<LeafletLayer, string>();
+  for (const status of BAND_STATUSES) {
+    const group = groups[status];
+    if (group) bandOwner.set(group, status);
+  }
+  const bandGroup = groups.connector_polygon;
+  if (!bandGroup) return;
+
+  map.on("overlayadd overlayremove", (event: LeafletOverlayEvent) => {
+    const status = bandOwner.get(event.layer);
+    if (!status) return;
+    for (const band of bandsByStatus[status] ?? []) {
+      if (event.type === "overlayadd") bandGroup.addLayer(band);
+      else bandGroup.removeLayer(band);
+    }
+  });
 }
 
 export interface FocusPlan {
