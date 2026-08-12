@@ -51,6 +51,7 @@ import numpy as np
 
 from osm_scenario.lane_model import LaneFeature, Point2D, PreliminaryLaneModel
 from osm_scenario.signal_plan import LIGHT_RED, colour_at, seconds_until_green
+from osm_scenario.topology import BEND_FILLET_MIN_DEGREES
 
 # MetaDrive steps physics at 0.1 s and `parse_object_state` assumes the same interval when it
 # differentiates positions into an angular velocity. Sampling anywhere else would make the
@@ -793,6 +794,33 @@ def route_polyline(
     Junction movements follow the connector; lane changes cross diagonally over the second
     half of one lane and the first half of the next; everything else is the lane centreline.
     """
+
+    def _junction_nodes(model: PreliminaryLaneModel) -> set[str]:
+        """Nodes where roads meet, as opposed to where one road is merely split in two.
+
+        The same test `generation._node_setbacks` uses, re-derived here from `source_edge`
+        rather than passed in, because putting it on the lane model would move the schema
+        version and with it the generation fingerprint - which would invalidate a live review
+        to carry a fact both sides can work out for themselves.
+
+        More than two distinct neighbours, not more than two edges: a two-way road already
+        puts four directed edges on every node along it.
+        """
+        adjacency: dict[str, set[str]] = {}
+        for lane in model.lanes:
+            start, end = lane.source_edge[0], lane.source_edge[1]
+            adjacency.setdefault(start, set()).add(end)
+            adjacency.setdefault(end, set()).add(start)
+        return {node for node, neighbours in adjacency.items() if len(neighbours) > 2}
+
+    def _bend_deg(before: LaneFeature, after: LaneFeature) -> float:
+        """How far the road turns between the end of one lane and the start of the next."""
+        a0, a1 = before.centerline[-2], before.centerline[-1]
+        b0, b1 = after.centerline[0], after.centerline[1]
+        entry = math.atan2(a1.y - a0.y, a1.x - a0.x)
+        leave = math.atan2(b1.y - b0.y, b1.x - b0.x)
+        return abs(math.degrees(math.atan2(math.sin(leave - entry), math.cos(leave - entry))))
+
     lanes = {lane.identifier: lane for lane in model.lanes}
     changing = set(lane_changes)
     # The connectors say *which* steps cross a junction, which is all they are asked for
@@ -803,6 +831,34 @@ def route_polyline(
         (connector.from_lane_id, connector.to_lane_id)
         for connector in model.connectors
         if connector.status == "active"
+    }
+    # A connector is not the only way to cross a junction. A road running *straight through*
+    # one is recorded as a plain continuation - lane names lane, no connector, because
+    # topologically nothing happens there - and it used to be indistinguishable from a
+    # continuation within a single way, because both met exactly at the shared node. They no
+    # longer do: `generation._node_setbacks` cuts every lane back to the edge of the junction,
+    # so a straight-through movement now has the whole junction to span, and on `junction-1`
+    # 26 of 211 continuations open past `MAX_JOIN_M`, the widest at 17.3 m.
+    #
+    # Told apart by what generation did, not by the way and not by the gap. Not by the way,
+    # because OSM keeps one way id across a junction it runs through, so both sides read the
+    # same. Not by the gap, because a threshold that promoted anything wide enough would
+    # quietly swallow the hole this guard exists to catch.
+    #
+    # Two things part a join, and both are deliberate: the junction setback, which applies where
+    # more than two roads meet, and the bend fillet, which applies at a through node the road
+    # visibly turns at. `BEND_FILLET_MIN_DEGREES` is imported rather than restated so the two
+    # modules cannot drift.
+    junctions = _junction_nodes(model)
+    crossings |= {
+        (before.identifier, after.identifier)
+        for before in model.lanes
+        for after in (lanes.get(item) for item in before.exit_lanes)
+        if after is not None
+        and (
+            before.source_edge[1] in junctions
+            or _bend_deg(before, after) >= BEND_FILLET_MIN_DEGREES
+        )
     }
 
     finished: list[np.ndarray] = []

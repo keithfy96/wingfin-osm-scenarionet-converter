@@ -268,7 +268,9 @@ def test_a_passing_workspace_converts_and_records_stage_6(tmp_path: Path) -> Non
     # Map-only: one scenario, because there are no routes to make more than one of.
     assert len(scenario_paths) == 1
     scenario = pickle.loads(scenario_paths[0].read_bytes())
-    assert set(scenario["map_features"]) == {"a", "b", "d"}
+    # `c` is the junction turn. It is a feature in its own right because MetaDrive builds its
+    # road network out of lane features and would otherwise have no surface across the junction.
+    assert set(scenario["map_features"]) == {"a", "b", "c", "d"}
 
     # Both index files key on the same computed filename, and it is the one MetaDrive will
     # accept - not a name we found readable.
@@ -278,7 +280,8 @@ def test_a_passing_workspace_converts_and_records_stage_6(tmp_path: Path) -> Non
     assert pickle.loads(mapping_path.read_bytes()) == {name: ""}
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["map_features"] == 3
+    # Three lanes and the junction turn between two of them.
+    assert report["map_features"] == 4
     assert report["scenario_files"] == [name]
     # Empty rather than absent: a map-only dataset is one MetaDrive can check and cannot
     # drive, and the report is where that difference is stated.
@@ -446,7 +449,10 @@ def test_every_lane_a_feature_points_at_is_itself_a_feature() -> None:
         for target in (*feature["entry_lanes"], *feature["exit_lanes"])
     }
     assert referenced <= set(features)
-    assert referenced == {"a", "b", "d"}
+    # `a` now names the turn rather than the lane beyond it, and the turn names both sides, so
+    # every one of the four appears. That chain is the point: it is what gives MetaDrive a
+    # continuous surface from the approach, across the junction, onto the exit.
+    assert referenced == {"a", "b", "c", "d"}
 
 
 def test_boundaries_become_their_own_features() -> None:
@@ -838,7 +844,9 @@ def test_a_lane_change_never_becomes_an_exit_in_the_map_features() -> None:
     figures move.
     """
     features = _built(_side_by_side())["map_features"]
-    assert features["a"]["exit_lanes"] == ["b"]
+    # Through the turn, not past it: `a` leads into connector `c`, and `c` leads to `b`.
+    assert features["a"]["exit_lanes"] == ["c"]
+    assert features["c"]["exit_lanes"] == ["b"]
     assert features["a2"]["exit_lanes"] == []
     assert features["a"]["left_neighbor"] == ["a2"]
     assert features["a2"]["right_neighbor"] == ["a"]
