@@ -13,6 +13,21 @@ from shapely.geometry import LineString
 # collinear and turning connectors read at the same scale.
 COLLINEAR_STUB_METRES = 3.0
 
+# How finely a junction turn is drawn. Matched to Waymo, whose lane polylines in
+# `metadrive/assets/waymo/` are sampled at a uniform 0.50 m — MetaDrive renders the road surface
+# and localises the car from exactly these points, so a turn drawn with five of them is a
+# polygon the car corners around rather than a curve it follows.
+CONNECTOR_SAMPLE_METRES = 0.5
+
+# Even a short slip between two nearly-aligned lanes gets enough points to read as a curve.
+CONNECTOR_MIN_SEGMENTS = 8
+
+# ...but never closer together than this. Forcing eight segments onto a 0.1 m curve puts the
+# points 12 mm apart, which is below the noise in the coordinates themselves: the direction from
+# one to the next becomes arbitrary and the "curve" wanders through hundreds of degrees. The
+# minimum count is a floor on detail, not a licence to sample finer than the geometry exists.
+CONNECTOR_MIN_SAMPLE_METRES = 0.05
+
 
 @dataclass(frozen=True)
 class MovementCandidate:
@@ -31,7 +46,20 @@ class MovementCandidate:
 
 
 def signed_turn_angle(incoming: LineString, outgoing: LineString) -> float:
-    """Return the signed heading change in degrees in the range [-180, 180]."""
+    """Return the signed heading change in degrees in the range [-180, 180].
+
+    Left deliberately un-normalised at the branch cut, after trying the opposite. A dead-on
+    U-turn returns -180 or +180 depending only on which side of zero the sine lands, so the
+    sign there is a floating-point accident rather than a direction. It is tempting to pin it,
+    but the sign reaches the U-turn *target* selection: at node 474913266 the -180 spelling
+    picks lane 06f4b600 and the +180 spelling picks 86762d66, which is a different movement
+    with a different id. `junction-1` already holds U-turns of both signs, so pinning to either
+    value re-identifies the findings on the others and invalidates settled review decisions.
+
+    That instability is a real defect — the choice of U-turn target should not depend on a
+    float — but it is a movement-selection question, not a geometry one, and fixing it here
+    would silently change which movements exist.
+    """
     a0, a1 = incoming.coords[-2], incoming.coords[-1]
     b0, b1 = outgoing.coords[0], outgoing.coords[1]
     incoming_heading = math.atan2(a1[1] - a0[1], a1[0] - a0[0])
@@ -141,10 +169,45 @@ def uturn_evidence_status(turn_permissions: list[str]) -> str:
     return "review_required"
 
 
+def _unit_tangent(line: LineString, *, at_end: bool) -> tuple[float, float]:
+    """The direction the line is travelling where it meets the junction.
+
+    Taken from the whole last (or first) segment rather than from two adjacent coordinates:
+    a generated lane usually has two points, so the segment *is* the lane, and on the few
+    that have three the final segment is still the one that sets the heading a car leaves on.
+    """
+    if at_end:
+        first, second = line.coords[-2], line.coords[-1]
+    else:
+        first, second = line.coords[1], line.coords[0]
+    dx, dy = second[0] - first[0], second[1] - first[1]
+    span = math.hypot(dx, dy)
+    if span <= 0:
+        raise ValueError("cannot take a tangent from a zero-length segment")
+    return (dx / span, dy / span) if at_end else (-dx / span, -dy / span)
+
+
 def connector_curve(
     incoming: LineString, outgoing: LineString, junction_xy: tuple[float, float]
 ) -> LineString:
-    """Create the legacy-compatible five-point quadratic Bezier connector."""
+    """The path a car actually drives across a junction, from one lane's end to the next's start.
+
+    A cubic Bezier whose control points sit *along the two tangents* rather than on the junction
+    node. That is the whole point: the curve leaves the approach in the approach's own direction
+    and arrives at the exit in the exit's, so the heading is continuous at both joins by
+    construction. The previous version put its single control point on the node, which produced
+    a curve that met neither tangent — and because lanes were generated all the way to that same
+    node, start, end and control were all within one lane width of each other and the curve
+    collapsed into a ~2 m stub pointing sideways. Trimming the lanes back gives it something to
+    span; this gives it the right shape once it has.
+
+    One third of the chord is the usual handle length for a Bezier standing in for a circular
+    arc: shorter and the curve cuts the corner, longer and it bulges past the kerb.
+
+    Sampled by distance rather than at a fixed count, because a 90 degree turn and a slight
+    merge need different numbers of points and MetaDrive draws the polyline exactly as given.
+    `junction_xy` is no longer part of the shape and is kept for the collinear case below.
+    """
     start, end = incoming.coords[-1], outgoing.coords[0]
     if math.dist(start, end) < 0.05:
         # The two lanes already meet, so there is no gap to span and the connector is
@@ -156,13 +219,32 @@ def connector_curve(
         ).coords[0]
         midpoint = ((approach[0] + start[0]) / 2, (approach[1] + start[1]) / 2)
         return LineString([approach, midpoint, start])
+
+    entry = _unit_tangent(incoming, at_end=True)
+    exit_ = _unit_tangent(outgoing, at_end=False)
+    chord = math.dist(start, end)
+    handle = chord / 3.0
+    control_a = (start[0] + entry[0] * handle, start[1] + entry[1] * handle)
+    control_b = (end[0] - exit_[0] * handle, end[1] - exit_[1] * handle)
+
+    # The chord understates a tight turn's arc, so sample against a length that grows with how
+    # far the curve has to bend: a 90 degree turn is about 1.1x its chord, a U-turn about 2.1x.
+    cross = entry[0] * exit_[1] - entry[1] * exit_[0]
+    dot = entry[0] * exit_[0] + entry[1] * exit_[1]
+    bend = abs(math.atan2(cross, dot))
+    estimated = chord * (1.0 + 0.4 * bend)
+    by_spacing = int(math.ceil(estimated / CONNECTOR_SAMPLE_METRES))
+    affordable = max(1, int(estimated / CONNECTOR_MIN_SAMPLE_METRES))
+    steps = max(1, min(max(by_spacing, CONNECTOR_MIN_SEGMENTS), affordable))
+
     points = []
-    for step in range(5):
-        t = step / 4
+    for step in range(steps + 1):
+        t = step / steps
+        a, b, c, d = (1 - t) ** 3, 3 * (1 - t) ** 2 * t, 3 * (1 - t) * t**2, t**3
         points.append(
             (
-                (1 - t) ** 2 * start[0] + 2 * (1 - t) * t * junction_xy[0] + t**2 * end[0],
-                (1 - t) ** 2 * start[1] + 2 * (1 - t) * t * junction_xy[1] + t**2 * end[1],
+                a * start[0] + b * control_a[0] + c * control_b[0] + d * end[0],
+                a * start[1] + b * control_a[1] + c * control_b[1] + d * end[1],
             )
         )
     deduplicated = [points[0]]

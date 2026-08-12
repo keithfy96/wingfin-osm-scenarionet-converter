@@ -15,7 +15,8 @@ from typing import Any
 
 import osmnx as ox
 from pyproj import Transformer
-from shapely.geometry import LineString, Polygon
+from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
+from shapely.ops import linemerge, substring
 
 from osm_scenario.config import ConverterConfig
 from osm_scenario.ids import deterministic_id
@@ -59,6 +60,31 @@ from osm_scenario.topology import (
 
 GENERATOR_VERSION = "direct-osm-stage2-v17"
 LANE_MODEL_SCHEMA_VERSION = 3
+
+# How much clear road to leave beyond the crossing carriageway when a lane is cut back at a
+# junction. Without it a lane stops exactly on the far kerb line of the road it crosses, which
+# leaves the turn no room to round its corner. Not surveyed and deliberately not on
+# `ConverterConfig`: `configuration_checksum` feeds `generation_fingerprint`, so a field there
+# would invalidate the Stage 3 review every time this were touched.
+JUNCTION_CORNER_ALLOWANCE_M = 1.5
+
+# What a lane must keep after both ends are cut. Short link ways between two close junctions can
+# be shorter than the two setbacks together; trimming those to nothing would delete a road. When
+# the clamp binds, both setbacks shrink in proportion and the lane is reported.
+MIN_TRIMMED_LANE_M = 2.0
+
+# A node where one road simply continues into the next is not a junction, but the two ways can
+# still meet at an angle - OSM puts a vertex where the road bends and the real road curves
+# through it. Left alone that becomes a heading step the car takes in zero distance, which is
+# the same defect as the junction one at a smaller scale. Above this angle the two lanes are cut
+# back and a curve is fitted between them instead.
+BEND_FILLET_MIN_DEGREES = 8.0
+
+# The radius that curve is fitted to. The setback each side is `R * tan(bend / 2)`, which is the
+# tangent length of a circular arc of this radius - 1.0 m at 10 degrees, 6.0 m at 53. Capped so
+# a hairpin between two long ways cannot eat the road either side of it.
+BEND_FILLET_RADIUS_M = 12.0
+BEND_FILLET_MAX_SETBACK_M = 8.0
 
 # One outgoing carriageway at a node: its OSM way and the directed edge it leaves on.
 GroupKey = tuple[str, tuple[str, ...]]
@@ -167,13 +193,151 @@ def _lane_offset(
     return side_sign * (lane_index + 0.5 - (0.5 * lane_count if centred else 0.0)) * width
 
 
+def _as_line(offset: Any, fallback: LineString) -> LineString:
+    """One `LineString` from whatever `offset_curve` returned.
+
+    Shapely can hand back a `MultiLineString` for an offset that is geometrically a single
+    unbroken line — a trimmed centreline whose interior vertex is collinear is enough to
+    trigger it. `linemerge` stitches those pieces back together; anything it cannot join is a
+    genuinely broken offset, and the longest piece is the lane's own side of it.
+    """
+    if isinstance(offset, LineString):
+        return offset if not offset.is_empty else fallback
+    if isinstance(offset, MultiLineString):
+        if offset.is_empty:
+            return fallback
+        merged = linemerge(offset)
+        if isinstance(merged, LineString) and not merged.is_empty:
+            return merged
+        return max(offset.geoms, key=lambda part: part.length)
+    return fallback
+
+
 def _lane_surface(center: LineString, width: float) -> tuple[Polygon, LineString, LineString]:
     """Derive a lane's drawn extent from its centreline."""
     return (
         center.buffer(width / 2, cap_style="flat", join_style="mitre"),
-        center.offset_curve(width / 2, join_style="mitre"),
-        center.offset_curve(-width / 2, join_style="mitre"),
+        _as_line(center.offset_curve(width / 2, join_style="mitre"), center),
+        _as_line(center.offset_curve(-width / 2, join_style="mitre"), center),
     )
+
+
+def _wrap(radians: float) -> float:
+    """An angle difference folded into (-pi, pi]."""
+    return math.atan2(math.sin(radians), math.cos(radians))
+
+
+def _node_setbacks(graph: Any, snapshot: Any, config: ConverterConfig) -> dict[str, float]:
+    """How far short of each junction node an arriving lane should stop.
+
+    OSM puts one node at the centre of an intersection and every way runs to it, so a lane
+    generated over the whole edge ends in the middle of the junction — and so does every other
+    lane at that node. That leaves the connector nothing to span but the lateral offset between
+    two overlapping lane ends, which is why turns came out 1.7 m long pointing sideways.
+
+    The setback is half the widest carriageway meeting at the node, which is where that road's
+    far kerb is, plus a corner allowance. One value per node rather than one per approach: the
+    junction is a single region, and a square box keeps a wide road and a narrow one agreeing
+    about where it ends.
+
+    Only nodes with more than two distinct neighbours are junctions. A node that merely splits
+    one road into two ways has exactly two, and trimming there would tear a straight road in
+    half — which is why the test is on neighbours rather than on edge count, since a two-way
+    road already puts four directed edges on every node along it.
+    """
+    widths: dict[str, float] = {}
+    adjacency: dict[str, set[str]] = {}
+    arriving: dict[str, list[float]] = {}
+    leaving: dict[str, list[float]] = {}
+    for u, v, _key, data in graph.edges(keys=True, data=True):
+        way_ids = _way_ids(data)
+        if not way_ids:
+            continue
+        way = snapshot.ways.get(way_ids[0])
+        if way is None:
+            continue
+        try:
+            line = _edge_geometry(graph, u, v, data)
+        except GenerationError:
+            line = None
+        if line is not None and len(line.coords) >= 2:
+            head = line.coords[:2]
+            tail = line.coords[-2:]
+            leaving.setdefault(str(u), []).append(
+                math.atan2(head[1][1] - head[0][1], head[1][0] - head[0][0])
+            )
+            arriving.setdefault(str(v), []).append(
+                math.atan2(tail[1][1] - tail[0][1], tail[1][0] - tail[0][0])
+            )
+        total_lanes = _positive_int(way.tags.get("lanes"))
+        if total_lanes is None:
+            forward, _, _ = _directional_lane_count(way.tags, "forward")
+            if _carries_whole_carriageway(way.tags):
+                total_lanes = forward
+            else:
+                backward, _, _ = _directional_lane_count(way.tags, "backward")
+                total_lanes = forward + backward
+        width_total = _positive_float(way.tags.get("width")) or (
+            config.lane_width_defaults.vehicle * max(total_lanes, 1)
+        )
+        for node in (str(u), str(v)):
+            widths[node] = max(widths.get(node, 0.0), width_total)
+            adjacency.setdefault(node, set())
+        adjacency[str(u)].add(str(v))
+        adjacency[str(v)].add(str(u))
+    setbacks: dict[str, float] = {}
+    for node, neighbours in adjacency.items():
+        if len(neighbours) > 2:
+            setbacks[node] = widths.get(node, 0.0) / 2.0 + JUNCTION_CORNER_ALLOWANCE_M
+            continue
+        if len(neighbours) != 2:
+            continue
+        # A through node. The sharpest turn any car takes here is the bend to fillet: with a
+        # two-way road there are two arriving and two leaving headings, and the reverse pairing
+        # is a U-turn nobody drives, so pair each arrival with the leaving heading closest to it.
+        bend = 0.0
+        for incoming in arriving.get(node, ()):
+            outgoing = leaving.get(node, ())
+            if not outgoing:
+                continue
+            bend = max(
+                bend,
+                min(abs(math.degrees(_wrap(angle - incoming))) for angle in outgoing),
+            )
+        if bend < BEND_FILLET_MIN_DEGREES or bend >= 180.0:
+            continue
+        setbacks[node] = min(
+            BEND_FILLET_RADIUS_M * math.tan(math.radians(bend) / 2.0),
+            BEND_FILLET_MAX_SETBACK_M,
+        )
+    return setbacks
+
+
+def _trimmed_edge(line: LineString, start_m: float, end_m: float) -> tuple[LineString, bool]:
+    """`line` cut back by `start_m` at its head and `end_m` at its tail.
+
+    Returns the trimmed line and whether the clamp bound. Both cuts are interpolated rather
+    than snapped to a vertex, because a generated lane usually has exactly two points and
+    snapping would collapse it onto one of its ends.
+    """
+    total = line.length
+    wanted = max(start_m, 0.0) + max(end_m, 0.0)
+    if wanted <= 0:
+        return line, False
+    room = total - MIN_TRIMMED_LANE_M
+    clamped = wanted > room
+    if clamped:
+        scale = max(room, 0.0) / wanted
+        start_m *= scale
+        end_m *= scale
+    start_m = max(start_m, 0.0)
+    end_m = max(end_m, 0.0)
+    if start_m + end_m <= 0:
+        return line, clamped
+    trimmed = substring(line, start_m, total - end_m)
+    if not isinstance(trimmed, LineString) or trimmed.is_empty or trimmed.length <= 0:
+        return line, True
+    return trimmed, clamped
 
 
 def _tapered_line(
@@ -829,7 +993,19 @@ def _points(line: LineString) -> list[Point2D]:
     return [Point2D(x=float(x), y=float(y)) for x, y in line.coords]
 
 
-def _polygon_points(polygon: Polygon) -> list[Point2D]:
+def _polygon_points(polygon: Polygon | MultiPolygon) -> list[Point2D]:
+    """The outline of a buffered centreline, as the model stores it.
+
+    Buffering a tight curve can return a `MultiPolygon`: where the turn bends harder than its
+    own half-width the offset outline crosses itself, and shapely resolves that into separate
+    pieces. The largest is the lane surface and the rest are slivers that self-intersection left
+    behind, so take the largest rather than failing — the alternative is a junction turn that
+    cannot be represented at all once it is drawn as a real curve.
+    """
+    if isinstance(polygon, MultiPolygon):
+        if polygon.is_empty:
+            raise GenerationError("lane surface buffered to an empty polygon")
+        polygon = max(polygon.geoms, key=lambda part: part.area)
     return [Point2D(x=float(x), y=float(y)) for x, y in polygon.exterior.coords]
 
 
@@ -1465,6 +1641,11 @@ def build_lane_model(
     lane_count_findings: dict[tuple[tuple[str, ...], str, int, str, str], list[str]] = {}
     width_findings: dict[tuple[tuple[str, ...], float], list[str]] = {}
     speed_findings: dict[tuple[tuple[str, ...], float], list[str]] = {}
+    # Where each junction begins, so lanes stop at its edge instead of piling up on the node at
+    # its centre. Computed over the whole graph first because the setback at one end of an edge
+    # depends on the other roads at that node, which this loop has not reached yet.
+    setbacks = _node_setbacks(graph, snapshot, config)
+    trim_clamped: list[str] = []
     for u, v, key, data in sorted(
         graph.edges(keys=True, data=True), key=lambda item: tuple(map(str, item[:3]))
     ):
@@ -1486,6 +1667,12 @@ def build_lane_model(
             way.tags.get("highway", ""), config.default_speed_kph
         )
         base = _edge_geometry(graph, u, v, data)
+        # Cut the shared edge geometry rather than each offset lane: every lane of this edge
+        # then stops at the same station, and `_lane_surface` derives the boundaries and the
+        # polygon from the trimmed centreline, so all four stay consistent for free.
+        base, clamped = _trimmed_edge(base, setbacks.get(str(u), 0.0), setbacks.get(str(v), 0.0))
+        if clamped:
+            trim_clamped.append(f"{u}->{v}")
         created: list[str] = []
         side_sign = 1.0 if driving_side == "left" else -1.0
         centred = _carries_whole_carriageway(way.tags)
@@ -1910,8 +2097,10 @@ def build_lane_model(
                 turn_angle_degrees=round(candidate.angle_degrees, 3),
                 status=status,
                 centerline=_points(candidate.centerline),
+                # Round joins, not mitre: a mitre on a turn this tight throws long spikes off
+                # the outside of the bend, and the polygon is what MetaDrive paints as road.
                 polygon=_polygon_points(
-                    candidate.centerline.buffer(width / 2, cap_style="flat", join_style="mitre")
+                    candidate.centerline.buffer(width / 2, cap_style="flat", join_style="round")
                 ),
             )
         )
@@ -2180,6 +2369,10 @@ def build_lane_model(
         "review_required_connectors": sum(
             item.status == "review_required" for item in connectors
         ),
+        # Edges too short to carry both their junction setbacks, so the setbacks were scaled
+        # down to leave `MIN_TRIMMED_LANE_M`. Their lanes still reach further into the junction
+        # than the rest, so the number is worth reading rather than assuming it is zero.
+        "trim_clamped_edges": len(trim_clamped),
         "findings": len(findings),
     }
     return model, feature_counts

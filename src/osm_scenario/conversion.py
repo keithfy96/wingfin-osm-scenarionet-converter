@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import os
 import pickle
 import re
@@ -45,6 +46,7 @@ from typing import Any
 
 import networkx as nx
 import numpy as np
+from shapely.geometry import LineString, MultiPolygon
 
 # Private helpers imported across modules on purpose, for the reason `validation` gives:
 # these are the exact routines the earlier stages use, and a Stage 6 copy would be a
@@ -61,10 +63,12 @@ from osm_scenario.ego_route import (
     route_polyline,
     route_summary,
 )
-from osm_scenario.lane_model import LaneFeature, PreliminaryLaneModel
+from osm_scenario.ids import deterministic_id
+from osm_scenario.lane_model import ConnectorFeature, LaneFeature, PreliminaryLaneModel
 from osm_scenario.reachability_view import render_reachability_html
 from osm_scenario.route_builder_view import render_route_builder_html
 from osm_scenario.stage1b_data_audit import _write_text_atomic
+from osm_scenario.topology import connector_curve
 
 REPORT_VERSION = 1
 
@@ -126,6 +130,30 @@ def _portable_pickle(payload: Any) -> bytes:
 
 _LANE_TYPE = "LANE_SURFACE_STREET"
 _BOUNDARY_TYPE = "ROAD_EDGE_BOUNDARY"
+
+# A junction turn carries no surveyed speed limit - it is not a way and has no `maxspeed` - and
+# the lanes either side of it may disagree. 30 km/h is the figure MetaDrive's own IDM would end
+# up at through a turn of this radius anyway, and `ScenarioLane` only reads it to cap speed.
+_CONNECTOR_SPEED_KPH = 30.0
+
+# How far apart two consecutive features may be and still count as meeting. Waymo's own data
+# joins lane to lane at exactly 0.000 m, and MetaDrive builds the road surface per feature, so
+# anything above this is a hole in the road rather than rounding.
+_JOIN_TOLERANCE_M = 0.05
+
+# The smallest gap worth spanning with a junction lane of its own. Below this there is no room
+# for a curve that can also match the tangents at both ends - the handles are a third of the
+# chord, so a 0.1 m gap between lanes pointing different ways produces a cusp rather than a
+# join. A seam this size is invisible to MetaDrive anyway: it builds each lane's surface
+# separately and they are metres wide, so the polygons still abut.
+_BRIDGE_MIN_GAP_M = 0.25
+
+# How much chord a bridge needs per radian of turn. The Bezier's handles are a third of the
+# chord, so a curve asked to swing 140 degrees across 0.25 m cannot meet both tangents and comes
+# out as a cusp - a spike in the road surface, which is worse than the kink it was meant to
+# remove. Below this the movement is left as a direct join and counted, rather than papered over
+# with geometry that is wrong in a new way.
+_BRIDGE_CHORD_PER_RADIAN_M = 0.5
 _FORMAT_VERSION = "1.0"
 
 _DATASET_NAME = "osm-scenario"
@@ -393,13 +421,256 @@ def _lane_feature(
     }
 
 
-def _map_features(
-    model: PreliminaryLaneModel, neighbours: Mapping[str, tuple[list[str], list[str]]]
-) -> dict[str, dict[str, Any]]:
-    features: dict[str, dict[str, Any]] = {}
+def _connector_feature(
+    connector: ConnectorFeature, width: float
+) -> dict[str, Any]:
+    """A junction turn, written as a lane because that is what it is.
+
+    MetaDrive builds its road network from lane features and nothing else:
+    `ScenarioBlock._sample_topology` makes a `ScenarioLane` per `is_lane` feature and puts it
+    in the graph. A turn that is not a feature is not road — there is no surface over the
+    junction to localise on or to paint. Waymo's own data does it this way; in
+    `metadrive/assets/waymo/` an intersection turn is an ordinary `LANE_SURFACE_STREET` whose
+    polyline curves across the box, and one of them turns 181.6 degrees over 26.6 m.
+
+    No `left_neighbor` or `right_neighbor`: two turns crossing the same junction are not lanes
+    of one road, and a car may not change between them.
+    """
+    return {
+        "type": _LANE_TYPE,
+        "polyline": _polyline(connector.centerline),
+        "polygon": _polyline(connector.polygon),
+        "speed_limit_kmh": _CONNECTOR_SPEED_KPH,
+        "width": width,
+        "entry_lanes": [connector.from_lane_id],
+        "exit_lanes": [connector.to_lane_id],
+        "left_neighbor": [],
+        "right_neighbor": [],
+    }
+
+
+def _already_meet(lane: LaneFeature, other: LaneFeature | None, leaving: bool) -> bool:
+    """Whether the two lanes touch at the end the movement uses, so nothing spans them."""
+    if other is None:
+        return False
+    end = lane.centerline[-1] if leaving else lane.centerline[0]
+    start = other.centerline[0] if leaving else other.centerline[-1]
+    return math.hypot(end.x - start.x, end.y - start.y) <= _JOIN_TOLERANCE_M
+
+
+def _gap_ahead(source: LaneFeature, target: LaneFeature) -> tuple[float, float]:
+    """How far ahead the next lane starts, and how far away it is.
+
+    The first is the gap measured *along* the direction the approach is travelling, so an
+    overlap comes back negative. The second is the straight-line distance, which cannot.
+    """
+    a0, a1 = source.centerline[-2], source.centerline[-1]
+    span = math.hypot(a1.x - a0.x, a1.y - a0.y)
+    if span <= 0:
+        return 0.0, 0.0
+    heading = ((a1.x - a0.x) / span, (a1.y - a0.y) / span)
+    start = target.centerline[0]
+    delta = (start.x - a1.x, start.y - a1.y)
+    return (
+        delta[0] * heading[0] + delta[1] * heading[1],
+        math.hypot(delta[0], delta[1]),
+    )
+
+
+def _bend_between(source: LaneFeature, target: LaneFeature) -> float:
+    """Radians a car must swing through between the end of one lane and the start of the next."""
+    a0, a1 = source.centerline[-2], source.centerline[-1]
+    b0, b1 = target.centerline[0], target.centerline[1]
+    entry = math.atan2(a1.y - a0.y, a1.x - a0.x)
+    exit_ = math.atan2(b1.y - b0.y, b1.x - b0.x)
+    return abs(math.atan2(math.sin(exit_ - entry), math.cos(exit_ - entry)))
+
+
+def _bridge_feature(
+    identifier: str, source: LaneFeature, target: LaneFeature
+) -> dict[str, Any]:
+    """A junction lane for a movement the model records as a plain continuation.
+
+    Not every movement across a junction is a connector. A road running straight through one is
+    written as a continuation — lane names lane, no connector between them — because
+    topologically nothing happens. Geometrically something does: both lanes are now cut back to
+    the edge of the junction, so the two ends no longer meet and MetaDrive would be handed a
+    hole exactly where the road goes straight on.
+
+    Built with the same `connector_curve` the turns use, so a straight-through movement and a
+    turning one produce the same kind of feature and join their neighbours the same way. This
+    lives here rather than in `generation` deliberately: making these into model connectors
+    would mint new connector ids, new findings and a new review.
+    """
+    line = connector_curve(
+        LineString([(point.x, point.y) for point in source.centerline]),
+        LineString([(point.x, point.y) for point in target.centerline]),
+        (
+            (source.centerline[-1].x + target.centerline[0].x) / 2,
+            (source.centerline[-1].y + target.centerline[0].y) / 2,
+        ),
+    )
+    width = min(source.width_m, target.width_m)
+    surface = line.buffer(width / 2, cap_style="flat", join_style="round")
+    if isinstance(surface, MultiPolygon):
+        surface = max(surface.geoms, key=lambda part: part.area)
+    return {
+        "type": _LANE_TYPE,
+        "polyline": np.array(line.coords, dtype=np.float64),
+        "polygon": np.array(surface.exterior.coords, dtype=np.float64),
+        "speed_limit_kmh": min(source.speed_limit_kph, target.speed_limit_kph),
+        "width": width,
+        "entry_lanes": [source.identifier],
+        "exit_lanes": [target.identifier],
+        "left_neighbor": [],
+        "right_neighbor": [],
+    }
+
+
+def _exported_links(
+    model: PreliminaryLaneModel,
+) -> tuple[dict[str, tuple[list[str], list[str]]], dict[str, dict[str, Any]]]:
+    """What `entry_lanes` and `exit_lanes` say in the written file, for every feature.
+
+    Deliberately not `_lane_neighbours`, which replaces a connector reference with the lane
+    beyond it. That resolution is right for our own reachability and routing, which answer
+    questions about roads; it is wrong for the dataset, because it deletes the junction turn on
+    the way out and leaves MetaDrive two lanes that do not meet. Here the chain is written in
+    full — approach, then the turn, then the exit — which is the shape every ScenarioNet
+    converter produces and the shape `ScenarioBlock` expects.
+    """
+    lanes = {lane.identifier for lane in model.lanes}
+    by_identifier = {lane.identifier: lane for lane in model.lanes}
+    connectors = {item.identifier: item for item in model.connectors}
+    links: dict[str, tuple[list[str], list[str]]] = {}
+    used: dict[str, ConnectorFeature] = {}
     for lane in model.lanes:
-        entries, exits = neighbours[lane.identifier]
+        sides: list[list[str]] = []
+        for references in (lane.entry_lanes, lane.exit_lanes):
+            out: list[str] = []
+            for reference in references:
+                if reference in lanes:
+                    out.append(reference)
+                    continue
+                connector = connectors.get(reference)
+                if connector is None:
+                    raise ConversionError(
+                        f"lane {lane.identifier} names {reference}, which is neither a lane "
+                        "nor a connector in this model"
+                    )
+                if connector.status != "active":
+                    # A movement the review forbade. Dropped rather than followed, for the
+                    # same reason `_lane_neighbours` drops it.
+                    continue
+                far = (
+                    connector.to_lane_id
+                    if references is lane.exit_lanes
+                    else connector.from_lane_id
+                )
+                if _already_meet(lane, by_identifier.get(far), references is lane.exit_lanes):
+                    # The two lanes touch, so there is no junction to cross and the connector
+                    # is only a marker - `connector_curve` returns a stub measured *backwards*
+                    # along the approach for exactly this case. Writing that as a feature would
+                    # open a 3 m hole where the road is in fact continuous, so the chain names
+                    # the far lane directly and no junction lane is emitted.
+                    out.append(far)
+                    continue
+                out.append(reference)
+                used[reference] = connector
+            sides.append(list(dict.fromkeys(out)))
+        links[lane.identifier] = (sides[0], sides[1])
+    # Only the connectors a lane actually names. Reached this way rather than by walking
+    # `model.connectors`, so this stays exactly as strict as `_lane_neighbours`: a connector
+    # nothing references is not part of the network and must not become road.
+    for identifier, connector in used.items():
+        for role, target in (("from", connector.from_lane_id), ("to", connector.to_lane_id)):
+            if target not in lanes:
+                raise ConversionError(
+                    f"connector {identifier} names {target} as its {role} lane, but it is "
+                    "not a lane in this model"
+                )
+        links[identifier] = ([connector.from_lane_id], [connector.to_lane_id])
+
+    # Continuations whose two ends stopped meeting once both were cut back at a junction. Each
+    # gets a junction lane of its own, spliced into the chain so the surface is unbroken.
+    by_id = {lane.identifier: lane for lane in model.lanes}
+    bridges: dict[str, dict[str, Any]] = {}
+    for lane in model.lanes:
+        entries, exits = links[lane.identifier]
+        rewritten: list[str] = []
+        for target_id in exits:
+            target = by_id.get(target_id)
+            if target is None:
+                rewritten.append(target_id)
+                continue
+            forward, chord = _gap_ahead(lane, target)
+            # `forward`, not `chord`: trimming the two ends independently can leave the next
+            # lane starting slightly *behind* where this one stopped, and the straight-line
+            # distance cannot tell that from a real gap. Bridging an overlap asks the curve to
+            # go forwards, turn round and come back, which is the cusp this guard exists to
+            # prevent. A small overlap needs no feature - it is invisible where the lanes are
+            # metres wide.
+            if forward < _BRIDGE_MIN_GAP_M or chord < _BRIDGE_CHORD_PER_RADIAN_M * _bend_between(
+                lane, target
+            ):
+                rewritten.append(target_id)
+                continue
+            bridge_id = deterministic_id("junction-lane", lane.identifier, target_id)
+            if bridge_id in links or bridge_id in bridges:
+                raise ConversionError(
+                    f"the junction lane bridging {lane.identifier} to {target_id} collides "
+                    f"with an existing feature id {bridge_id}"
+                )
+            bridges[bridge_id] = _bridge_feature(bridge_id, lane, target)
+            links[bridge_id] = ([lane.identifier], [target_id])
+            rewritten.append(bridge_id)
+        links[lane.identifier] = (entries, rewritten)
+
+    # The bridged lanes' `entry_lanes` still name the approach directly. Rewrite them to name
+    # the bridge, so the chain reads the same in both directions.
+    incoming: dict[str, list[str]] = {}
+    for feature_id, (_, exits) in links.items():
+        for target_id in exits:
+            incoming.setdefault(target_id, []).append(feature_id)
+    for lane in model.lanes:
+        entries, exits = links[lane.identifier]
+        arrivals = incoming.get(lane.identifier, [])
+        links[lane.identifier] = (
+            [item for item in arrivals if item in links] or entries,
+            exits,
+        )
+    return links, bridges
+
+
+def _map_features(model: PreliminaryLaneModel) -> dict[str, dict[str, Any]]:
+    features: dict[str, dict[str, Any]] = {}
+    links, bridges = _exported_links(model)
+    lane_widths = {lane.identifier: lane.width_m for lane in model.lanes}
+    for lane in model.lanes:
+        entries, exits = links[lane.identifier]
         features[lane.identifier] = _lane_feature(lane, entries, exits)
+
+    for connector in model.connectors:
+        if connector.identifier not in links:
+            continue
+        if connector.identifier in features:
+            raise ConversionError(
+                f"connector {connector.identifier} shares an id with another map feature"
+            )
+        features[connector.identifier] = _connector_feature(
+            connector,
+            min(
+                lane_widths[connector.from_lane_id],
+                lane_widths[connector.to_lane_id],
+            ),
+        )
+
+    for bridge_id, feature in bridges.items():
+        if bridge_id in features:
+            raise ConversionError(
+                f"junction lane {bridge_id} shares an id with another map feature"
+            )
+        features[bridge_id] = feature
 
     for lane in model.lanes:
         for boundary in lane.boundaries:
@@ -440,12 +711,15 @@ def _scenario(
     """
     neighbours = _lane_neighbours(model)
     moves = _lane_change_moves(model)
-    features = _map_features(model, neighbours)
+    features = _map_features(model)
 
+    # Checked over what the file actually says rather than over the resolved lane graph: the
+    # written chain runs through the connectors, so it is the chain that must have no
+    # references to features nobody wrote.
     dangling = {
         target
-        for entries, exits in neighbours.values()
-        for target in (*entries, *exits)
+        for feature in features.values()
+        for target in (*feature.get("entry_lanes", ()), *feature.get("exit_lanes", ()))
         if target not in features
     }
     if dangling:
@@ -483,7 +757,19 @@ def _scenario(
             "coordinate_system_wkt": model.metadata.coordinate_system_wkt,
             "counts": {
                 "lanes": len(model.lanes),
-                "lane_boundaries": len(features) - len(model.lanes),
+                # Every feature that is neither a road lane nor a junction turn. Written out
+                # rather than subtracted from the total, which stopped being a safe way to
+                # count once the turns became features in their own right.
+                "lane_boundaries": sum(
+                    1 for item in features.values() if item["type"] == _BOUNDARY_TYPE
+                ),
+                # How many of the `LANE_SURFACE_STREET` features are junction turns rather than
+                # road. MetaDrive makes no distinction - that is the point - so this is the
+                # only place the split is recorded.
+                "junction_lanes": sum(
+                    1 for item in features.values() if item["type"] == _LANE_TYPE
+                )
+                - len(model.lanes),
                 "connectors_total": len(model.connectors),
                 "connectors_active": sum(1 for item in model.connectors if item.status == "active"),
                 "signals": len(model.signals),

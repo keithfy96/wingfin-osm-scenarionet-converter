@@ -74,6 +74,11 @@ MAX_JOIN_M = 5.0
 # before it starts is worse than one that fails.
 MIN_ROUTE_M = 2.0
 
+# How close two consecutive lanes have to be before there is nothing between them to drive.
+# The same figure `conversion._JOIN_TOLERANCE_M` uses, and for the same reason: below it the
+# road is continuous and any connector geometry is a marker rather than a path.
+_MEETING_TOLERANCE_M = 0.05
+
 # How much of each lane a change is spread over, as a fraction of its length either side of
 # the midpoint. Cutting both lanes at the *same* point would leave the car stepping a full
 # lane width sideways at constant longitude - a teleport, not a lane change. At 0.15 the
@@ -283,7 +288,16 @@ def route_polyline(
             centre = _cut(centre, keep_head=False, at=0.5 + _CHANGE_HALF_SPAN)
         elif position > 0:
             crossing = connectors.get((route_lanes[position - 1], lane_id))
-            if crossing is not None and len(crossing) >= 2:
+            # Only where the two lanes genuinely do not meet. `topology.connector_curve` returns
+            # a *marker* for a movement whose lanes already touch - three points measured
+            # backwards along the approach - and splicing that into a drive makes the car
+            # retrace the last 3 m of the lane it just left, which reads as a 180 degree flip in
+            # one step. The marker is fine as a record that the movement exists; it is not a
+            # path, and there is no gap here for a path to span.
+            already_meet = bool(pieces) and (
+                float(np.linalg.norm(pieces[-1][-1] - centre[0])) <= _MEETING_TOLERANCE_M
+            )
+            if crossing is not None and len(crossing) >= 2 and not already_meet:
                 add(crossing, joined=True, what=f"the junction into lane {lane_id}")
         if leaving_by_change:
             centre = _cut(centre, keep_head=True, at=0.5 - _CHANGE_HALF_SPAN)
