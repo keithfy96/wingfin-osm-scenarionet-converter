@@ -5,6 +5,7 @@ import math
 from pathlib import Path
 from types import SimpleNamespace
 
+import osmnx as ox
 import pytest
 from pydantic import ValidationError
 from shapely.geometry import LineString
@@ -51,6 +52,7 @@ from osm_scenario.topology import MovementCandidate
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "osm" / "tiny.osm"
 SIGNALS = Path(__file__).parents[1] / "fixtures" / "osm" / "signals.osm"
+SINGLE_LANE = Path(__file__).parents[1] / "fixtures" / "osm" / "single-lane.osm"
 
 
 def _workspace(tmp_path: Path) -> Path:
@@ -1460,4 +1462,60 @@ def test_a_released_lane_gets_no_stop_line(tmp_path: Path) -> None:
         f
         for f in model.findings
         if f.rule == "inferred_stop_line" and f.source_ids == ["400"]
+    ]
+
+
+def test_a_single_lane_way_generates_one_centred_lane_when_stage_1_read_it_one_way(
+    tmp_path: Path,
+) -> None:
+    """The graph decides the direction, but the geometry has to follow it.
+
+    Stage 1 drops the reverse edge and never touches the source tags, so without
+    `one_way_in_graph` the surviving lane would still be offset half a lane off the
+    road's centre — balancing against an oncoming block that is no longer there — and
+    its count would still be reported as an inference rather than as the carriageway.
+    """
+    workspace = tmp_path / "workspace"
+    acquire_osm(workspace=workspace, driving_side="left", osm_file=SINGLE_LANE)
+    normalize_workspace(workspace=workspace, config=ConverterConfig(config_version=1))
+    generate_lane_model(workspace=workspace, config=ConverterConfig(config_version=1))
+    model = PreliminaryLaneModel.model_validate_json(
+        (workspace / "lane-model" / "preliminary.json").read_bytes()
+    )
+
+    def lanes_of(way_id: str) -> list[LaneFeature]:
+        return [lane for lane in model.lanes if way_id in lane.source_way_ids]
+
+    # 200 was applied: one direction, and each edge of it carries a single lane.
+    applied = lanes_of("200")
+    assert {lane.direction for lane in applied} == {"forward"}
+    assert {lane.lane_count for lane in applied} == {1}
+
+    # 300 was refused, so it is untouched: still a lane each way.
+    assert {lane.direction for lane in lanes_of("300")} == {"forward", "backward"}
+
+    # The applied lane sits *on* the way centreline. The refused one sits beside it,
+    # which is what a two-way way's lanes are supposed to do.
+    graph = ox.load_graphml(workspace / "normalized" / "road-network-local.graphml")
+    nodes = {str(node): (float(d["x"]), float(d["y"])) for node, d in graph.nodes(data=True)}
+    for way_id, centred in (("200", True), ("300", False)):
+        offsets = []
+        for lane in lanes_of(way_id):
+            u, v, _key = lane.source_edge
+            middle = LineString([nodes[u], nodes[v]]).interpolate(0.5, normalized=True)
+            own = LineString([(p.x, p.y) for p in lane.centerline])
+            offsets.append(own.distance(middle))
+        # 3.5 m of lane, so a lane held off the centreline sits 1.75 m from it.
+        assert (max(offsets) < 0.05) is centred, f"way {way_id} offsets {offsets}"
+
+    # And the count is no longer a guess, so it stops being a blocker.
+    assert not [
+        finding
+        for finding in model.findings
+        if finding.rule == "lane_count_inference" and "200" in finding.source_ids
+    ]
+    assert [
+        finding
+        for finding in model.findings
+        if finding.rule == "lane_count_inference" and "300" in finding.source_ids
     ]

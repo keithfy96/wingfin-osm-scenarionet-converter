@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Four `lanes=1` ways with no `oneway`, each a different answer from the guard in
+  `osm_source._apply_single_lane_oneway`. Way 100 is the two-way spine every other way
+  hangs off, and is the whole of the strongly connected core.
+
+     9                        way 300 : a spur to a dead end. Read one-way, node 9
+     |                                  has no way out at all, so BLOCKED.
+     | 300
+     |
+     1 ==== 2 ==== 3          way 100 : residential, lanes=2, two-way. The core.
+      \    100    | \
+       \          |  \ 600    way 200 : a second route between two nodes the spine
+   200  \         |   21                already joins. Nothing needs its reverse,
+         4        |    \                so APPLIED.
+                  |     20
+                  | 700  \    ways 600 and 700 both run 3 to 20, so each is spare
+                  |      22             while the other is two-way. 600 is APPLIED
+                  +______/              and 700 is then BLOCKED, which only comes
+                                        out right because candidates are decided
+                                        one at a time, against the graph the last
+                                        one left.
+-->
+<osm version="0.6" generator="osm-scenario-test">
+  <node id="1" lat="3.1500" lon="101.7000" />
+  <node id="2" lat="3.1500" lon="101.7010" />
+  <node id="3" lat="3.1500" lon="101.7020" />
+  <node id="4" lat="3.1490" lon="101.7010" />
+  <node id="9" lat="3.1510" lon="101.7010" />
+  <node id="20" lat="3.1480" lon="101.7030" />
+  <node id="21" lat="3.1490" lon="101.7025" />
+  <node id="22" lat="3.1495" lon="101.7032" />
+
+  <way id="100">
+    <nd ref="1" />
+    <nd ref="2" />
+    <nd ref="3" />
+    <tag k="highway" v="residential" />
+    <tag k="lanes" v="2" />
+  </way>
+
+  <way id="200">
+    <nd ref="1" />
+    <nd ref="4" />
+    <nd ref="3" />
+    <tag k="highway" v="residential" />
+    <tag k="lanes" v="1" />
+  </way>
+
+  <way id="300">
+    <nd ref="2" />
+    <nd ref="9" />
+    <tag k="highway" v="residential" />
+    <tag k="lanes" v="1" />
+  </way>
+
+  <way id="600">
+    <nd ref="3" />
+    <nd ref="21" />
+    <nd ref="20" />
+    <tag k="highway" v="residential" />
+    <tag k="lanes" v="1" />
+  </way>
+
+  <way id="700">
+    <nd ref="3" />
+    <nd ref="22" />
+    <nd ref="20" />
+    <tag k="highway" v="residential" />
+    <tag k="lanes" v="1" />
+  </way>
+</osm>

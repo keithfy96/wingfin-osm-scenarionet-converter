@@ -40,6 +40,7 @@ from osm_scenario.osm_source import (
     OsmRelation,
     OsmSnapshot,
     read_osm_snapshot,
+    single_lane_implies_oneway,
     way_terminus_nodes,
 )
 from osm_scenario.topology import (
@@ -59,7 +60,7 @@ from osm_scenario.topology import (
     via_way_resolution,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v17"
+GENERATOR_VERSION = "direct-osm-stage2-v18"
 LANE_MODEL_SCHEMA_VERSION = 3
 
 # How much clear road to leave beyond the crossing carriageway when a lane is cut back at a
@@ -167,14 +168,49 @@ def _edge_direction(way: Any, u: str, v: str) -> str:
     return "forward" if (u, v) in pairs else "backward"
 
 
-def _carries_whole_carriageway(tags: dict[str, str]) -> bool:
+def _carries_whole_carriageway(
+    tags: dict[str, str], *, one_way_in_graph: bool = False
+) -> bool:
     """True when one directed edge holds every lane the way has.
 
     A two-way way splits its lanes between two directed edges that offset to
     opposite sides of the OSM centreline. A one-way way has only one edge, so
     its centreline is the centre of the carriageway itself.
+
+    `one_way_in_graph` is Stage 1's answer for a `lanes=1` way that carried no `oneway`
+    tag (`osm_source.single_lane_implies_oneway`, applied only where it costs nothing).
+    It has to be asked separately because the tags are not what changed — Stage 1 edits
+    the graph and never the source OSM, which is acquisition evidence. Without it the
+    surviving lane would be offset half a lane off the road's centre, balancing against
+    an oncoming block that is no longer there, and its count would still be read as an
+    inference rather than as the whole carriageway.
     """
-    return tags.get("oneway") in ONEWAY_VALUES or tags.get("junction") == "roundabout"
+    return (
+        one_way_in_graph
+        or tags.get("oneway") in ONEWAY_VALUES
+        or tags.get("junction") == "roundabout"
+    )
+
+
+def _single_direction_ways(graph: Any, snapshot: OsmSnapshot) -> frozenset[str]:
+    """Ways that `single_lane_implies_oneway` matches and the graph runs one way.
+
+    Read back off the graph rather than out of the manifest, so generation cannot
+    disagree with the stage that made the decision: where the guard refused, both
+    directions are still here and this returns nothing for that way, which is exactly
+    the no-op the refusal asked for.
+    """
+    directions: dict[str, set[tuple[str, str]]] = {}
+    for u, v, data in graph.edges(data=True):
+        for way_id in _way_ids(data):
+            directions.setdefault(way_id, set()).add((str(u), str(v)))
+    return frozenset(
+        way_id
+        for way_id, seen in directions.items()
+        if way_id in snapshot.ways
+        and single_lane_implies_oneway(snapshot.ways[way_id].tags)
+        and not any((v, u) in seen for u, v in seen)
+    )
 
 
 def _lane_offset(
@@ -224,7 +260,12 @@ def _wrap(radians: float) -> float:
     return math.atan2(math.sin(radians), math.cos(radians))
 
 
-def _node_setbacks(graph: Any, snapshot: Any, config: ConverterConfig) -> dict[str, float]:
+def _node_setbacks(
+    graph: Any,
+    snapshot: Any,
+    config: ConverterConfig,
+    single_direction: frozenset[str] = frozenset(),
+) -> dict[str, float]:
     """How far short of each junction node an arriving lane should stop.
 
     OSM puts one node at the centre of an intersection and every way runs to it, so a lane
@@ -266,13 +307,18 @@ def _node_setbacks(graph: Any, snapshot: Any, config: ConverterConfig) -> dict[s
             arriving.setdefault(str(v), []).append(
                 math.atan2(tail[1][1] - tail[0][1], tail[1][0] - tail[0][0])
             )
+        one_way = way.identifier in single_direction
         total_lanes = _positive_int(way.tags.get("lanes"))
         if total_lanes is None:
-            forward, _, _ = _directional_lane_count(way.tags, "forward")
-            if _carries_whole_carriageway(way.tags):
+            forward, _, _ = _directional_lane_count(
+                way.tags, "forward", one_way_in_graph=one_way
+            )
+            if _carries_whole_carriageway(way.tags, one_way_in_graph=one_way):
                 total_lanes = forward
             else:
-                backward, _, _ = _directional_lane_count(way.tags, "backward")
+                backward, _, _ = _directional_lane_count(
+                    way.tags, "backward", one_way_in_graph=one_way
+                )
                 total_lanes = forward + backward
         width_total = _positive_float(way.tags.get("width")) or (
             config.lane_width_defaults.vehicle * max(total_lanes, 1)
@@ -454,12 +500,14 @@ def _merge_taper_plan(
     return plan
 
 
-def _directional_lane_count(tags: dict[str, str], direction: str) -> tuple[int, str, str]:
+def _directional_lane_count(
+    tags: dict[str, str], direction: str, *, one_way_in_graph: bool = False
+) -> tuple[int, str, str]:
     explicit = _positive_int(tags.get(f"lanes:{direction}"))
     if explicit is not None:
         return explicit, "explicit_directional", "high"
     total = _positive_int(tags.get("lanes"))
-    oneway = _carries_whole_carriageway(tags)
+    oneway = _carries_whole_carriageway(tags, one_way_in_graph=one_way_in_graph)
     if oneway and total is not None:
         return total, "explicit_total_oneway", "high"
     opposite = _positive_int(tags.get(f"lanes:{OPPOSITE_DIRECTION[direction]}"))
@@ -1641,7 +1689,10 @@ def build_lane_model(
     # Where each junction begins, so lanes stop at its edge instead of piling up on the node at
     # its centre. Computed over the whole graph first because the setback at one end of an edge
     # depends on the other roads at that node, which this loop has not reached yet.
-    setbacks = _node_setbacks(graph, snapshot, config)
+    # Which `lanes=1` ways Stage 1 was able to read as one-way. Derived here, once, so
+    # every question the loops below ask about a way's carriageway gets the same answer.
+    single_direction = _single_direction_ways(graph, snapshot)
+    setbacks = _node_setbacks(graph, snapshot, config, single_direction)
     trim_clamped: list[str] = []
     for u, v, key, data in sorted(
         graph.edges(keys=True, data=True), key=lambda item: tuple(map(str, item[:3]))
@@ -1653,7 +1704,10 @@ def build_lane_model(
         if way is None:
             raise GenerationError(f"projected edge references missing OSM way {way_ids[0]}")
         direction = _edge_direction(way, str(u), str(v))
-        count, count_reason, count_confidence = _directional_lane_count(way.tags, direction)
+        one_way = way.identifier in single_direction
+        count, count_reason, count_confidence = _directional_lane_count(
+            way.tags, direction, one_way_in_graph=one_way
+        )
         width_total = _positive_float(way.tags.get("width"))
         width = (
             width_total / max(_positive_int(way.tags.get("lanes")) or count, 1)
@@ -1672,7 +1726,7 @@ def build_lane_model(
             trim_clamped.append(f"{u}->{v}")
         created: list[str] = []
         side_sign = 1.0 if driving_side == "left" else -1.0
-        centred = _carries_whole_carriageway(way.tags)
+        centred = _carries_whole_carriageway(way.tags, one_way_in_graph=one_way)
         for lane_index in range(count):
             offset = _lane_offset(
                 lane_index, lane_count=count, width=width, side_sign=side_sign, centred=centred

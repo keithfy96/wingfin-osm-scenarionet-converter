@@ -31,6 +31,7 @@ PUBLIC_DRIVING_HIGHWAYS = {
 PROHIBITED_ACCESS = {"no", "private"}
 ONEWAY_VALUES = {"yes", "true", "1", "-1", "reverse", "T", "F"}
 REVERSED_ONEWAY_VALUES = {"-1", "reverse", "T"}
+NOT_ONEWAY_VALUES = {"no", "false", "0"}
 
 
 @dataclass(frozen=True)
@@ -228,10 +229,21 @@ def select_public_driving_graph(
         }
         data["osm_tags_json"] = json.dumps(source_tags, sort_keys=True, separators=(",", ":"))
 
-    audit = _audit_selected_graph(selected, snapshot, selected_way_ids)
+    single_lane_oneway, single_lane_report = _apply_single_lane_oneway(
+        selected, snapshot, selected_way_ids
+    )
+
+    audit = _audit_selected_graph(
+        selected, snapshot, selected_way_ids, single_lane_oneway=single_lane_oneway
+    )
     audit.update(
         {
             "policy_id": ROAD_SELECTION_POLICY_ID,
+            # `lanes=1` with no `oneway` read as one-way, and the ones where reading it
+            # that way would have cut a road off. Reported for the same reason
+            # `deleted_source_elements` is: an inference nobody can see is one nobody
+            # agreed to, and the blocked ones are what Stage 3 has to judge.
+            "single_lane_oneway": single_lane_report,
             "source_way_count": len(snapshot.ways),
             "selected_source_ways": len(selected_way_ids),
             "excluded_source_ways": sum(excluded_counts.values()),
@@ -256,8 +268,149 @@ def _osmid_values(value: Any) -> set[str]:
     return {str(value)} if value is not None else set()
 
 
-def _expected_directions(way: OsmWay) -> set[tuple[str, str]]:
+def _against_the_grain(
+    graph: nx.MultiDiGraph, way: OsmWay
+) -> list[tuple[Any, Any, Any]]:
+    """This way's directed edges that run against its own node order.
+
+    An edge is only claimed when the way names it *and* the way does not also run that
+    way round: a way that doubles back on itself contributes both directions to the same
+    node pair from its own node list, and neither of them is a reverse.
+    """
     pairs = set(zip(way.node_ids, way.node_ids[1:], strict=False))
+    return [
+        (u, v, key)
+        for u, v, key, data in graph.edges(keys=True, data=True)
+        if way.identifier in _osmid_values(data.get("osmid"))
+        and (str(v), str(u)) in pairs
+        and (str(u), str(v)) not in pairs
+    ]
+
+
+def _flood(graph: nx.MultiDiGraph, sources: set[Any], *, upstream: bool) -> set[Any]:
+    """Multi-source flood fill, against the arrows when `upstream`."""
+    step = graph.pred if upstream else graph.succ
+    seen = {node for node in sources if node in graph}
+    queue = list(seen)
+    while queue:
+        for neighbour in step[queue.pop()]:
+            if neighbour not in seen:
+                seen.add(neighbour)
+                queue.append(neighbour)
+    return seen
+
+
+def _apply_single_lane_oneway(
+    graph: nx.MultiDiGraph, snapshot: OsmSnapshot, selected_way_ids: set[str]
+) -> tuple[frozenset[str], dict[str, list[dict[str, Any]]]]:
+    """Make `lanes=1` ways one-way in the graph, but never at the cost of a way out.
+
+    `single_lane_implies_oneway` reads the tags; this decides whether the network can
+    afford the reading. Dropping the reverse direction of a road that is the only route
+    off a spur does not merely simplify the model, it strands every driver on it — so the
+    test is what the drop costs, measured against the network, not what the road looks
+    like. Where it costs something the way is left exactly as it was, and the
+    `lane_count_inference` blocker Stage 2 already raises on it is what carries the
+    question to the reviewer.
+
+    Having a way out means reaching the main network **or driving off the edge of the
+    map**, and the second half is not optional: an extract ends somewhere, and a merge
+    slip whose far end continues west out of the file is not a trap. Both are pinned
+    before anything is dropped — the main network as one node of the largest strongly
+    connected component, so "the main network" cannot shrink under its own answer, and
+    the edges of the map as the nodes that already had no way on from them at all. A
+    cul-de-sac tip on a two-way road is not one of those: its way out is the reverse
+    direction, which is exactly what is in question, so removing it strands the tip and
+    the guard says so.
+
+    Candidates are decided **one at a time against the graph the previous ones left**,
+    because two ways can each be redundant alone and be the only way out together — a
+    spur of two single-lane ways loses its exit on the second, not the first.
+    """
+    candidates = sorted(
+        (
+            way_id
+            for way_id in selected_way_ids
+            if way_id in snapshot.ways
+            and single_lane_implies_oneway(snapshot.ways[way_id].tags)
+        ),
+        key=lambda way_id: (len(way_id), way_id),
+    )
+    applied: set[str] = set()
+    report: dict[str, list[dict[str, Any]]] = {"applied": [], "blocked": []}
+    if not candidates or graph.number_of_nodes() == 0:
+        return frozenset(), report
+
+    components = sorted(nx.strongly_connected_components(graph), key=len, reverse=True)
+    anchor = min(components[0], key=str)
+    off_the_map = {node for node, degree in graph.out_degree() if degree == 0}
+    onto_the_map = {node for node, degree in graph.in_degree() if degree == 0}
+    can_leave = {anchor} | off_the_map
+    can_arrive = {anchor} | onto_the_map
+
+    for way_id in candidates:
+        way = snapshot.ways[way_id]
+        entry: dict[str, Any] = {
+            "osm_id": way_id,
+            "highway": way.tags.get("highway"),
+            "name": way.tags.get("name"),
+        }
+        reverse_edges = _against_the_grain(graph, way)
+        if not reverse_edges:
+            # Already one-way in the graph — nothing to drop, nothing to report.
+            applied.add(way_id)
+            continue
+        before_out = _flood(graph, can_leave, upstream=True)
+        before_in = _flood(graph, can_arrive, upstream=False)
+        removed = [(u, v, key, dict(graph.edges[u, v, key])) for u, v, key in reverse_edges]
+        graph.remove_edges_from(reverse_edges)
+        after_out = _flood(graph, can_leave, upstream=True)
+        after_in = _flood(graph, can_arrive, upstream=False)
+        stranded = sorted((before_out - after_out) | (before_in - after_in), key=str)
+        if stranded:
+            for u, v, key, data in removed:
+                graph.add_edge(u, v, key=key, **data)
+            entry["would_strand"] = [str(node) for node in stranded]
+            report["blocked"].append(entry)
+            continue
+        applied.add(way_id)
+        entry["dropped_edges"] = len(reverse_edges)
+        report["applied"].append(entry)
+    return frozenset(applied), report
+
+
+def single_lane_implies_oneway(tags: dict[str, str]) -> bool:
+    """Whether `lanes=1` on this way should be read as one lane in one direction.
+
+    A carriageway with one lane and traffic in both directions is a single-track road,
+    and OSM does describe those — but it describes far more one-way slips whose mapper
+    gave the lane count and left `oneway` off. Left alone, `_directional_lane_count`
+    falls to `max(1, total // 2)` and builds a lane *each way*, so a road the source says
+    is one lane wide comes out two lanes and 7 m across, with a U-turn at each end.
+
+    Every surveyed statement outranks this inference and switches it off: an explicit
+    `oneway=no` says two-way in so many words, a `lanes:forward`/`lanes:backward` names a
+    direction's own count, and a roundabout is already one-way. It is a reading of one
+    tag in the absence of others, never a reason to overrule one that is present.
+
+    Whether the reading is *safe* is a separate question, answered by
+    `_single_lane_oneway_plan` against the network rather than against the tags.
+    """
+    if tags.get("lanes") != "1":
+        return False
+    if "lanes:forward" in tags or "lanes:backward" in tags:
+        return False
+    if tags.get("oneway") in ONEWAY_VALUES or tags.get("oneway") in NOT_ONEWAY_VALUES:
+        return False
+    return tags.get("junction") != "roundabout"
+
+
+def _expected_directions(way: OsmWay, single_lane_oneway: frozenset[str] = frozenset()) -> set[
+    tuple[str, str]
+]:
+    pairs = set(zip(way.node_ids, way.node_ids[1:], strict=False))
+    if way.identifier in single_lane_oneway:
+        return pairs
     oneway = way.tags.get("oneway")
     is_oneway = oneway in ONEWAY_VALUES or (
         way.tags.get("junction") == "roundabout" and oneway != "no"
@@ -270,7 +423,11 @@ def _expected_directions(way: OsmWay) -> set[tuple[str, str]]:
 
 
 def _audit_selected_graph(
-    graph: nx.MultiDiGraph, snapshot: OsmSnapshot, selected_way_ids: set[str]
+    graph: nx.MultiDiGraph,
+    snapshot: OsmSnapshot,
+    selected_way_ids: set[str],
+    *,
+    single_lane_oneway: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     represented: set[str] = set()
     actual_directions: dict[str, set[tuple[str, str]]] = {}
@@ -299,7 +456,7 @@ def _audit_selected_graph(
 
     direction_mismatches = []
     for way_id in sorted(selected_way_ids & represented):
-        expected = _expected_directions(snapshot.ways[way_id])
+        expected = _expected_directions(snapshot.ways[way_id], single_lane_oneway)
         actual = actual_directions.get(way_id, set())
         if actual != expected:
             direction_mismatches.append(

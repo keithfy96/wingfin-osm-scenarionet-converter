@@ -481,6 +481,41 @@ Run `tools/drive.py --render offscreen` to check any of this without a display �
   movements (248 vs 74 in the current junction-1 model). Any lookup that assumes
   one kind fails silently on the other.
 
+### `lanes=1` with no `oneway` is read as one-way, in Stage 1, and can be refused
+
+A mapper who writes `lanes=1` and leaves `oneway` off almost always means a one-way slip,
+and `_directional_lane_count` used to fall through to `max(1, total // 2)` and build a lane
+**each way** — a road the source says is one lane wide coming out 7 m across, with a U-turn
+at each end. `osm_source.single_lane_implies_oneway` now reads it. Every surveyed tag
+switches it off: `oneway=no`, either `lanes:<direction>`, an existing `oneway`, a roundabout.
+
+**The reading is applied in Stage 1, not Stage 2, and that placement is the point.**
+`_apply_single_lane_oneway` drops the reverse edges inside `select_public_driving_graph`,
+the one chokepoint `acquisition.py` and `apply_review.py` both pass through, so Stage 2 and
+Stage 4 agree for free. `generation.py` never re-reads the tags to decide it — it asks the
+graph, via `_single_direction_ways`, so the two stages cannot disagree.
+
+But the graph is not the tags, and **the tags still say two-way**: Stage 1 must never write
+to `source/map.osm`, which is acquisition evidence. So `_carries_whole_carriageway` takes
+`one_way_in_graph` and every call site threads it. Skip that and the change is half done —
+the surviving lane sits **1.75 m** off the road's centre, balancing against an oncoming block
+that no longer exists, and its count is still reported as an inference.
+
+**A refusal is a real outcome, not a failure.** Dropping the reverse direction of the only
+route off a spur strands everyone on it, so a way is refused unless every node that could get
+out before still can. Getting out means reaching the main network **or driving off the edge of
+the map** — the first version of the guard had only the first half and refused a merge slip
+whose far end continues out of the extract. Both anchors are pinned before anything is dropped:
+the main network as one node of the largest strongly connected component, so it cannot shrink
+under its own answer, and the map's edges as the nodes that already had no way on at all. A
+cul-de-sac tip is not one of those, because its way out is the reverse direction in question.
+
+Candidates are decided **one at a time against the graph the last one left** — two ways can each
+be spare while the other is two-way and be the only way out together.
+`manifest["road_selection"]["single_lane_oneway"]` records `applied` and `blocked`, and the
+`lane_count_inference` **blocker** Stage 2 already raises on a `lanes=1` way is what carries a
+refusal into Stage 3. No new finding rule was needed for it, and none was added.
+
 ### The standing principle: surveyed tags outrank inferred angles
 
 `turn:lanes` is surveyed evidence of which movements are *permitted*. The movement
