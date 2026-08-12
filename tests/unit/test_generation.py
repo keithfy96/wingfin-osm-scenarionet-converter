@@ -27,6 +27,7 @@ from osm_scenario.generation import (
     _lane_offset,
     _links_by_node,
     _mapped_lane_index,
+    _merge_side,
     _merge_taper_plan,
     _movement_roles,
     _side_filtered_candidates,
@@ -48,7 +49,12 @@ from osm_scenario.lane_model import (
 )
 from osm_scenario.normalization import normalize_workspace
 from osm_scenario.osm_source import read_osm_snapshot
-from osm_scenario.topology import MovementCandidate
+from osm_scenario.topology import (
+    MovementCandidate,
+    classify_movement,
+    movement_side,
+    signed_turn_angle,
+)
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "osm" / "tiny.osm"
 SIGNALS = Path(__file__).parents[1] / "fixtures" / "osm" / "signals.osm"
@@ -792,6 +798,95 @@ def test_only_an_unambiguous_merge_is_dealt_as_one() -> None:
     assert not _balanced_merge_assignment(
         [road], _groups(_block("30", "n", "c", 2, 0.0)), driving_side="left"
     )
+
+
+def test_a_road_that_merges_dead_straight_still_merges_from_a_side() -> None:
+    # A one-lane road joining a three-lane link, both effectively straight. The counts do
+    # not close (4 into 3) so neither balanced rule fires, and the turn is far under
+    # `side_movement_min_degrees` so `movement_side` calls it sideless. It still joins
+    # from the kerb, and it still has to land there: sent to index 0 it would cross the
+    # link's traffic to get there. This is mosque node 8010943717.
+    joining = _block("10", "a", "n", 1, 0.0)
+    link = _block("20", "b", "n", 3, 8.6)
+    targets = _block("30", "n", "c", 3, 0.0)
+
+    side = _merge_side(joining, [joining, link], targets, driving_side="left")
+    assert side == "nearside"
+    assert _mapped_lane_index(joining[0], len(targets), side, joining) == 2
+
+    # The link is centreward of it, and keeps the offside end.
+    assert _merge_side(link, [joining, link], targets, driving_side="left") == "offside"
+
+
+def test_the_merge_side_is_a_side_rule_not_a_rule_about_single_lanes() -> None:
+    # The mirror: the same one-lane road, now the centreward approach. Answering
+    # `nearside` here would be a rule that moved every merging lane to the kerb rather
+    # than one that reads which side it came from.
+    joining = _block("10", "a", "n", 1, 20.0)
+    road = _block("20", "b", "n", 3, 0.0)
+    targets = _block("30", "n", "c", 3, 0.0)
+
+    side = _merge_side(joining, [joining, road], targets, driving_side="left")
+    assert side == "offside"
+    assert _mapped_lane_index(joining[0], len(targets), side, joining) == 0
+
+
+def test_the_merge_side_agrees_with_the_angle_wherever_the_angle_has_an_opinion() -> None:
+    # A link joining at 20 degrees is past `side_movement_min_degrees`, so `movement_side`
+    # answers too. The two must agree: that is what lets the merge side be consulted first
+    # without moving anything that was already right.
+    link = _block("10", "a", "n", 1, -20.0)
+    road = _block("20", "b", "n", 2, 0.0)
+    targets = _block("30", "n", "c", 3, 0.0)
+
+    angle = signed_turn_angle(
+        LineString((point.x, point.y) for point in link[0].centerline),
+        LineString((point.x, point.y) for point in targets[0].centerline),
+    )
+    from_the_angle = movement_side(
+        movement=classify_movement(angle),
+        angle=angle,
+        driving_side="left",
+        turn_permissions=[],
+        min_degrees=10.0,
+    )
+    assert from_the_angle == "nearside"
+    assert _merge_side(link, [link, road], targets, driving_side="left") == from_the_angle
+
+    # And it swaps with the country, exactly as the angle reading does.
+    assert _merge_side(link, [link, road], targets, driving_side="right") == "offside"
+
+
+def test_a_merging_approach_is_dealt_inward_from_its_side() -> None:
+    # Two lanes arrive together and merge together. A side says where the block starts,
+    # so they take the two lanes at that end in order — answering both of them the same
+    # index would hand two streams one lane and starve the one beside it.
+    joining = _block("10", "a", "n", 2, 0.0)
+    road = _block("20", "b", "n", 3, 8.6)
+    targets = _block("30", "n", "c", 3, 0.0)
+
+    side = _merge_side(joining, [joining, road], targets, driving_side="left")
+    assert side == "nearside"
+    landed = [_mapped_lane_index(lane, len(targets), side, joining) for lane in joining]
+    assert landed == [1, 2]  # idx0 stays inboard of idx1, and neither collapses
+
+
+def test_nothing_is_deduced_where_the_approach_is_not_on_either_edge() -> None:
+    # Three roads merging and this one is in the middle of them: it is neither the
+    # kerbmost nor the centremost, so which lanes are already spoken for is not decidable
+    # from the ordering alone. The rules that already run are left to it.
+    kerbward = _block("10", "a", "n", 1, -20.0)
+    middle = _block("20", "b", "n", 1, 0.0)
+    centreward = _block("30", "c", "n", 1, 20.0)
+    targets = _block("40", "n", "d", 3, 0.0)
+    feeding = [kerbward, middle, centreward]
+
+    assert _merge_side(middle, feeding, targets, driving_side="left") is None
+    assert _merge_side(kerbward, feeding, targets, driving_side="left") == "nearside"
+    assert _merge_side(centreward, feeding, targets, driving_side="left") == "offside"
+
+    # One road arriving is not a merge at all: there is nothing to be a side of.
+    assert _merge_side(middle, [middle], targets, driving_side="left") is None
 
 
 def _collapse_lane(identifier: str, edge: list[str], index: int, count: int) -> LaneFeature:
@@ -1672,3 +1767,105 @@ def test_every_via_way_restriction_the_generator_enforces_itself_says_so(
     assert {finding.severity for finding in notes.values()} == {"warning"}
     assert notes["900"].affected_feature_ids == [_movement(model, "100", "110").identifier]
     assert notes["900"].proposed_value["chain"] == ["100", "110", "120"]
+
+
+WORKSPACES = Path(__file__).resolve().parents[2] / "workspaces"
+
+
+def _generated_models() -> list[tuple[str, PreliminaryLaneModel]]:
+    if not WORKSPACES.exists():
+        pytest.skip("workspaces/ is gitignored and not present")
+    models = []
+    for path in sorted(WORKSPACES.glob("*/lane-model/preliminary.json")):
+        model = PreliminaryLaneModel.model_validate(json.loads(path.read_text()))
+        models.append((path.parents[1].name, model))
+    if not models:
+        pytest.skip("no generated lane model in workspaces/")
+    return models
+
+
+def _merge_stream(model: PreliminaryLaneModel, connector: ConnectorFeature) -> LineString:
+    """The line a car drives: the approach lane, the connector, then the lane it enters."""
+    lanes = {lane.identifier: lane for lane in model.lanes}
+    points = [
+        (point.x, point.y)
+        for part in (
+            lanes[connector.from_lane_id].centerline,
+            connector.centerline,
+            lanes[connector.to_lane_id].centerline,
+        )
+        for point in part
+    ]
+    kept = [points[0]]
+    for point in points[1:]:
+        if math.dist(point, kept[-1]) > 1e-6:
+            kept.append(point)
+    return LineString(kept)
+
+
+def test_no_two_roads_merging_into_one_carriageway_cross_each_other() -> None:
+    """The property `_merge_side` exists for, asserted on the real maps.
+
+    Two roads joining one carriageway both have to fit in it, and one of them may have to
+    share a lane — but neither may be sent across the other to reach its lane. Before the
+    merge side was read, mosque node 8010943717 sent a road that arrives kerbside of a
+    three-lane link to the link's *offside* lane, so its traffic crossed all of it.
+
+    The exception is a lane whose `turn:lanes` names the side. That is surveyed evidence
+    and it outranks the geometry, so where the two disagree the crossing survives and the
+    disagreement stays in review rather than being resolved by moving the movement.
+    """
+    for name, model in _generated_models():
+        lanes = {lane.identifier: lane for lane in model.lanes}
+        driven = [c for c in model.connectors if c.status != "forbidden"]
+        by_group: dict[tuple[str, tuple[str, ...]], list[ConnectorFeature]] = {}
+        for connector in driven:
+            key = (connector.junction_node_id, tuple(lanes[connector.to_lane_id].source_edge))
+            by_group.setdefault(key, []).append(connector)
+        unexplained = []
+        for group in by_group.values():
+            for first in range(len(group)):
+                for second in range(first + 1, len(group)):
+                    one, other = group[first], group[second]
+                    from_one = lanes[one.from_lane_id]
+                    from_other = lanes[other.from_lane_id]
+                    if from_one.source_edge == from_other.source_edge:
+                        continue  # one approach dealing its own lanes, not a merge
+                    if one.to_lane_id == other.to_lane_id:
+                        continue  # sharing a lane is a merge; crossing to reach one is not
+                    meeting = _merge_stream(model, one).intersection(_merge_stream(model, other))
+                    if meeting.is_empty or meeting.geom_type not in {"Point", "MultiPoint"}:
+                        continue
+                    if from_one.turn_permissions or from_other.turn_permissions:
+                        continue  # a surveyed turn tag decided the side; see the docstring
+                    unexplained.append(
+                        f"{name} node {one.junction_node_id}: "
+                        f"{one.from_lane_id}->{one.to_lane_id} crosses "
+                        f"{other.from_lane_id}->{other.to_lane_id}"
+                    )
+        assert not unexplained, "\n".join(unexplained)
+
+
+def test_a_surveyed_turn_tag_still_outranks_the_merge_ordering() -> None:
+    """`turn:lanes=right|right` on way 39619063 puts both its lanes offside, and the block
+    is dealt from there inward. The merge side must not be what answers a tagged lane, or
+    the v17 fix would be undone wherever a tagged approach happens to share a destination.
+    """
+    models = dict(_generated_models())
+    model = models.get("junction-1")
+    if model is None:
+        pytest.skip("workspaces/junction-1 is not present")
+    lanes = {lane.identifier: lane for lane in model.lanes}
+    tagged = {
+        c.from_lane_id: lanes[c.to_lane_id]
+        for c in model.connectors
+        if c.junction_node_id == "474928793"
+        and lanes[c.from_lane_id].source_way_ids == ["39619063"]
+    }
+    assert tagged, "node 474928793 has no movement off way 39619063"
+    for from_id, target in tagged.items():
+        source = lanes[from_id]
+        assert source.turn_permissions == ["right"]
+        assert target.lane_index == source.lane_index, (
+            f"{from_id} idx{source.lane_index} landed on idx{target.lane_index}"
+        )

@@ -61,7 +61,7 @@ from osm_scenario.topology import (
     way_adjacency,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v19"
+GENERATOR_VERSION = "direct-osm-stage2-v20"
 LANE_MODEL_SCHEMA_VERSION = 3
 
 # How much clear road to leave beyond the crossing carriageway when a lane is cut back at a
@@ -2035,26 +2035,46 @@ def build_lane_model(
                 side = None
                 side_block: list[LaneFeature] | None = None
                 if not is_continuation and allocation is None:
-                    group_angle = signed_turn_angle(
-                        source_line,
-                        LineString((point.x, point.y) for point in targets[0].centerline),
-                    )
-                    side = movement_side(
-                        movement=classify_movement(group_angle),
-                        angle=group_angle,
-                        driving_side=driving_side,
-                        turn_permissions=source.turn_permissions,
-                        min_degrees=config.lane_selection.side_movement_min_degrees,
-                    )
-                    if side is not None:
-                        # `turn:lanes=right|right` puts both lanes offside. The side says
-                        # where the block starts; without the block behind it every lane
-                        # of the block would be answered the same index.
-                        side_block = _tagged_side_block(
-                            blocks_by_edge[tuple(source.source_edge)],
-                            side,
+                    block = blocks_by_edge[tuple(source.source_edge)]
+                    # Three readings, most trusted first. A `turn:lanes` value is surveyed
+                    # evidence and outranks both readings of the geometry. Then the merge
+                    # side, which compares the roads actually meeting here. Only then the
+                    # angle, which asks whether this is a turn — the wrong question where
+                    # several roads join one carriageway, and the only one asked until now.
+                    tagged = tagged_movement_side(source.turn_permissions, driving_side)
+                    merged = (
+                        None
+                        if tagged is not None
+                        else _merge_side(
+                            block,
+                            blocks_by_group.get(group_key, []),
+                            targets,
                             driving_side=driving_side,
                         )
+                    )
+                    if merged is not None:
+                        # Nothing tagged this block, so the whole of it merges together
+                        # and the whole of it is dealt inward from the side it arrived on.
+                        side, side_block = merged, block
+                    else:
+                        group_angle = signed_turn_angle(
+                            source_line,
+                            LineString((point.x, point.y) for point in targets[0].centerline),
+                        )
+                        side = movement_side(
+                            movement=classify_movement(group_angle),
+                            angle=group_angle,
+                            driving_side=driving_side,
+                            turn_permissions=source.turn_permissions,
+                            min_degrees=config.lane_selection.side_movement_min_degrees,
+                        )
+                        if side is not None:
+                            # `turn:lanes=right|right` puts both lanes offside. The side
+                            # says where the block starts; without the block behind it
+                            # every lane of the block would be answered the same index.
+                            side_block = _tagged_side_block(
+                                block, side, driving_side=driving_side
+                            )
                 target = (
                     lane_lookup[allocation[source.identifier]]
                     if allocation is not None

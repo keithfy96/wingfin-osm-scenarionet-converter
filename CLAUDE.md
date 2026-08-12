@@ -603,6 +603,24 @@ cover both shapes where the lane arithmetic closes:
 - `_balanced_merge_assignment` — **several** approaches into **one** destination
   (a merging link must not land on a lane the main road already feeds). Added in v11.
 
+Where the counts do **not** close, `_merge_side` (v20) still says which *side* of the
+destination an approach lands on: a road joins another from one side and has to land on
+that side, or its traffic crosses the traffic it is merging with. It ranks the approaches
+with `_kerb_first_key` rather than reading an angle, because **which side a road joins
+from is a comparison between the roads meeting at the node, not a property of one of
+them** — and it has an answer at any angle, including zero.
+`side_movement_min_degrees` (10°) asks "is this a turn?", which is the wrong question for
+a merge: mosque `935525161` joins at **−0.01°** and was called sideless, so
+`_mapped_lane_index`'s `min(lane_index, count−1)` sent a kerbside single lane to index 0
+and across three lanes of link traffic. See
+`docs/mapping-algo-changes/2026-08-13-01:52:14-a-road-that-merges-dead-straight-is-given-no-side.md`.
+
+The order of authority where a side is decided is **`turn:lanes` → `_merge_side` →
+`movement_side`**. The tag stays on top; a surveyed value is still evidence and the
+ranking is still an inference. Where the merge side decides, the block dealt inward by
+`_side_block_offset` is the *whole* approach — nothing tagged it, so all of it merges
+together.
+
 `_mapped_lane_index` (`generation.py`) is unchanged and still **cannot produce a
 middle index**: for a 2-lane approach onto a 3-lane destination
 `round(idx × (3−1) / (2−1))` gives `idx0→0`, `idx1→2`, and index 1 is unreachable for
