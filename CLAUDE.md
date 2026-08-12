@@ -233,10 +233,57 @@ Two more things that bite here:
   everything. That is their script running off the end, not a fault in the data.
   `tools/drive.py` stops at the end of the dataset.
 - **The route builder previews the drive; Python re-derives it.** Both build the
-  same geometry, and they agreed to within 3.5 m over 1.1 km on 40 real routes.
-  If the two ever disagree the page offers drives the converter refuses, so
+  same geometry, and over 400 real routes — 223 km — they agree to within **4.5 m
+  on an 1822 m route**, with neither refusing a route the other builds. If the two
+  ever disagree the page offers drives the converter refuses, so
   `web/test/route/geometry.test.ts` and `tests/unit/test_ego_route.py` cover the
   same cases deliberately.
+
+### The junction geometry a route drives is built, not read off the connector
+
+**`ConnectorFeature.centerline` is a marker, not a driving line.** It looks like the
+path across a junction and is not one — `topology.connector_curve` says so in its own
+docstring, and it is drawn as a band on the Stage 2 inspection map. Splicing it into a
+drive, as `ego_route` did until 2026-08-12, failed two ways:
+
+- where the two lanes **already meet** (44 of `junction-1`'s 83 active connectors, because
+  OSM splits a way whenever a tag changes) the marker is a 3 m stub that *retraces the
+  approach*. Glued on after the lane it duplicates, the car drove three metres, jumped
+  back, and drove them again — one sample travelling backwards and a heading reversed by
+  180°, which `ReplayEgoCarPolicy` plays back exactly as recorded
+- where the lanes are genuinely apart, the marker is a quadratic Bezier bent around the
+  **OSM node**, which sits on the *way* centreline while the curve's ends sit on the *lane*
+  centrelines a lane-width to the side. It is tangent to neither, so a 90° turn came out as
+  two 82° corners with 28° of curve between them, over 2.81 m of path — 1.8 m of radius
+
+55 of the 83 turned more than 100° at a vertex. **Only 2 of 83 produced a drive line that
+steered no more than the turn required**; the typical junction swung through 272° of
+steering for an 87° change of direction.
+
+`ego_route._turn` now builds the join from the two lanes' own tangents: cut back into both,
+lay a cubic between the cut points whose end tangents *are* the lane directions. The
+connector is still consulted — for **whether** a step crosses a junction, which sets the
+gap allowance (`MAX_CROSSING_M` 20 m against `MAX_JOIN_M` 5 m) — and never for its shape.
+
+Three constants took several goes and are worth not re-deriving. The Bezier's handles are a
+fraction of the **chord**, computed from the turn angle: off the chord alone (the 0.5523
+rule of thumb) the curve pinches to 2.7 m where the geometry calls for 24; off the *trim*
+it degenerates the other way on short lanes into a straight line with a 176° hook at each
+end. A turn may eat `max(0.4·L, L − 1 m)` of a lane, because `junction-1` has chains of
+5.8 m lanes between junctions and a plain fraction starves the third one. And curvature for
+the speed profile is measured as **turn per metre**, not as a circumradius — the
+circumradius reads a polyline's concentrated bend as if it were spread over the window, and
+reported 5.4 m where the path really turned through 2.7 m.
+
+**The drive also has a speed profile now.** `speed_profile` caps the speed at every point by
+the curvature there (`LATERAL_ACCEL_MPS2`, 1.8 m/s²), then bounds how fast it may change, so
+the car brakes *before* a junction rather than at it. `Route.duration_s` is therefore not
+`distance / speed`, and `metadata.sdc_route` reports `slowest_kph` beside `speed_kph` so a
+reader who divides one by the other can see why.
+
+`tools/check_dataset.py` reports the worst per-step heading change in the ego track and
+**fails above 30°**. That is the check that would have caught this: `sanity_check` checks
+shapes and lengths and never asks whether the drive is drivable.
 
 ### Traffic lights, and why the timing cannot come from OSM
 

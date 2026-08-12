@@ -524,4 +524,6 @@ def test_the_summary_says_the_route_was_generated() -> None:
     # longer than distance over the cruising speed. Both figures are reported for exactly
     # that reason - a reader who divides one by the other should be able to see why.
     assert summary["slowest_kph"] <= summary["speed_kph"]
-    assert summary["duration_s"] >= summary["distance_m"] / (summary["speed_kph"] / 3.6)
+    cruising = summary["distance_m"] / (summary["speed_kph"] / 3.6)
+    # Both figures are rounded for reading, so they meet to the rounding rather than exactly.
+    assert summary["duration_s"] >= cruising - 0.01

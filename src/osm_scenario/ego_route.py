@@ -21,11 +21,12 @@ Four things about the geometry are worth knowing before reading the code.
   is joining.
 
 * **A lane change is not a teleport.** Concatenating a lane's centreline with its
-  neighbour's would step sideways by a lane width in zero distance. The outgoing lane is cut
-  at its midpoint and the neighbour resumed from its midpoint, so the transition is a
-  diagonal - which is what a lane change looks like. `_lane_change_moves` has already
-  refused any neighbour that is not the same stretch of road running the same way, so the
-  two centrelines are parallel and comparable in length.
+  neighbour's would step sideways by a lane width in zero distance. `_lane_change` cuts both
+  lanes either side of their midpoints and curves between the cuts, over as much road as
+  taking the move at speed needs - crammed into a few metres it is a swerve, and the speed
+  profile then has to crawl through it. `_lane_change_moves` has already refused any
+  neighbour that is not the same stretch of road running the same way, so the two centrelines
+  are parallel and comparable in length.
 
 * **Speed follows the geometry.** A car does not take a 90° junction at the speed limit, and
   a track that says it did teaches an agent that it can. `speed_profile` caps the speed at
@@ -103,25 +104,41 @@ _CHANGE_MAX_FRACTION = 0.45
 # path, which is what a car does - it starts turning before the junction and finishes after
 # it. The connector marker spans 2.81 m at the median, an implied radius of 1.8 m, tighter
 # than a car can physically turn. Nothing in OSM sets this: the source says which movements
-# are permitted, never how one is driven, so this is presentation like `_CHANGE_HALF_SPAN`.
+# are permitted, never how one is driven, so this is presentation of a permitted move rather
+# than a claim about how anyone drove it.
 TURN_RADIUS_M = 9.0
 
-# How much of a lane one turn may eat, as a fraction of the length that lane still has. A
-# fixed distance would overrun the short ones - the shorter lane at a real turn in
-# `junction-1` is 19.2 m at the median but 6.0 m at worst - so the radius shrinks to fit
-# instead of the build failing.
+# How much of a lane one turn may eat: this fraction of what that lane still has, or all
+# but `MIN_TANGENT_M` of it, whichever is more.
+#
+# The fraction alone starves the short ones. `junction-1` has lanes of 5.8 m and 6.0 m
+# between two junctions, and chains of them - a turn taking 40% of one leaves 60% for the
+# next, which takes 40% of that, and by the third the arc is built over a metre and comes
+# out at 1.6 m of radius. A lane that short *is* junction; it should be nearly all curve.
+# What has to survive is enough of it to read a direction off, which is what the metre is.
 MAX_TURN_TRIM_FRACTION = 0.4
+MIN_TANGENT_M = 1.0
 
-# Cubic Bezier handles are derived from the turn, not from the chord. The chord rule of
-# thumb (0.5523 of it) only approximates a circle when the two ends sit symmetrically on
-# one, and a junction join does not: the lane lines are offset sideways as well as turned,
-# so a handle sized off the chord pinches the middle of the curve - measured on `junction-1`
-# at 2.7 m of radius where the geometry called for 24 m. `(4/3)·tan(θ/4)·R` is the exact
-# handle for a cubic approximating a circular arc of turn θ and radius R, and
-# `R = trim / tan(θ/2)` is the radius the trim was chosen for, so the two agree by
-# construction. As θ goes to zero it tends to two thirds of the trim, which is what a plain
-# sideways shift wants.
-_HANDLE_FACTOR = 4.0 / 3.0
+# The cubic Bezier's control handles, as a fraction of the chord, for a turn of θ.
+#
+# `(4/3)·tan(θ/4)·R` is the exact handle for a cubic approximating a circular arc of turn θ
+# and radius R. Written against the chord rather than R, using `chord = 2·R·sin(θ/2)`, it
+# becomes the expression below - 0.39 of the chord at 90°, and a third of it as θ goes to
+# zero, where the join is a plain sideways shift rather than a corner.
+#
+# Both wrong alternatives were tried and both are visible in the geometry. A flat 0.5523 of
+# the chord - the usual circle rule of thumb - only approximates a circle when the two ends
+# sit symmetrically on one, which a junction's do not: the lane lines are offset sideways as
+# well as turned, and the curve pinched to 2.7 m of radius where the geometry called for 24.
+# Sizing the handle off the *trim* instead fixed that, and then failed the other way: on two
+# short lanes the trim shrinks to a fraction of the chord, the handles with it, and the curve
+# becomes a straight line with a 176° hook at each end. Against the chord it cannot degenerate
+# either way, because it scales with the thing it has to span.
+def _handle_fraction(turn: float) -> float:
+    angle = abs(turn)
+    if angle < 1e-6:
+        return 1.0 / 3.0
+    return (2.0 / 3.0) * math.tan(angle / 4.0) / math.sin(angle / 2.0)
 
 # How finely a turn is sampled. The track is resampled at up to 1.4 m per step, so a
 # coarsely drawn arc is thrown away before MetaDrive ever sees it - which is what happened
@@ -288,21 +305,13 @@ def _advance_past(
     return np.vstack([foot, points[index:]])
 
 
-def _handle_for(turn: float, trim: float) -> float:
-    """How far the Bezier's control points sit off each end. See `_HANDLE_FACTOR`."""
-    angle = abs(turn)
-    if angle < 1e-6:
-        return 2.0 * trim / 3.0
-    return _HANDLE_FACTOR * math.tan(angle / 4.0) * trim / math.tan(angle / 2.0)
-
-
 def _turn_curve(
     start: np.ndarray,
     start_direction: np.ndarray,
     end: np.ndarray,
     end_direction: np.ndarray,
     *,
-    handle: float,
+    turn: float,
 ) -> np.ndarray | None:
     """A cubic Bezier leaving `start` along one direction and reaching `end` along another.
 
@@ -313,6 +322,7 @@ def _turn_curve(
     chord = float(np.linalg.norm(end - start))
     if chord < 1e-6:
         return None
+    handle = _handle_fraction(turn) * chord
     control_in = start + start_direction * handle
     control_out = end - end_direction * handle
     # The control polygon bounds the curve, so its length bounds the arc - generous, and it
@@ -376,20 +386,19 @@ def _turn(
         # curvature, so the span that keeps it at `SMOOTHING_RADIUS_M` is sqrt(6·s·R) - half
         # either side of the join.
         trim = max(trim, math.sqrt(6.0 * sideways * SMOOTHING_RADIUS_M) / 2.0)
-    trim = min(
-        trim,
-        MAX_TURN_TRIM_FRACTION * _length_of(arriving),
-        MAX_TURN_TRIM_FRACTION * _length_of(leaving),
-    )
+    trim = min(trim, _spare(_length_of(arriving)), _spare(_length_of(leaving)))
     head = _trim_end(arriving, trim)
     tail = _trim_start(leaving, trim)
-    curve = _turn_curve(
-        head[-1], direction_in, tail[0], direction_out, handle=_handle_for(angle, trim)
-    )
+    curve = _turn_curve(head[-1], direction_in, tail[0], direction_out, turn=angle)
     if curve is None:
         return head, np.empty((0, 2), dtype=np.float64), tail
     # Both endpoints are already the last point of `head` and the first of `tail`.
     return head, curve[1:-1], tail
+
+
+def _spare(length: float) -> float:
+    """How much of a lane of this length one turn may use. See `MAX_TURN_TRIM_FRACTION`."""
+    return max(MAX_TURN_TRIM_FRACTION * length, length - MIN_TANGENT_M)
 
 
 def _smoothing_span(sideways: float) -> float:
@@ -401,34 +410,58 @@ def _smoothing_span(sideways: float) -> float:
     return math.sqrt(6.0 * max(sideways, 0.0) * SMOOTHING_RADIUS_M) / 2.0
 
 
+def _project_along(line: np.ndarray, point: np.ndarray) -> float:
+    """How far along `line` the nearest point to `point` lies."""
+    steps = np.linalg.norm(np.diff(line, axis=0), axis=1)
+    travelled = np.concatenate([[0.0], np.cumsum(steps)])
+    best, best_at = math.inf, 0.0
+    for index in range(len(line) - 1):
+        segment = line[index + 1] - line[index]
+        length = float(np.linalg.norm(segment))
+        if length < 1e-9:
+            continue
+        along = float(np.dot(point - line[index], segment) / length)
+        along = min(max(along, 0.0), length)
+        distance = float(np.linalg.norm(line[index] + segment / length * along - point))
+        if distance < best:
+            best, best_at = distance, float(travelled[index]) + along
+    return best_at
+
+
 def _lane_change(
     leaving: np.ndarray, joining: np.ndarray, *, what: str
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Cross from one lane into the one beside it: the run-up, the crossing, the run-out.
+    """Cross into a lane alongside: the run-up, the crossing, the run-out.
 
     `_lane_change_moves` has already refused any neighbour that is not the same stretch of
-    road running the same way, so the two centrelines are parallel and comparable in length -
-    which is what lets the crossing be measured as a sideways step from one midpoint to the
-    other, and spread over as much road as taking it at speed needs.
+    road running the same way, so the two centrelines are parallel and comparable in length.
+
+    Where the crossing sits is found by *projection*, not by taking both midpoints. The two
+    are the same only when the car arrives at the start of the lane it is leaving, and it
+    usually does not: a junction turn trims the front off, and a change immediately before
+    this one leaves only the far end. Taking midpoints then put the far side of the crossing
+    behind the near side, and the curve doubled back on itself - measured on `junction-1` at
+    118° of turn in a single 0.1 s step, on a route with two changes in a row.
     """
-    span_leaving, span_joining = _length_of(leaving), _length_of(joining)
-    middle_leaving = _cut(leaving, keep_head=True, at=0.5)[-1]
-    middle_joining = _cut(joining, keep_head=True, at=0.5)[-1]
-    sideways = float(np.linalg.norm(middle_joining - middle_leaving))
-    span = min(
-        _smoothing_span(sideways),
-        _CHANGE_MAX_FRACTION * span_leaving,
-        _CHANGE_MAX_FRACTION * span_joining,
-    )
-    head = _cut(leaving, keep_head=True, at=(span_leaving / 2.0 - span) / span_leaving)
-    tail = _cut(joining, keep_head=False, at=(span_joining / 2.0 + span) / span_joining)
+    entry = _project_along(joining, leaving[0])
+    exit_ = _project_along(joining, leaving[-1])
+    if exit_ - entry < 1e-6:
+        return leaving, np.empty((0, 2), dtype=np.float64), joining
+    middle = (entry + exit_) / 2.0
+    abreast = _cut(joining, keep_head=True, at=middle / _length_of(joining))[-1]
+    sideways = float(np.linalg.norm(abreast - leaving[-1]))
+    reach = min(_smoothing_span(sideways), _CHANGE_MAX_FRACTION * (exit_ - entry))
+
+    # Mapped back onto the lane being left in proportion, which is exact while the two run
+    # parallel and is what `_lane_change_moves` guarantees.
+    at = (middle - reach - entry) / (exit_ - entry)
+    head = _cut(leaving, keep_head=True, at=min(max(at, 1e-6), 1.0))
+    tail = _trim_start(joining, middle + reach)
     if len(head) < 2 or len(tail) < 2:
         return head, np.empty((0, 2), dtype=np.float64), tail
     direction_in = _unit(head[-1] - head[-2], what=f"the lane changed out of before {what}")
     direction_out = _unit(tail[1] - tail[0], what=what)
-    curve = _turn_curve(
-        head[-1], direction_in, tail[0], direction_out, handle=_handle_for(0.0, span)
-    )
+    curve = _turn_curve(head[-1], direction_in, tail[0], direction_out, turn=0.0)
     if curve is None:
         return head, np.empty((0, 2), dtype=np.float64), tail
     return head, curve[1:-1], tail
@@ -588,12 +621,25 @@ def route_polyline(
     finished: list[np.ndarray] = []
     current: np.ndarray | None = None
 
-    for position, lane_id in enumerate(route_lanes):
+    position = 0
+    while position < len(route_lanes):
+        lane_id = route_lanes[position]
         centre = _xy(lanes[lane_id].centerline)
         if current is None:
             current = centre
+            position += 1
             continue
         if position in changing:
+            # A run of changes is one manoeuvre, not several. A car crossing three lanes
+            # sweeps across them once; building a separate crossing per lane gives the
+            # second one only what the first left over, and on a 20 m pair that is a metre.
+            # The lanes in between are passed through diagonally, which is what happens.
+            last = position
+            while last + 1 < len(route_lanes) and (last + 1) in changing:
+                last += 1
+            lane_id = route_lanes[last]
+            centre = _xy(lanes[lane_id].centerline)
+            position = last
             # A lane arrived at by changing across is meant to start away from where the
             # last piece ended - that offset is the manoeuvre, not a fault - so it is
             # crossed into rather than turned into.
@@ -609,6 +655,7 @@ def route_polyline(
         if len(curve):
             finished.append(curve)
         current = tail
+        position += 1
 
     if current is None:
         raise RouteError("a route has to name at least one lane")
