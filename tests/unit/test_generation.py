@@ -25,6 +25,8 @@ from osm_scenario.generation import (
     _is_decision_node,
     _lane_collapse_findings,
     _lane_offset,
+    _link_bypass_ends,
+    _link_bypass_way,
     _links_by_node,
     _mapped_lane_index,
     _merge_side,
@@ -48,7 +50,7 @@ from osm_scenario.lane_model import (
     ReviewFinding,
 )
 from osm_scenario.normalization import normalize_workspace
-from osm_scenario.osm_source import read_osm_snapshot
+from osm_scenario.osm_source import OsmSnapshot, OsmWay, read_osm_snapshot
 from osm_scenario.topology import (
     MovementCandidate,
     classify_movement,
@@ -63,6 +65,7 @@ VIA_WAY_RESTRICTION = Path(__file__).parents[1] / "fixtures" / "osm" / "via-way-
 RESTRICTED_DESTINATION = (
     Path(__file__).parents[1] / "fixtures" / "osm" / "restricted-destination.osm"
 )
+LINK_BYPASS = Path(__file__).parents[1] / "fixtures" / "osm" / "link-bypass.osm"
 
 
 def _workspace(tmp_path: Path) -> Path:
@@ -1955,3 +1958,200 @@ def test_a_movement_kept_only_for_a_restriction_does_not_count_as_somewhere_to_g
 
     reached = _live_targets(model, "200", "220")
     assert sorted(reached) == [0, 1], "a lane of way 200 was left with no live movement"
+
+
+def _link_bypass_model(tmp_path: Path) -> PreliminaryLaneModel:
+    workspace = tmp_path / "workspace"
+    acquire_osm(workspace=workspace, driving_side="left", osm_file=LINK_BYPASS)
+    normalize_workspace(workspace=workspace, config=ConverterConfig(config_version=1))
+    generate_lane_model(workspace=workspace, config=ConverterConfig(config_version=1))
+    return PreliminaryLaneModel.model_validate_json(
+        (workspace / "lane-model" / "preliminary.json").read_bytes()
+    )
+
+
+def _movements(
+    model: PreliminaryLaneModel, source_way: str, target_way: str
+) -> list[ConnectorFeature]:
+    return [
+        connector
+        for connector in model.connectors
+        if connector.from_way_id == source_way and connector.to_way_id == target_way
+    ]
+
+
+def _bypass_findings(model: PreliminaryLaneModel) -> dict[str, ReviewFinding]:
+    """The bypass warnings, keyed on the connector each one names."""
+    return {
+        finding.affected_feature_ids[0]: finding
+        for finding in model.findings
+        if finding.rule == "movement_served_by_link_bypass"
+    }
+
+
+def test_a_turn_an_off_ramp_already_carries_is_not_offered_at_the_junction_too(
+    tmp_path: Path,
+) -> None:
+    """Case A. Ramp 130 leaves way 100 at node 10 and comes out at node 12, which is where
+    way 120's edge ends, so the junction's left turn into 120 is the ramp by another route.
+
+    mosque `caae6ef86d734e46` and `12de93febd511aa8` are this shape: a one-lane
+    `secondary_link` off Persiaran Perdana, 33 and 36 m before the junction, rejoining the
+    road the turn lands on. Keith: "these two are wrong because there is an offramp before
+    it."
+    """
+    model = _link_bypass_model(tmp_path)
+
+    turn = _movements(model, "100", "120")
+    assert len(turn) == 1, "the left turn should be offered from the kerbside lane alone"
+    assert turn[0].status == "forbidden"
+
+    finding = _bypass_findings(model).get(turn[0].identifier)
+    assert finding is not None, "the removal has to be on the record, not silent"
+    assert finding.severity == "warning", "the reviewer is being told, not asked"
+    assert finding.proposed_value["link_way_id"] == "130"
+    assert finding.proposed_value["departs_node_id"] == "10"
+
+
+def test_a_ramp_destination_is_not_counted_when_the_lanes_are_dealt_out(
+    tmp_path: Path,
+) -> None:
+    """The v21 lesson, applying to the ramp: a destination that is about to stop being one
+    must not be counted while the approach's lanes are dealt across its destinations.
+
+    Two lanes arrive at node 1 against way 110's two and way 120's one. Counted whole that
+    is 2 into 3, which does not close, and `_balanced_approach_assignment` stands aside.
+    Discount the destination the ramp already serves and it is 2 into 2, so both lanes
+    carry straight on in order.
+    """
+    model = _link_bypass_model(tmp_path)
+
+    assert _live_targets(model, "100", "110") == {0: 0, 1: 1}
+
+
+def test_a_ramp_that_comes_out_somewhere_else_is_not_this_turn_by_another_route(
+    tmp_path: Path,
+) -> None:
+    """Case B, and the reason the rejoin test is the tight one.
+
+    Ramp 230 ends at node 25 rather than node 22, so it goes somewhere else and deduces
+    nothing about the turn at node 2. Matching a ramp against any node of the destination
+    *way* instead of the end of the movement's own edge reads 22 movements in mosque as
+    bypassed where the tight test reads 5, six of them carriageways carrying straight on.
+    """
+    model = _link_bypass_model(tmp_path)
+
+    turn = _movements(model, "200", "220")
+    assert [connector.status for connector in turn] == ["active"]
+    assert not _bypass_findings(model).keys() & {connector.identifier for connector in turn}
+
+
+def test_a_ramp_never_replaces_a_carriageway_carrying_straight_on(tmp_path: Path) -> None:
+    """Case C. Ramp 350 leaves way 300 at node 30 and rejoins at node 32, where way 320's
+    edge ends — both ends match — but 300 runs *straight* into 320. A ramp takes a turn off
+    a junction; it never takes the road itself off. So the movement has to carry a side
+    before any of this is read, and a straight-on movement carries none.
+    """
+    model = _link_bypass_model(tmp_path)
+
+    through = _movements(model, "300", "320")
+    assert len(through) == 2
+    assert {connector.status for connector in through} == {"active"}
+    assert not _bypass_findings(model).keys() & {connector.identifier for connector in through}
+
+
+def test_a_ramp_never_leaves_a_lane_with_nowhere_to_go(tmp_path: Path) -> None:
+    """Case D. Node 4 is signalised, so way 400 bending into way 420 is a movement rather
+    than a continuation, and it is the only one that lane has. Ramp 430 does rejoin where it
+    lands — the reading fires — but removing it would end the lane at the junction.
+
+    A ramp says a turn is taken elsewhere, never that a lane has no exit. Same no-stranding
+    rule `_side_filtered_candidates` and `_stranded_permission_fallback` already follow.
+    """
+    model = _link_bypass_model(tmp_path)
+    lanes = {lane.identifier: lane for lane in model.lanes}
+    snapshot = read_osm_snapshot(tmp_path / "workspace" / "source" / "map.osm")
+
+    turn = _movements(model, "400", "420")
+    assert len(turn) == 1
+    # The ramp is found — this is the guard holding the movement, not the test missing it.
+    assert (
+        _link_bypass_way(
+            lanes[turn[0].from_lane_id],
+            lanes[turn[0].to_lane_id],
+            _link_bypass_ends(snapshot),
+            driving_side="left",
+            min_degrees=10.0,
+        )
+        == "430"
+    )
+    assert turn[0].status == "active"
+    assert turn[0].identifier not in _bypass_findings(model)
+
+
+def _link_chain_snapshot(*ways: tuple[str, list[str], str]) -> OsmSnapshot:
+    return OsmSnapshot(
+        nodes={},
+        ways={
+            identifier: OsmWay(
+                identifier=identifier,
+                node_ids=tuple(node_ids),
+                tags={"highway": highway},
+            )
+            for identifier, node_ids, highway in ways
+        },
+        relations={},
+        deleted_elements={},
+    )
+
+
+def test_a_ramp_records_every_place_it_meets_the_network_not_only_the_last() -> None:
+    """Nothing distinguishes one ramp mapped as two ways from two ramps in series.
+
+    mosque `182502392` comes out at `1928630157`, and a different ramp, `182502409`,
+    starts there. Following the chain and keeping only its end reads `1928630009` — where
+    the *second* ramp goes — and the Kenanga turn the first one serves is never seen. Both
+    boundaries count, because a ramp meets the network wherever a way ends on it.
+    """
+    ends = _link_bypass_ends(
+        _link_chain_snapshot(
+            ("a", ["1", "2"], "secondary_link"),
+            ("b", ["2", "3"], "secondary_link"),
+            ("c", ["3", "4"], "secondary"),
+        )
+    )
+
+    assert ends["1"] == {"2": "a", "3": "a"}
+
+
+def test_a_ramp_chain_that_forks_is_cut_rather_than_guessed_at() -> None:
+    """Past a fork the chain no longer names one place the traffic comes out, so the walk
+    stops at the fork — which is still a place this ramp meets the network."""
+    ends = _link_bypass_ends(
+        _link_chain_snapshot(
+            ("a", ["1", "2"], "secondary_link"),
+            ("b", ["2", "3"], "secondary_link"),
+            ("c", ["2", "4"], "secondary_link"),
+        )
+    )
+
+    assert ends["1"] == {"2": "a"}
+
+
+def test_only_the_movements_an_off_ramp_carries_are_removed_on_the_real_maps() -> None:
+    """The two Keith named, and nothing else, on whichever workspaces are present.
+
+    Both are Persiaran Perdana: a left turn at a junction that a `secondary_link` off the
+    same road already makes. Every other left-going movement in either map — 85 of them,
+    31 on a multi-lane approach — is untouched, because no ramp both leaves where the
+    approach begins and comes out where the turn lands.
+    """
+    for name, model in _generated_models():
+        removed = _bypass_findings(model)
+        by_id = {connector.identifier: connector for connector in model.connectors}
+        expected = {"caae6ef86d734e46", "12de93febd511aa8"} & set(by_id)
+        assert set(removed) == expected, f"{name} removed {sorted(removed)}"
+        for connector_id in removed:
+            assert by_id[connector_id].status == "forbidden", (
+                f"{name} {connector_id} carries the warning but is still drivable"
+            )

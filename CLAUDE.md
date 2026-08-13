@@ -627,6 +627,46 @@ longer counts a restriction-forbidden candidate as an exit. Four things not to r
 
 See `docs/mapping-algo-changes/2026-08-13-04:42:58-lanes-were-dealt-across-a-destination-a-restriction-forbids.md`.
 
+### An off-ramp before the junction means the junction does not carry that turn (v22)
+
+Nothing in the generator ever *asserts* a turn. At a decision node every non-reverse outgoing
+group is reachable from the approach and only evidence removes a movement — so a turn nobody
+may make, with no `turn:lanes` and no restriction naming it, is generated and never
+questioned. Neither extract holds a single `left` in any `turn:lanes` value: **every left turn
+on both maps exists purely because two ways share an OSM node.**
+
+The evidence that had never been read is the slip road. `_link_bypass_way` names the `_link`
+way that already carries a movement, and the status becomes `forbidden` with a **warning**,
+`movement_served_by_link_bypass`, recording what went and what took it. Keith:
+*"these two are wrong because there is an offramp before it."*
+
+Both ends have to match — the ramp leaves the node the approach's own **edge starts at**, and
+comes out at the node the destination's **edge ends at** — and the movement must carry a side.
+All three guards were measured, and each is a reading that was tried and is wrong:
+
+- match the ramp's end against **any node of the destination way** and mosque reads **22**
+  connectors bypassed against the tight test's 5, six of them carriageways carrying straight on
+  at +2.45° and +5.07°. A ramp replaces a turn, never a road going ahead — hence the side test.
+- keep only the **chain's final node** and the Kenanga case vanishes. `182502392` comes out at
+  `1928630157` and a *different* ramp, `182502409`, starts there; walking through reads
+  `1928630009`. Nothing distinguishes one ramp mapped as two ways from two ramps in series, so
+  **every way boundary along the chain is recorded**.
+- a ramp says a turn is taken elsewhere, **never that a lane has no exit**, so a movement that
+  is the lane's last one stays. Read after the restrictions resolve — a restriction may have
+  taken the exit that would otherwise have counted.
+
+Read **before** the lanes are dealt out, in `blocked_groups` beside `_restricted_groups`, with
+the same carve-outs and for the same reasons as v21.
+
+Three ramps in the two extracts, three duplicated turns, and the third — `191861354` at node
+`474922037` — was **already forbidden by a surveyed restriction**, which is the corroboration
+for reading the shape as evidence rather than a guess. Two consequences worth not
+re-discovering: a Perdana car no longer drives the short block **between** the junction and
+where the ramp merges (that is what a slip means — it joins beyond it), and Kenanga
+`5fe50f735e40d7c2` is now starved because its only other feed, `7046b111f705c203`, is an open
+`review_required` blocker. See
+`docs/mapping-algo-changes/2026-08-13-16:32:06-a-turn-an-off-ramp-already-carries-was-offered-twice.md`.
+
 ### Starved middle lanes: mostly fixed, one left
 
 Two allocation rules now run before the proportional mapping, and between them they

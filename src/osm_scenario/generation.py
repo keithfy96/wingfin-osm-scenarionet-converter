@@ -62,7 +62,7 @@ from osm_scenario.topology import (
     way_adjacency,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v21"
+GENERATOR_VERSION = "direct-osm-stage2-v22"
 LANE_MODEL_SCHEMA_VERSION = 3
 
 # How much clear road to leave beyond the crossing carriageway when a lane is cut back at a
@@ -709,6 +709,131 @@ def _restricted_groups(
         if key not in blocked and not _is_exact_reverse(approach[0], targets[0])
     ]
     return blocked if survivors else set()
+
+
+def _link_bypass_ends(snapshot: OsmSnapshot) -> dict[str, dict[str, str]]:
+    """Where each off-ramp that leaves a node rejoins the network: {start: {end: way}}.
+
+    A slip road is the map's own statement that a turn has been taken off the junction. It
+    leaves the approach before the junction and lands on the road the turn would have
+    reached, so a junction that also carries the turn offers it twice — and on the ground
+    the slip is islanded off from the through lanes, so the second offer is not a road.
+
+    Only the ends of the ramp are needed, which is why this is a way-level walk and not a
+    graph search: an extract holds a handful of `_link` ways. A slip mapped as two link ways
+    in a row is one slip, so the walk follows the chain while exactly one link continues
+    from where the last one ended; a fork or a loop stops it, because past either the chain
+    no longer names where the traffic comes out.
+
+    **Every way boundary along the chain is recorded, not just the last one**, because
+    nothing distinguishes a slip split in two from two slips in series. mosque
+    `182502392` comes out at `1928630157` and a *different* ramp, `182502409`, starts
+    there — walk through and the reading is `1928630009`, which is where the second ramp
+    goes and nowhere this one's traffic can be said to rejoin. A ramp meets the network
+    wherever a way ends on it, so all of those count.
+    """
+    links = {
+        way.identifier: way
+        for way in snapshot.ways.values()
+        if str(way.tags.get("highway", "")).endswith("_link") and len(way.node_ids) > 1
+    }
+    starting: dict[str, list[str]] = {}
+    for way_id in sorted(links):
+        starting.setdefault(links[way_id].node_ids[0], []).append(way_id)
+    ends: dict[str, dict[str, str]] = {}
+    for way_id in sorted(links):
+        seen = {way_id}
+        node = links[way_id].node_ids[-1]
+        reached = [node]
+        while True:
+            following = [item for item in starting.get(node, ()) if item not in seen]
+            if len(following) != 1:
+                break
+            seen.add(following[0])
+            node = links[following[0]].node_ids[-1]
+            reached.append(node)
+        for end in reached:
+            ends.setdefault(links[way_id].node_ids[0], {}).setdefault(end, way_id)
+    return ends
+
+
+def _link_bypass_way(
+    source: LaneFeature,
+    target: LaneFeature,
+    bypass_ends: dict[str, dict[str, str]],
+    *,
+    driving_side: str,
+    min_degrees: float,
+) -> str | None:
+    """The off-ramp that already serves this movement, or None if none does.
+
+    Both ends have to match. The ramp must leave the node this approach *starts* at — the
+    junction ahead is not where a driver chooses it — and it must come out where the
+    movement's own destination edge ends. Matching the ramp's end against any node of the
+    destination *way* instead reads six straight-on movements in `mosque` as bypassed, at
+    2.45 and 5.07 degrees, which is the reading this test exists to avoid: a ramp replaces
+    a turn, never a carriageway carrying on.
+
+    So the movement must be a turn as well, and the side is asked with no `turn:lanes` in
+    hand deliberately. The question here is "does this leave the line of the road", not
+    "which side is it tagged for" — a tag names which movements are permitted and has
+    nothing to say about whether a ramp already carries one of them.
+    """
+    way_id = bypass_ends.get(source.source_edge[0], {}).get(target.source_edge[1])
+    if way_id is None:
+        return None
+    angle = signed_turn_angle(
+        LineString((point.x, point.y) for point in source.centerline),
+        LineString((point.x, point.y) for point in target.centerline),
+    )
+    side = movement_side(
+        movement=classify_movement(angle),
+        angle=angle,
+        driving_side=driving_side,
+        turn_permissions=[],
+        min_degrees=min_degrees,
+    )
+    return way_id if side is not None else None
+
+
+def _link_bypassed_groups(
+    approach: list[LaneFeature],
+    outgoing_groups: dict[GroupKey, list[LaneFeature]],
+    bypass_ends: dict[str, dict[str, str]],
+    *,
+    driving_side: str,
+    min_degrees: float,
+) -> set[GroupKey]:
+    """Destinations an off-ramp already serves, hidden from the two balanced rules.
+
+    The same reasoning as `_restricted_groups`, and the same carve-outs. A destination that
+    is about to stop being one must not be counted while the approach's lanes are dealt
+    across its destinations, or a clean split is read as an ambiguous one. Only the
+    allocation is blinded: the movements are still generated and still carry their ids, so
+    the map records that the ramp was read rather than losing a turn with nothing to explain
+    where it went. And nothing is hidden where that would leave the approach no destination
+    at all, because with no survivors there is no split to protect.
+    """
+    if not bypass_ends:
+        return set()
+    bypassed = {
+        key
+        for key, targets in outgoing_groups.items()
+        if _link_bypass_way(
+            approach[0],
+            targets[0],
+            bypass_ends,
+            driving_side=driving_side,
+            min_degrees=min_degrees,
+        )
+        is not None
+    }
+    survivors = [
+        key
+        for key, targets in outgoing_groups.items()
+        if key not in bypassed and not _is_exact_reverse(approach[0], targets[0])
+    ]
+    return bypassed if survivors else set()
 
 
 def _kerb_first_key(source: LaneFeature, target: LaneFeature, driving_side: str) -> float:
@@ -1622,7 +1747,7 @@ def _render_review_html(model: PreliminaryLaneModel, snapshot: OsmSnapshot) -> s
 *{box-sizing:border-box}html,body{height:100%;margin:0;font:14px system-ui,sans-serif;color:#202428}body{display:grid;grid-template-columns:minmax(330px,420px) 1fr;background:#f4f5f6}aside{padding:14px;overflow:auto;border-right:1px solid #c8cdd1;background:#fff}h1{font-size:20px;margin:0 0 5px}h2{font-size:14px;margin:14px 0 7px}.muted{color:#687078;font-size:12px}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin:10px 0}.metric{padding:7px;background:#f1f3f5;border-radius:5px;text-align:center}.metric b{display:block;font-size:16px}.filters{display:grid;gap:7px}.filters input,.filters select{width:100%;padding:7px;border:1px solid #adb5bd;border-radius:4px;background:#fff}.queue{display:grid;gap:6px;margin-top:8px}.finding{border:1px solid #d6dadd;border-left:5px solid #e67700;border-radius:5px;padding:8px;background:#fff;cursor:pointer;text-align:left}.finding.blocker{border-left-color:#c92a2a}.finding:hover,.finding.active{background:#fff3bf}.finding strong{display:block}.finding small{display:block;color:#687078;margin-top:3px}.detail{padding:9px;background:#f8f9fa;border:1px solid #dee2e6;border-radius:5px;overflow-wrap:anywhere}.detail table,.popup-table{border-collapse:collapse;width:100%}.detail td,.popup-table td{border-bottom:1px solid #e5e7e9;padding:4px;vertical-align:top;font-size:12px}.legend{display:grid;grid-template-columns:18px 1fr;gap:6px 8px;align-items:center}.swatch{height:5px}.lane{background:#277da1}.lane-direction{background:#0b4f7a}.connector-band{background:#8ce99a;height:9px}.active-connector{background:#2b8a3e}.review-connector{background:#f08c00}.forbidden-connector{background:#c92a2a}.stop-line{background:#7048e8}.source-geometry{background:#868e96}.highlight{background:#ffd43b}.chip{display:inline-block;font:inherit;font-size:12px;padding:2px 7px;margin:1px 0;border:1px solid #b38600;border-radius:10px;background:#fff9db;color:#7a5c00;cursor:pointer}.chip:hover{background:#ffd43b;color:#202428}.muted-chip{border-color:#ced4da;background:#f1f3f5;color:#687078;cursor:default}.link-table{border-collapse:collapse}.link-table td{border:0;padding:1px 7px 1px 0;font-size:12px;vertical-align:middle;white-space:nowrap}.pill{font-size:11px;padding:1px 7px;border-radius:9px;border:1px solid}.pill.active{border-color:#2b8a3e;color:#2b8a3e;background:#ebfbee}.pill.review_required{border-color:#f08c00;color:#a35c00;background:#fff4e6}.pill.forbidden{border-color:#c92a2a;color:#c92a2a;background:#fff5f5}.queue-note{font-size:12px;color:#687078;margin:7px 0}.search-result{font-size:12px;line-height:1.4;margin:8px 0 0;min-height:17px}.search-result.miss{color:#a5390f}#map{height:100%;min-height:520px}.leaflet-popup-content{max-height:300px;overflow:auto}@media(max-width:780px){body{grid-template-columns:1fr;grid-template-rows:minmax(360px,45vh) 1fr}aside{border-right:0;border-bottom:1px solid #c8cdd1}#map{min-height:55vh}}
 </style></head><body><aside><h1>Stage 2 Review Audit</h1><div class="muted">Read-only visual explanation of preliminary generation findings. Decisions are recorded later in Stage 3.</div><div class="summary" id="summary"></div><h2>Review filters</h2><div class="filters"><input id="search" placeholder="Search rule or reason; paste an OSM way/node or feature ID to highlight it"><select id="rule"><option value="">All rules</option></select><select id="severity"><option value="">All severities</option><option value="blocker">Blocker</option><option value="warning">Warning</option></select></div><div class="search-result" id="search-result" role="status" aria-live="polite"></div><div class="queue-note" id="queue-note"></div><div class="queue" id="queue"></div><h2>Selected finding</h2><div class="detail" id="detail">Select a review item to focus its affected geometry.</div><h2>Legend</h2><div class="legend"><span class="swatch lane"></span><span>Lane centreline</span><span class="swatch lane-direction"></span><span>Direction of travel (arrow points downstream)</span><span class="swatch connector-band"></span><span>Connector band (the lane-width path a movement takes)</span><span class="swatch active-connector"></span><span>Active connector</span><span class="swatch review-connector"></span><span>Review-required connector</span><span class="swatch forbidden-connector"></span><span>Forbidden connector</span><span class="swatch stop-line"></span><span>Inferred stop line</span><span class="swatch source-geometry"></span><span>Source OSM way or node (dashed)</span><span class="swatch highlight"></span><span>Selected or searched geometry</span></div></aside><main id="map"></main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
-const payload=__PAYLOAD__;const reviewPriority={turn_permission_geometry_conflict:0,ambiguous_connector:1,restriction_effect_review:2,signal_lane_association:3,lane_transition_count_mismatch:4,inferred_stop_line:5,lane_count_inference:6,lane_width_default:7,speed_default:8};payload.findings.sort((a,b)=>(reviewPriority[a.rule]??99)-(reviewPriority[b.rule]??99)||a.rule.localeCompare(b.rule)||a.identifier.localeCompare(b.identifier));const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const payload=__PAYLOAD__;const reviewPriority={turn_permission_geometry_conflict:0,ambiguous_connector:1,restriction_effect_review:2,signal_lane_association:3,lane_transition_count_mismatch:4,inferred_stop_line:5,lane_count_inference:6,lane_width_default:7,speed_default:8,movement_served_by_link_bypass:10};payload.findings.sort((a,b)=>(reviewPriority[a.rule]??99)-(reviewPriority[b.rule]??99)||a.rule.localeCompare(b.rule)||a.identifier.localeCompare(b.identifier));const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const map=L.map('map',{preferCanvas:true});L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:20,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
 // Highlights are drawn into their own pane, above every layer group. Restyling the
 // drawn layer in place kept its z-order, and source ways sit at the bottom of it —
@@ -2009,6 +2134,7 @@ def build_lane_model(
         if relation.tags.get("type") == "restriction"
         and not any(kind == "way" for kind, _ in restriction_roles(relation)["via"])
     ]
+    link_bypass_ends = _link_bypass_ends(snapshot)
     for node_id in sorted(set(lanes_by_start) | set(lanes_by_end)):
         incoming = sorted(lanes_by_end.get(node_id, []))
         outgoing = sorted(lanes_by_start.get(node_id, []))
@@ -2041,9 +2167,19 @@ def build_lane_model(
         # *where a lane lands* and none of them can be right about that while counting a
         # road nobody may take. The movements to it are still generated further down — the
         # restriction has to have something to remove, and the reviewer has to see it.
+        # An off-ramp that already carries a movement rules that destination out for the
+        # same reason and at the same moment: whichever removes it, the allocation must
+        # not be arithmetic done across a road this approach is not going to reach.
         blocked_groups = {
             tuple(block[0].source_edge): _restricted_groups(
                 block, outgoing_groups, node_id, node_restrictions
+            )
+            | _link_bypassed_groups(
+                block,
+                outgoing_groups,
+                link_bypass_ends,
+                driving_side=driving_side,
+                min_degrees=config.lane_selection.side_movement_min_degrees,
             )
             for block in blocks
         }
@@ -2336,6 +2472,44 @@ def build_lane_model(
         relation_status[relation.identifier] = (status, removed, reason)
         forbidden_indexes.update(removed)
 
+    # Movements an off-ramp already carries. Read here rather than in the node loop because
+    # the no-stranding test below needs the lane's *surviving* exits, and a restriction
+    # resolved above may have taken one of them: asked earlier it would count an exit that
+    # no longer exists. The two ends the ramp has to match are both on the candidate, so
+    # nothing has to be carried out of the loop for this.
+    bypass_way_of_index: dict[int, str] = {}
+    for index, candidate in enumerate(movement_candidates):
+        if index in forbidden_indexes:
+            continue
+        way_id = _link_bypass_way(
+            lane_lookup[candidate.from_lane_id],
+            lane_lookup[candidate.to_lane_id],
+            link_bypass_ends,
+            driving_side=driving_side,
+            min_degrees=config.lane_selection.side_movement_min_degrees,
+        )
+        if way_id is not None:
+            bypass_way_of_index[index] = way_id
+    # A ramp says a turn is taken elsewhere, never that a lane has nowhere to go. Where
+    # removing it would leave the lane with no exit at all the ramp is the wrong reading of
+    # something, and the movement stays — the same no-stranding rule `_side_filtered_
+    # candidates` and `_stranded_permission_fallback` already follow.
+    lanes_carrying_straight_on = {source for _node, source, _target in continuation_links}
+    for lane_id in {movement_candidates[index].from_lane_id for index in bypass_way_of_index}:
+        mine = [
+            index
+            for index, candidate in enumerate(movement_candidates)
+            if candidate.from_lane_id == lane_id
+        ]
+        if lane_id in lanes_carrying_straight_on or any(
+            index not in forbidden_indexes and index not in bypass_way_of_index
+            for index in mine
+        ):
+            continue
+        for index in mine:
+            bypass_way_of_index.pop(index, None)
+    forbidden_indexes.update(bypass_way_of_index)
+
     # A movement a restriction covers but cannot claim on its own is ambiguous in the same
     # sense a geometric one is: something real says it may be wrong and only a person can
     # settle it. Marked on the candidate rather than handled beside it, so the status rule
@@ -2350,6 +2524,9 @@ def build_lane_model(
             }
         )
 
+    node_positions = {
+        str(key): (float(data["x"]), float(data["y"])) for key, data in graph.nodes(data=True)
+    }
     connectors: list[ConnectorFeature] = []
     for index, candidate in enumerate(movement_candidates):
         connector_id = deterministic_id(
@@ -2395,6 +2572,43 @@ def build_lane_model(
                 ),
             )
         )
+        if index in bypass_way_of_index:
+            # A warning, not a blocker: the reviewer is being told what the generator did,
+            # not asked anything. The ramp and the junction turn are the same movement and
+            # the map already said so; a blocker here would demand a review pass to confirm
+            # something nobody disputes. It is recorded because a turn that simply stops
+            # existing, with nothing on the map naming what took it, is the worse failure.
+            departs = lane_lookup[candidate.from_lane_id].source_edge[0]
+            findings.append(
+                _finding(
+                    rule="movement_served_by_link_bypass",
+                    severity="warning",
+                    source_type="node",
+                    source_ids=[candidate.junction_node_id],
+                    affected_feature_ids=[connector_id],
+                    proposed_value={
+                        "link_way_id": bypass_way_of_index[index],
+                        "departs_node_id": departs,
+                        "metres_before_junction": round(
+                            math.dist(
+                                node_positions[departs],
+                                node_positions[candidate.junction_node_id],
+                            ),
+                            1,
+                        )
+                        if departs in node_positions
+                        and candidate.junction_node_id in node_positions
+                        else None,
+                        "movement": candidate.movement,
+                        "turn_angle_degrees": round(candidate.angle_degrees, 3),
+                    },
+                    confidence="medium",
+                    reason=(
+                        "a link road leaves this approach before the junction and rejoins "
+                        "where the turn lands, so the junction does not carry it as well"
+                    ),
+                )
+            )
         if status == "active":
             lane_lookup[candidate.from_lane_id].exit_lanes.append(connector_id)
             lane_lookup[candidate.to_lane_id].entry_lanes.append(connector_id)

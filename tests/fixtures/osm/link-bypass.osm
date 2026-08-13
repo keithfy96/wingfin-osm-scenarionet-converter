@@ -1,0 +1,277 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  An off-ramp that leaves a road before a junction and rejoins where the junction's turn
+  would have landed. The turn is offered twice, and on the ground the ramp is islanded off
+  from the through lanes, so the junction does not carry it. Left-hand traffic, so a left
+  turn is made from the kerbside lane (the highest index; indices run centre-out).
+
+  Four cases, each the shape of one thing the reading has to get right.
+
+  case A, node 1 - the ramp rejoins where the turn lands, so the turn goes
+
+                          13
+                          ▲
+                          │            way 110, 2 lanes, straight on
+       15 ◄──── 12 ◄╌╌╌╌╌╌1
+                 ▲        ▲  +90 deg   way 120, 1 lane, the turn
+        ramp 130 │        │
+        (1 lane) └── 14   │            way 100, 2 lanes, from node 10
+                       ╲  │
+                        ╲ 10
+                          ▲
+                          │            way 90, the road before the ramp leaves
+                          9
+
+      The ramp leaves node 10 - which is where way 100's own edge starts - and comes out
+      at node 12, which is where way 120's edge ends. Both ends match, so 100 -> 120 is
+      forbidden and a warning records it. The approach keeps way 110, so nothing is
+      stranded, and the two lanes are dealt across 110 alone rather than across 110 and a
+      destination that is about to go.
+
+  case B, node 2 - the ramp comes out somewhere else, so nothing is deduced
+
+      Identical to case A except the ramp ends at node 25 instead of node 22. A ramp that
+      goes somewhere else is not this turn by another route, and matching it against any
+      node of the destination *way* rather than the end of the movement's own edge reads
+      six straight-on movements in mosque as bypassed.
+
+  case C, node 3 - a ramp cannot replace a carriageway carrying on
+
+      Way 300 runs straight into way 320 and ramp 350 rejoins at node 32, the far end of
+      320's edge. Both ends match, but a ramp replaces a turn, never a road going straight
+      ahead, so the movement carries no side and is left alone.
+
+  case D, node 4 - a ramp never leaves a lane with nowhere to go
+
+      A signalised bend: way 400 has one destination, way 420, and ramp 430 rejoins at
+      node 42. Removing it would end the lane at the junction, so it stays. A ramp says a
+      turn is taken elsewhere, never that a lane has no exit.
+-->
+<osm version="0.6" generator="osm-scenario-test">
+  <!-- case A -->
+  <node id="9" lat="3.149095" lon="101.700000" />
+  <node id="10" lat="3.150000" lon="101.700000" />
+  <node id="1" lat="3.150905" lon="101.700000" />
+  <node id="13" lat="3.151809" lon="101.700000" />
+  <node id="12" lat="3.150905" lon="101.699280" />
+  <node id="14" lat="3.150362" lon="101.699820" />
+  <node id="15" lat="3.150905" lon="101.698561" />
+
+  <!-- case B -->
+  <node id="29" lat="3.159095" lon="101.700000" />
+  <node id="20" lat="3.160000" lon="101.700000" />
+  <node id="2" lat="3.160905" lon="101.700000" />
+  <node id="23" lat="3.161809" lon="101.700000" />
+  <node id="22" lat="3.160905" lon="101.699280" />
+  <node id="24" lat="3.160362" lon="101.699820" />
+  <node id="25" lat="3.160362" lon="101.699280" />
+  <node id="26" lat="3.160362" lon="101.698561" />
+  <node id="27" lat="3.160905" lon="101.698561" />
+
+  <!-- case C -->
+  <node id="39" lat="3.169095" lon="101.700000" />
+  <node id="30" lat="3.170000" lon="101.700000" />
+  <node id="3" lat="3.170905" lon="101.700000" />
+  <node id="32" lat="3.171809" lon="101.700000" />
+  <node id="33" lat="3.170905" lon="101.699280" />
+  <node id="34" lat="3.170452" lon="101.699640" />
+  <node id="35" lat="3.170905" lon="101.698561" />
+  <node id="36" lat="3.172714" lon="101.700000" />
+
+  <!-- case D -->
+  <node id="49" lat="3.179095" lon="101.700000" />
+  <node id="40" lat="3.180000" lon="101.700000" />
+  <node id="4" lat="3.180905" lon="101.700000">
+    <tag k="highway" v="traffic_signals" />
+  </node>
+  <node id="42" lat="3.180905" lon="101.699280" />
+  <node id="44" lat="3.180362" lon="101.699820" />
+  <node id="45" lat="3.180905" lon="101.698561" />
+
+  <!-- case A -->
+  <way id="90">
+    <nd ref="9" />
+    <nd ref="10" />
+    <tag k="highway" v="secondary" />
+    <tag k="lanes" v="2" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="100">
+    <nd ref="10" />
+    <nd ref="1" />
+    <tag k="highway" v="secondary" />
+    <tag k="lanes" v="2" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="110">
+    <nd ref="1" />
+    <nd ref="13" />
+    <tag k="highway" v="secondary" />
+    <tag k="lanes" v="2" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="120">
+    <nd ref="1" />
+    <nd ref="12" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="130">
+    <nd ref="10" />
+    <nd ref="14" />
+    <nd ref="12" />
+    <tag k="highway" v="secondary_link" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="140">
+    <nd ref="12" />
+    <nd ref="15" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+
+  <!-- case B -->
+  <way id="290">
+    <nd ref="29" />
+    <nd ref="20" />
+    <tag k="highway" v="secondary" />
+    <tag k="lanes" v="2" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="200">
+    <nd ref="20" />
+    <nd ref="2" />
+    <tag k="highway" v="secondary" />
+    <tag k="lanes" v="2" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="210">
+    <nd ref="2" />
+    <nd ref="23" />
+    <tag k="highway" v="secondary" />
+    <tag k="lanes" v="2" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="220">
+    <nd ref="2" />
+    <nd ref="22" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="230">
+    <nd ref="20" />
+    <nd ref="24" />
+    <nd ref="25" />
+    <tag k="highway" v="secondary_link" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="240">
+    <nd ref="22" />
+    <nd ref="27" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="250">
+    <nd ref="25" />
+    <nd ref="26" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+
+  <!-- case C -->
+  <way id="390">
+    <nd ref="39" />
+    <nd ref="30" />
+    <tag k="highway" v="secondary" />
+    <tag k="lanes" v="2" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="300">
+    <nd ref="30" />
+    <nd ref="3" />
+    <tag k="highway" v="secondary" />
+    <tag k="lanes" v="2" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="320">
+    <nd ref="3" />
+    <nd ref="32" />
+    <tag k="highway" v="secondary" />
+    <tag k="lanes" v="2" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="330">
+    <nd ref="3" />
+    <nd ref="33" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="340">
+    <nd ref="33" />
+    <nd ref="35" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="350">
+    <nd ref="30" />
+    <nd ref="34" />
+    <nd ref="32" />
+    <tag k="highway" v="secondary_link" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="360">
+    <nd ref="32" />
+    <nd ref="36" />
+    <tag k="highway" v="secondary" />
+    <tag k="lanes" v="2" />
+    <tag k="oneway" v="yes" />
+  </way>
+
+  <!-- case D -->
+  <way id="490">
+    <nd ref="49" />
+    <nd ref="40" />
+    <tag k="highway" v="secondary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="400">
+    <nd ref="40" />
+    <nd ref="4" />
+    <tag k="highway" v="secondary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="420">
+    <nd ref="4" />
+    <nd ref="42" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="430">
+    <nd ref="40" />
+    <nd ref="44" />
+    <nd ref="42" />
+    <tag k="highway" v="secondary_link" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="440">
+    <nd ref="42" />
+    <nd ref="45" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="1" />
+    <tag k="oneway" v="yes" />
+  </way>
+</osm>

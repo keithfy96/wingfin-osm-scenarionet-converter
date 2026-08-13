@@ -26,9 +26,10 @@ const REVIEW_PRIORITY: Record<string, number> = {
   lane_count_inference: 6,
   lane_width_default: 7,
   speed_default: 8,
-  // Last: it asks nothing. It records which movement a via-way restriction was enforced by
-  // removing, so the choice is on the record rather than out of sight.
+  // Last, and both for the same reason: they ask nothing. They record which movement was
+  // removed and by what, so the choice is on the record rather than out of sight.
   restriction_enforced_leg: 9,
+  movement_served_by_link_bypass: 10,
 };
 
 const STATUS_LABEL: Record<DecisionStatus, string> = {

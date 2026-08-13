@@ -178,6 +178,14 @@ const SPECS: Record<string, ControlSpec> = {
     overrideEffect: null,
     fields: [],
   },
+  movement_served_by_link_bypass: {
+    question: "An off-ramp before this junction already carries this turn, so the junction does not. Is that right?",
+    acceptLabel: "Keep it removed",
+    overrideLabel: null,
+    acceptEffect: "Keeps the turn off the junction. Traffic making it uses the ramp instead.",
+    overrideEffect: null,
+    fields: [],
+  },
 };
 
 const FALLBACK: ControlSpec = {
