@@ -45,16 +45,21 @@ export function finding(overrides: Partial<Finding> = {}): Finding {
   };
 }
 
-export function payload(findings: Finding[]): ReviewPayload {
+export function payload(
+  findings: Finding[],
+  overrides: Partial<ReviewPayload> = {},
+): ReviewPayload {
   return {
-    payload_version: 1,
+    payload_version: 2,
     identity: IDENTITY,
     center: [101.6, 3.18],
     features: [],
     findings,
     lanes: [],
     connectors: [],
+    restrictions: [],
     counts: {},
+    ...overrides,
   };
 }
 

@@ -129,17 +129,22 @@ export class ReviewState {
    * explicitly — so this writes individual decision records, not a group record.
    */
   decideBulk(
-    scope: { rule: string; roadClass?: string | null },
+    scope: { rule: string; roadClass?: string | null; severity?: Finding["severity"] },
     input: { status: DecisionStatus; value?: unknown; reason?: string },
   ): string[] {
     // Omitting roadClass means every road class — that is how a whole rule is set
     // aside at once. Passing `null` still means the unclassified ones only, so the
     // narrower road-class cohorts keep working.
     const anyRoadClass = !("roadClass" in scope);
+    // Severity narrows a *mixed* rule. `lane_count_inference` raises a blocker where it
+    // defaulted to one lane and a warning where it divided a total, and the whole-rule
+    // scope therefore cannot express "set the warnings aside" — the validation below
+    // refuses the call on the first blocker and nothing is ignored at all.
     const targets = this.findings.filter(
       (finding) =>
         finding.rule === scope.rule &&
-        (anyRoadClass || finding.road_class === scope.roadClass),
+        (anyRoadClass || finding.road_class === scope.roadClass) &&
+        (scope.severity === undefined || finding.severity === scope.severity),
     );
     for (const finding of targets) validateDecision(input, finding);
     for (const finding of targets) {

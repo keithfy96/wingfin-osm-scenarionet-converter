@@ -152,11 +152,22 @@ const SPECS: Record<string, ControlSpec> = {
     fields: [],
   },
   restriction_effect_review: {
-    question: "Is this turn restriction correct as mapped?",
+    // The old wording — "the movements it forbids stay forbidden" — described an enforced
+    // restriction, and this rule only ever fires on one that could *not* be enforced. A
+    // reviewer reading it concluded that accepting was what banned the turn, which is the
+    // one thing accepting does not do. See `restriction.ts` for the notes shown beside it.
+    question:
+      "This restriction could not be applied without also stopping traffic it does not " +
+      "name. Is the relation itself mapped correctly?",
     acceptLabel: "Keep restriction",
     overrideLabel: "Correct or remove",
-    acceptEffect: "Keeps the restriction as mapped; the movements it forbids stay forbidden.",
-    overrideEffect: "Corrects or removes the restriction relation in reviewed.osm.",
+    acceptEffect:
+      "Records that the relation is mapped correctly and closes the finding. It forbids " +
+      "nothing by itself — this restriction removed no movements.",
+    overrideEffect:
+      "Says the OSM relation is wrong and should be corrected or deleted in reviewed.osm. " +
+      "Stage 4 does not write restriction relations yet and refuses a review containing " +
+      "one, so this is not applicable today.",
     fields: [
       {
         kind: "choice",

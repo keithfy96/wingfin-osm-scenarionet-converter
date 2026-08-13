@@ -12,8 +12,14 @@ import {
 } from "./controls.js";
 import type { FeatureIndex } from "./details.js";
 import { chip, definitionRow, element } from "./dom.js";
+import { restrictionNotes } from "./restriction.js";
 import { DecisionError, type ReviewState } from "./state.js";
-import type { DecisionStatus, Finding, ReviewPayload } from "./types.js";
+import type {
+  DecisionStatus,
+  Finding,
+  RestrictionSummary,
+  ReviewPayload,
+} from "./types.js";
 
 /** Order the queue puts findings in: hardest judgement first, defaults last. */
 const REVIEW_PRIORITY: Record<string, number> = {
@@ -178,6 +184,9 @@ export class ReviewPanel {
   private scrolledTo: string | null = null;
   private readonly sorted: Finding[];
   private readonly laneIds: string[];
+  /** Movement statuses, read from the typed summary rather than out of GeoJSON properties. */
+  private readonly connectorStatus: Map<string, string>;
+  private readonly restrictions: RestrictionSummary[];
 
   constructor(
     private readonly root: HTMLElement,
@@ -188,6 +197,12 @@ export class ReviewPanel {
   ) {
     this.sorted = sortFindings(payload.findings);
     this.laneIds = payload.lanes.map((lane) => lane.identifier);
+    this.connectorStatus = new Map(
+      payload.connectors.map((connector) => [connector.identifier, connector.status]),
+    );
+    // Payloads written before this field existed simply have no other relations to name,
+    // which degrades to the same notes without the "by relation N" clause.
+    this.restrictions = payload.restrictions ?? [];
     this.renderShell(payload);
     this.state.subscribe(() => this.renderQueue());
     this.renderQueue();
@@ -463,28 +478,32 @@ export class ReviewPanel {
   }
 
   /**
-   * The class-level ignore control: one row per warning rule.
+   * The class-level ignore control: one row per rule that has warnings.
    *
-   * Blockers are absent by construction — a rule that gates promotion has nothing to
-   * offer here, and `validateDecision` would refuse it anyway.
+   * Counted over that rule's *warnings*, never over every finding it raised. A rule can
+   * be mixed — `lane_count_inference` raises a blocker where it defaulted to one lane and
+   * a warning where it divided a total — and counting the blockers in put an unignorable
+   * number on the row and passed them to a bulk call that validates every target before
+   * applying any. The whole click threw on the first blocker, nothing was ignored, and
+   * the row went on reporting the count that made it look untouched.
    */
   private renderWarningRules(): void {
     const node = this.root.querySelector<HTMLElement>("#warning-rules");
     if (!node) return;
     node.innerHTML = "";
-    const rules = [
-      ...new Set(
-        this.sorted.filter((finding) => finding.severity === "warning").map((f) => f.rule),
-      ),
-    ].sort();
+    const warnings = this.sorted.filter((finding) => finding.severity === "warning");
+    const rules = [...new Set(warnings.map((finding) => finding.rule))].sort();
     if (!rules.length) {
       node.append(element("p", "muted", "No warnings in this model."));
       return;
     }
     for (const rule of rules) {
-      const findings = this.sorted.filter((finding) => finding.rule === rule);
+      const findings = warnings.filter((finding) => finding.rule === rule);
       const ignored = findings.filter(
         (finding) => this.state.statusOf(finding.identifier) === "ignored",
+      ).length;
+      const blockers = this.sorted.filter(
+        (finding) => finding.rule === rule && finding.severity === "blocker",
       ).length;
       const row = element("div", "warning-rule");
       row.append(element("span", "warning-rule-name", rule));
@@ -492,20 +511,29 @@ export class ReviewPanel {
         element(
           "span",
           "muted",
-          ignored ? `${ignored} of ${findings.length} ignored` : `${findings.length} findings`,
+          (ignored ? `${ignored} of ${findings.length} ignored` : `${findings.length} warnings`) +
+            // Named, so the difference between this row's count and the rule's count in
+            // the queue is explained rather than looking like one of them is wrong.
+            (blockers ? ` · ${blockers} blocker(s) decide separately` : ""),
         ),
       );
+      const error = element("p", "error");
+      // The per-finding form catches DecisionError and prints it; a bulk button that
+      // threw into the event handler failed in silence, which is worse than an error.
+      const bulk = (status: DecisionStatus): void => {
+        try {
+          error.textContent = "";
+          this.state.decideBulk({ rule, severity: "warning" }, { status });
+          this.hooks.onChanged();
+        } catch (caught) {
+          error.textContent = caught instanceof DecisionError ? caught.message : String(caught);
+        }
+      };
       const ignoreAll = element("button", undefined, "Ignore all");
-      ignoreAll.addEventListener("click", () => {
-        this.state.decideBulk({ rule }, { status: "ignored" });
-        this.hooks.onChanged();
-      });
+      ignoreAll.addEventListener("click", () => bulk("ignored"));
       const restore = element("button", "ghost", "Restore");
-      restore.addEventListener("click", () => {
-        this.state.decideBulk({ rule }, { status: "unresolved" });
-        this.hooks.onChanged();
-      });
-      row.append(ignoreAll, restore);
+      restore.addEventListener("click", () => bulk("unresolved"));
+      row.append(ignoreAll, restore, error);
       node.append(row);
     }
   }
@@ -645,6 +673,17 @@ export class ReviewPanel {
     definitionRow(evidence, "Proposed", JSON.stringify(finding.proposed_value));
     definitionRow(evidence, "State", STATUS_LABEL[status]);
     node.append(evidence);
+
+    // What the finding did and did not remove, said in words. The same facts are in the
+    // Proposed blob above, where an empty `forbidden_connector_ids` reads as an omission
+    // rather than as "this restriction forbade nothing".
+    for (const note of restrictionNotes(finding, {
+      statusOf: (connectorId) => this.connectorStatus.get(connectorId),
+      isDrawn: (osmId) => this.index.resolve(osmId) !== null,
+      restrictions: this.restrictions,
+    })) {
+      node.append(element("p", "notice", note));
+    }
 
     if (!this.mappedLayers) {
       // Silence here would read as "nothing is wrong on the map"; it means the

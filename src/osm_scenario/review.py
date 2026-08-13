@@ -184,6 +184,21 @@ def build_payload(workspace: Path) -> dict[str, Any]:
             }
             for connector in model.connectors
         ],
+        # Carried so the page can say *what* removed a movement. A `restriction_effect_review`
+        # blocker holds movements it did not forbid, and the mapper routinely writes a second,
+        # node-via relation that forbade the same ones outright - without the other relations
+        # here the client can see the movement is gone and never say by whose authority, which
+        # is the one fact that makes the finding decidable.
+        "restrictions": [
+            {
+                "identifier": restriction.identifier,
+                "source_relation_id": restriction.source_relation_id,
+                "restriction": restriction.restriction,
+                "status": restriction.status,
+                "forbidden_connector_ids": restriction.forbidden_connector_ids,
+            }
+            for restriction in model.restrictions
+        ],
         "counts": shared["summary"],
     }
 

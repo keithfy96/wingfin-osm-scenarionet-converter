@@ -46,6 +46,17 @@ describe("control specs", () => {
     expect(spec.acceptEffect).toContain("may make this turn");
   });
 
+  it("does not claim that keeping an unenforced restriction forbids anything", () => {
+    // This rule only fires when the restriction could *not* be applied. Copy written for
+    // an enforced one told the reviewer that accepting was what banned the turn.
+    const spec = controlFor(finding({ rule: "restriction_effect_review" }));
+    expect(spec.acceptEffect).toContain("forbids nothing by itself");
+    expect(spec.acceptEffect).toContain("removed no movements");
+    // The override is offered but not built: Stage 4 refuses a review carrying one, and
+    // a reviewer needs to know that before choosing it rather than after.
+    expect(spec.overrideEffect).toContain("Stage 4 does not write restriction relations yet");
+  });
+
   it("falls back to a spec that still states its effect", () => {
     // A rule added to the generator later must not surface as an unexplained button.
     const spec = controlFor(finding({ rule: "a_rule_added_later" }));

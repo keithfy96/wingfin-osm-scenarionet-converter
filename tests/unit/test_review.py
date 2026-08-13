@@ -69,11 +69,39 @@ def test_payload_carries_the_map_the_stage_2_audit_draws(tmp_path: Path) -> None
     assert len(payload["lanes"]) == len(model["lanes"])
     assert len(payload["connectors"]) == len(model["connectors"])
     assert len(payload["findings"]) == len(model["findings"])
+    assert len(payload["restrictions"]) == len(model["restrictions"])
     assert payload["features"], "the review view must draw the generated network"
     kinds = {feature["properties"].get("kind") for feature in payload["features"]}
     assert {"lane_centerline", "lane_polygon"} <= kinds
     latitude, longitude = payload["center"]
     assert -90 <= latitude <= 90 and -180 <= longitude <= 180
+
+
+def test_payload_says_which_relation_removed_which_movement(tmp_path: Path) -> None:
+    """The page has to be able to name what already forbade a held movement.
+
+    A `restriction_effect_review` blocker holds movements it did not forbid, and the
+    answer is routinely a second relation - the mapper's shorter node-via one - that
+    forbade exactly those. Without the other relations in the payload the client can see
+    the movement is gone and never say by whose authority.
+    """
+    workspace = _generated_workspace(tmp_path)
+    payload = build_payload(workspace)
+    model = json.loads((workspace / "lane-model" / "preliminary.json").read_text())
+
+    assert model["restrictions"], "the fixture must exercise at least one restriction"
+    by_relation = {item["source_relation_id"]: item for item in payload["restrictions"]}
+    for restriction in model["restrictions"]:
+        carried = by_relation[restriction["source_relation_id"]]
+        assert carried["restriction"] == restriction["restriction"]
+        assert carried["status"] == restriction["status"]
+        assert carried["forbidden_connector_ids"] == restriction["forbidden_connector_ids"]
+
+    # Every id named must be a movement the page actually drew, or the client resolves a
+    # relation against nothing and silently drops the sentence that decides the finding.
+    drawn = {connector["identifier"] for connector in payload["connectors"]}
+    for item in payload["restrictions"]:
+        assert set(item["forbidden_connector_ids"]) <= drawn
 
 
 def test_every_finding_a_bulk_action_could_cover_carries_a_road_class(tmp_path: Path) -> None:

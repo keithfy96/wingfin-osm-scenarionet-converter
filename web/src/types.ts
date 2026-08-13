@@ -90,6 +90,22 @@ export interface ConnectorSummary {
   status: "active" | "review_required" | "forbidden";
 }
 
+/**
+ * A turn restriction and what it actually removed.
+ *
+ * `forbidden_connector_ids` is empty on a `review_required` restriction — one the
+ * generator could not enforce without also stopping traffic the relation does not
+ * name. Those are exactly the restrictions Stage 3 asks about, and the answer usually
+ * lies in a *different* relation here that forbade the same movements outright.
+ */
+export interface RestrictionSummary {
+  identifier: string;
+  source_relation_id: string;
+  restriction: string;
+  status: "enforced" | "already_satisfied" | "review_required";
+  forbidden_connector_ids: string[];
+}
+
 export interface GeoJsonFeature {
   type: "Feature";
   geometry: { type: string; coordinates: unknown };
@@ -97,13 +113,15 @@ export interface GeoJsonFeature {
 }
 
 export interface ReviewPayload {
-  payload_version: 1;
+  /** `PAYLOAD_VERSION` in review.py. A number, not a literal: it has moved once already. */
+  payload_version: number;
   identity: ReviewIdentity;
   center: [number, number];
   features: GeoJsonFeature[];
   findings: Finding[];
   lanes: LaneSummary[];
   connectors: ConnectorSummary[];
+  restrictions: RestrictionSummary[];
   counts: Record<string, number>;
 }
 
