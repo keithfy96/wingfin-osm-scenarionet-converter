@@ -60,6 +60,9 @@ FIXTURE = Path(__file__).parents[1] / "fixtures" / "osm" / "tiny.osm"
 SIGNALS = Path(__file__).parents[1] / "fixtures" / "osm" / "signals.osm"
 SINGLE_LANE = Path(__file__).parents[1] / "fixtures" / "osm" / "single-lane.osm"
 VIA_WAY_RESTRICTION = Path(__file__).parents[1] / "fixtures" / "osm" / "via-way-restriction.osm"
+RESTRICTED_DESTINATION = (
+    Path(__file__).parents[1] / "fixtures" / "osm" / "restricted-destination.osm"
+)
 
 
 def _workspace(tmp_path: Path) -> Path:
@@ -1869,3 +1872,86 @@ def test_a_surveyed_turn_tag_still_outranks_the_merge_ordering() -> None:
         assert target.lane_index == source.lane_index, (
             f"{from_id} idx{source.lane_index} landed on idx{target.lane_index}"
         )
+
+
+def _restricted_destination_model(tmp_path: Path) -> PreliminaryLaneModel:
+    workspace = tmp_path / "workspace"
+    acquire_osm(workspace=workspace, driving_side="left", osm_file=RESTRICTED_DESTINATION)
+    normalize_workspace(workspace=workspace, config=ConverterConfig(config_version=1))
+    generate_lane_model(workspace=workspace, config=ConverterConfig(config_version=1))
+    return PreliminaryLaneModel.model_validate_json(
+        (workspace / "lane-model" / "preliminary.json").read_bytes()
+    )
+
+
+def _live_targets(
+    model: PreliminaryLaneModel, source_way: str, target_way: str
+) -> dict[int, int]:
+    """Which lane index of `target_way` each lane index of `source_way` actually reaches."""
+    lanes = {lane.identifier: lane for lane in model.lanes}
+    return {
+        lanes[connector.from_lane_id].lane_index: lanes[connector.to_lane_id].lane_index
+        for connector in model.connectors
+        if connector.from_way_id == source_way
+        and connector.to_way_id == target_way
+        and connector.status != "forbidden"
+    }
+
+
+def test_a_forbidden_destination_is_not_counted_when_the_lanes_are_dealt_out(
+    tmp_path: Path,
+) -> None:
+    """Relation 900 removes way 110, so way 100's three lanes all turn into 120.
+
+    Read the other way round — destinations first, restrictions afterwards, which is what
+    this did until now — the approach is three lanes against six, the arithmetic does not
+    close, `_balanced_approach_assignment` stands aside, and the side rule hands the whole
+    right turn to the offside lane. idx1 and idx2 then end the node with nothing at all,
+    because the only movement left to them is the one relation 900 deletes. That is mosque
+    way 859423756, where every vehicle is required to turn right and only one lane could.
+    """
+    model = _restricted_destination_model(tmp_path)
+
+    assert _live_targets(model, "100", "120") == {0: 0, 1: 1, 2: 2}
+
+    # No lane of the approach is stranded, and no lane of the destination is starved.
+    fed = set(_live_targets(model, "100", "120").values())
+    assert fed == {0, 1, 2}
+
+
+def test_the_restriction_still_removes_the_movements_it_names(tmp_path: Path) -> None:
+    """Only the allocation is blinded to the forbidden destination; the movements to it are
+    still built. A restriction that deletes nothing leaves nothing on the map to explain
+    why the turn is not there, and `forbidden_connector_ids` is the record it was obeyed."""
+    model = _restricted_destination_model(tmp_path)
+
+    banned = [
+        connector
+        for connector in model.connectors
+        if connector.from_way_id == "100" and connector.to_way_id == "110"
+    ]
+    assert len(banned) == 3
+    assert {connector.status for connector in banned} == {"forbidden"}
+
+    effect = next(item for item in model.restrictions if item.source_relation_id == "900")
+    assert effect.status == "enforced"
+    assert sorted(effect.forbidden_connector_ids) == sorted(
+        connector.identifier for connector in banned
+    )
+
+
+def test_a_movement_kept_only_for_a_restriction_does_not_count_as_somewhere_to_go(
+    tmp_path: Path,
+) -> None:
+    """Case B: two lanes arrive at node 2 against three lanes of 220, so the counts do not
+    close and the balanced rule declines. The side rule still gives the right turn to the
+    offside lane alone, and idx1's only other movement is the one relation 910 deletes — so
+    the no-stranding catch has to fire even though `kept` was not empty when it looked.
+
+    Sharing one destination lane is the documented outcome where the arithmetic does not
+    close; being left with no exit at all is not.
+    """
+    model = _restricted_destination_model(tmp_path)
+
+    reached = _live_targets(model, "200", "220")
+    assert sorted(reached) == [0, 1], "a lane of way 200 was left with no live movement"

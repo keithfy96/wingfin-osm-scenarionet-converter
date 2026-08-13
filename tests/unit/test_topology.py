@@ -11,6 +11,7 @@ from osm_scenario.topology import (
     forbidden_by_node_restriction,
     movement_family,
     movement_side,
+    node_restriction_forbids,
     side_lane_index,
     signed_turn_angle,
     tagged_movement_side,
@@ -185,6 +186,22 @@ def test_node_only_restriction_forbids_other_transition() -> None:
     restriction = relation("only_straight_on", (("node", "1"),))
     assert not forbidden_by_node_restriction(candidate("a", "c"), restriction)
     assert forbidden_by_node_restriction(candidate("a", "exit"), restriction)
+
+
+@pytest.mark.parametrize("kind", ["no_straight_on", "only_straight_on"])
+@pytest.mark.parametrize("target", ["c", "exit"])
+@pytest.mark.parametrize("node", ["1", "2"])
+def test_the_ways_only_reading_matches_the_candidate_one(
+    kind: str, target: str, node: str
+) -> None:
+    """Generation asks this question twice: once while deciding which lane goes where,
+    before any candidate exists, and once to mark the movements afterwards. Two readings
+    would let the allocation discount a destination the enforcement then keeps, or the
+    reverse — so the way-triple form and the candidate form must never disagree."""
+    restriction = relation(kind, (("node", "1"),))
+    assert node_restriction_forbids(
+        from_way_id="a", to_way_id=target, junction_node_id=node, relation=restriction
+    ) == forbidden_by_node_restriction(candidate("a", target, node=node), restriction)
 
 
 def resolve(restriction: Relation, candidates: list[MovementCandidate]):

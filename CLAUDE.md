@@ -593,6 +593,40 @@ this change because three node-via `no_right_turn` relations name them precisely
 other was rejected. Only blockers gate export, so it asks nothing; it exists because the
 generator now chooses between two defensible enforcements.
 
+### A restriction has to be known before the lanes are dealt out, not after (v21)
+
+Node-via restrictions used to be read only at the end, over a candidate list that was already
+final — and **both** rules that decide where a lane lands had by then counted a destination
+that was about to be deleted. On mosque `859423756`, where rel 18555950 forbids the straight-on
+and every vehicle must therefore turn right, that cost two of three lanes their only exit:
+
+- `_balanced_approach_assignment` counted 3 lanes arriving against **6** lanes of destination,
+  did not close, and stood aside. Discount the forbidden destination and it is 3 against 3.
+- `_side_filtered_candidates` struck the right turn from idx1 and idx2 as offside-only, and its
+  no-stranding catch did not fire because `kept` was not empty — each lane still held the
+  straight-on, **which was there only because the filter deliberately keeps a movement a
+  restriction forbids so the restriction has something to act on**. The lane was judged to have
+  somewhere to go on the strength of a movement that existed in order to be deleted.
+
+`_restricted_groups` now hides those destinations from the two balanced rules, and the catch no
+longer counts a restriction-forbidden candidate as an exit. Four things not to re-derive:
+
+- **Only the allocation is blinded.** The movements are still generated, still forbidden, and
+  keep their ids. A restriction that deletes nothing leaves nothing on the map explaining why
+  the turn is missing.
+- **Nothing is hidden where that leaves the approach no destination at all.** With no survivors
+  there is no split to protect, and blinding the allocation only collapses the forbidden
+  movements onto one lane and moves their ids. junction-1 rel 16740674 is that case.
+- **`blocks_by_group`, the feeder list `_merge_side` compares, is deliberately not filtered.**
+  Tried and measured: no active connector changed, and the forbidden ids of **seven** relations
+  moved across both workspaces.
+- **`non_reverse_groups` / `_is_decision_node` must never be filtered either.** A forbidden
+  movement is still a movement geometrically; dropping it from that count can take a node below
+  the decision-node threshold, at which point the movement becomes a *continuation* — and a
+  restriction cannot act on a continuation.
+
+See `docs/mapping-algo-changes/2026-08-13-04:42:58-lanes-were-dealt-across-a-destination-a-restriction-forbids.md`.
+
 ### Starved middle lanes: mostly fixed, one left
 
 Two allocation rules now run before the proportional mapping, and between them they
@@ -602,6 +636,10 @@ cover both shapes where the lane arithmetic closes:
   (a lane peeling off cannot also be the straight-on lane). Added in v10.
 - `_balanced_merge_assignment` — **several** approaches into **one** destination
   (a merging link must not land on a lane the main road already feeds). Added in v11.
+
+Both count only the destinations a node-via restriction *leaves* (v21) — see "A restriction has
+to be known before the lanes are dealt out" above. Counting a road nobody may take turns a clean
+three-into-three into an ambiguous three-into-six and neither rule fires.
 
 Where the counts do **not** close, `_merge_side` (v20) still says which *side* of the
 destination an approach lands on: a road joins another from one side and has to land on

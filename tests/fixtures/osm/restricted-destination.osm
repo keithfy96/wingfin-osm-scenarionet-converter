@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A node-via restriction that forbids one of an approach's two destinations, so the lanes
+  have to be dealt across what is left rather than across everything the geometry offers.
+  Left-hand traffic, so a right turn is made from the offside lane (idx0, the one against
+  the centreline) and lane indices run centre-out.
+
+  Both cases are the shape of mosque node 8010943714: an approach bends left into one exit
+  and turns right into the other, and a `no_left_turn` removes the left one entirely.
+
+  case A, node 1 - the counts close once the forbidden exit is discounted
+
+                        110, 3 lanes  (forbidden from 100 by relation 900)
+                          ^
+                          |  +29 deg
+                          |            120, 3 lanes  (the only exit anyone may take)
+                          1 - - - - - -/
+                         /    -42 deg
+                        /
+                     100, 3 lanes
+
+      3 lanes arrive and 3 lanes of 120 leave, so every lane has exactly one destination
+      and the balanced rule deals them straight across: idx0 to idx0, idx2 to idx2.
+      Counting 110's 3 lanes as well makes it 3 against 6, which does not close, and the
+      side rule then hands the whole turn to idx0 and strands idx1 and idx2.
+
+  case B, node 2 - the counts do NOT close, so only the no-stranding catch can help
+
+                        210, 2 lanes  (forbidden from 200 by relation 910)
+                          ^
+                          |            220, 3 lanes
+                          2 - - - - - -/
+                         /
+                     200, 2 lanes
+
+      2 lanes arrive against 3 lanes of 220, so a lane really does serve more than one
+      movement and the balanced rule declines. idx1 is still not allowed to end the node
+      with nothing, and its only other movement is the one relation 910 deletes.
+-->
+<osm version="0.6" generator="osm-scenario-test">
+  <!-- case A -->
+  <node id="1" lat="3.150000" lon="101.700000" />
+  <node id="10" lat="3.149510" lon="101.699768" />
+  <node id="11" lat="3.150542" lon="101.699966" />
+  <node id="12" lat="3.150211" lon="101.700497" />
+
+  <!-- case B -->
+  <node id="2" lat="3.160000" lon="101.700000" />
+  <node id="20" lat="3.159510" lon="101.699768" />
+  <node id="21" lat="3.160542" lon="101.699966" />
+  <node id="22" lat="3.160211" lon="101.700497" />
+
+  <way id="100">
+    <nd ref="10" />
+    <nd ref="1" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="3" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="110">
+    <nd ref="1" />
+    <nd ref="11" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="3" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="120">
+    <nd ref="1" />
+    <nd ref="12" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="3" />
+    <tag k="oneway" v="yes" />
+  </way>
+
+  <way id="200">
+    <nd ref="20" />
+    <nd ref="2" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="2" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="210">
+    <nd ref="2" />
+    <nd ref="21" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="2" />
+    <tag k="oneway" v="yes" />
+  </way>
+  <way id="220">
+    <nd ref="2" />
+    <nd ref="22" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="3" />
+    <tag k="oneway" v="yes" />
+  </way>
+
+  <relation id="900">
+    <member type="way" ref="100" role="from" />
+    <member type="node" ref="1" role="via" />
+    <member type="way" ref="110" role="to" />
+    <tag k="type" v="restriction" />
+    <tag k="restriction" v="no_left_turn" />
+  </relation>
+  <relation id="910">
+    <member type="way" ref="200" role="from" />
+    <member type="node" ref="2" role="via" />
+    <member type="way" ref="210" role="to" />
+    <tag k="type" v="restriction" />
+    <tag k="restriction" v="no_left_turn" />
+  </relation>
+</osm>

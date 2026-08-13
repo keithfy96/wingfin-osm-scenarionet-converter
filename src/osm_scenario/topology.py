@@ -275,19 +275,38 @@ def restriction_roles(relation: Any) -> dict[str, list[tuple[str, str]]]:
     return roles
 
 
-def forbidden_by_node_restriction(candidate: MovementCandidate, relation: Any) -> bool:
+def node_restriction_forbids(
+    *, from_way_id: str, to_way_id: str, junction_node_id: str, relation: Any
+) -> bool:
+    """Whether a node-via restriction prohibits way `from` → way `to` at this node.
+
+    Takes the triple rather than a `MovementCandidate` so the question can also be asked
+    before any candidate exists — generation has to know which destinations a restriction
+    rules out *while it is deciding which lane goes where*, not only afterwards when it
+    comes to mark the movements. One reading of `no_*` / `only_*` for both, so the
+    allocation and the enforcement cannot drift apart.
+    """
     roles = restriction_roles(relation)
     from_ways = {value for kind, value in roles["from"] if kind == "way"}
     to_ways = {value for kind, value in roles["to"] if kind == "way"}
     via_nodes = {value for kind, value in roles["via"] if kind == "node"}
-    if not from_ways or not to_ways or candidate.junction_node_id not in via_nodes:
+    if not from_ways or not to_ways or junction_node_id not in via_nodes:
         return False
-    matches_to = candidate.to_way_id in to_ways
+    if from_way_id not in from_ways:
+        return False
+    matches_to = to_way_id in to_ways
     restriction = relation.tags.get("restriction", "")
-    if candidate.from_way_id not in from_ways:
-        return False
     return (restriction.startswith("no_") and matches_to) or (
         restriction.startswith("only_") and not matches_to
+    )
+
+
+def forbidden_by_node_restriction(candidate: MovementCandidate, relation: Any) -> bool:
+    return node_restriction_forbids(
+        from_way_id=candidate.from_way_id,
+        to_way_id=candidate.to_way_id,
+        junction_node_id=candidate.junction_node_id,
+        relation=relation,
     )
 
 

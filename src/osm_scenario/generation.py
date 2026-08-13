@@ -52,6 +52,7 @@ from osm_scenario.topology import (
     movement_family,
     movement_matches,
     movement_side,
+    node_restriction_forbids,
     restriction_roles,
     side_lane_index,
     signed_turn_angle,
@@ -61,7 +62,7 @@ from osm_scenario.topology import (
     way_adjacency,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v20"
+GENERATOR_VERSION = "direct-osm-stage2-v21"
 LANE_MODEL_SCHEMA_VERSION = 3
 
 # How much clear road to leave beyond the crossing carriageway when a lane is cut back at a
@@ -662,6 +663,54 @@ def _approach_blocks(
     return [blocks[key] for key in sorted(blocks)]
 
 
+def _restricted_groups(
+    approach: list[LaneFeature],
+    outgoing_groups: dict[GroupKey, list[LaneFeature]],
+    node_id: str,
+    node_restrictions: list[OsmRelation],
+) -> set[GroupKey]:
+    """Destinations a node-via restriction forbids this approach at this node.
+
+    The rules below deal an approach's lanes across its destinations, and a destination the
+    approach may not legally enter is not one of them. Asked afterwards — which is when the
+    restrictions used to be read — the arithmetic has already been done against a road nobody
+    may take, and a clean three-into-three becomes an ambiguous three-into-six.
+
+    Only the *allocation* is blinded. The movements themselves are still generated, because
+    a restriction that forbids nothing forbids nothing visibly: the red connectors on the
+    inspection map and `RestrictionEffect.forbidden_connector_ids` are the record that the
+    relation was read and obeyed.
+
+    Nothing is hidden where that would leave the approach with no destination at all. The
+    point of the filter is to stop a road nobody may take distorting the split between the
+    ones they may; with no survivors there is no split, and blinding the allocation only
+    collapses the forbidden movements onto one lane and moves their connector ids — which
+    costs whatever review decision was attached to them, for no gain to anybody driving.
+    """
+    if not node_restrictions:
+        return set()
+    from_way = approach[0].source_way_ids[0]
+    blocked = {
+        key
+        for key, targets in outgoing_groups.items()
+        if any(
+            node_restriction_forbids(
+                from_way_id=from_way,
+                to_way_id=targets[0].source_way_ids[0],
+                junction_node_id=node_id,
+                relation=relation,
+            )
+            for relation in node_restrictions
+        )
+    }
+    survivors = [
+        key
+        for key, targets in outgoing_groups.items()
+        if key not in blocked and not _is_exact_reverse(approach[0], targets[0])
+    ]
+    return blocked if survivors else set()
+
+
 def _kerb_first_key(source: LaneFeature, target: LaneFeature, driving_side: str) -> float:
     """Rank a movement by how far it turns toward the kerb, most kerbward first."""
     angle = signed_turn_angle(
@@ -721,6 +770,7 @@ def _balanced_merge_assignment(
     outgoing_groups: dict[GroupKey, list[LaneFeature]],
     *,
     driving_side: str,
+    blocked: dict[tuple[str, ...], set[GroupKey]] | None = None,
 ) -> dict[tuple[str, ...], dict[GroupKey, dict[str, str]]]:
     """Deal several approaches into the one carriageway they all join.
 
@@ -731,15 +781,20 @@ def _balanced_merge_assignment(
     the allocation unambiguous — at an ordinary crossroads each approach has several
     destinations, so nothing fires. Returns an empty mapping unless the approaches'
     lanes fill the destination exactly, leaving the proportional mapping to decide.
+
+    `blocked` names, per approach, the destinations a node-via restriction rules out for
+    it. They are dropped alongside the approach's own reverse, for the same reason: a
+    destination nothing may drive to is not one this approach apportions itself across.
     """
     if len(approaches) < 2:
         return {}
     destination: GroupKey | None = None
     for approach in approaches:
+        ruled_out = (blocked or {}).get(tuple(approach[0].source_edge), set())
         live = [
             key
             for key, targets in outgoing_groups.items()
-            if not _is_exact_reverse(approach[0], targets[0])
+            if not _is_exact_reverse(approach[0], targets[0]) and key not in ruled_out
         ]
         if len(live) != 1 or len(approach) != approach[0].lane_count:
             return {}
@@ -837,9 +892,17 @@ def _side_filtered_candidates(
     carries straight on is not stranded, so a continuation disables that fallback.
     Without this every lane of an approach feeds the exit, which is what the
     side rule exists to prevent.
+
+    **A movement kept only so a restriction can delete it is not somewhere to go.** It is
+    about to stop existing, so counting it as the lane's remaining exit strands the lane
+    on the strength of a road nobody may drive down — which is exactly how mosque
+    `859423756` idx1 and idx2 lost their right turn and ended the node with nothing. The
+    forbidden candidates still come back with the restored one; the restriction needs
+    them, the lane does not.
     """
     tagged = any(permission in {"left", "right"} for permission in source.turn_permissions)
     kept: list[MovementCandidate] = []
+    kept_live: list[MovementCandidate] = []
     removed: list[MovementCandidate] = []
     for candidate in candidates:
         side = movement_side(
@@ -855,15 +918,18 @@ def _side_filtered_candidates(
             and candidate.movement != "reverse"
             and source.lane_index != side_lane_index(side, source.lane_count)
         )
-        if wrong_side and not any(
+        restricted = any(
             forbidden_by_node_restriction(candidate, relation) for relation in node_restrictions
-        ):
+        )
+        if wrong_side and not restricted:
             removed.append(candidate)
-        else:
-            kept.append(candidate)
-    if kept or not removed or has_continuation:
+            continue
+        kept.append(candidate)
+        if not restricted:
+            kept_live.append(candidate)
+    if kept_live or not removed or has_continuation:
         return kept
-    return [min(removed, key=lambda item: (abs(item.angle_degrees), item.to_lane_id))]
+    return [*kept, min(removed, key=lambda item: (abs(item.angle_degrees), item.to_lane_id))]
 
 
 def _stranded_permission_fallback(
@@ -1970,19 +2036,36 @@ def build_lane_model(
         # lane at a time: asked separately, two destinations both claim the kerb.
         blocks = _approach_blocks(incoming, lane_lookup)
         blocks_by_edge = {tuple(block[0].source_edge): block for block in blocks}
+        # A destination a node-via restriction forbids is not one this approach is dealt
+        # across. Read here, before any of the three rules below, because all three decide
+        # *where a lane lands* and none of them can be right about that while counting a
+        # road nobody may take. The movements to it are still generated further down — the
+        # restriction has to have something to remove, and the reviewer has to see it.
+        blocked_groups = {
+            tuple(block[0].source_edge): _restricted_groups(
+                block, outgoing_groups, node_id, node_restrictions
+            )
+            for block in blocks
+        }
         approach_assignments: dict[tuple[str, ...], dict[GroupKey, dict[str, str]]] = {}
         for block in blocks:
+            edge = tuple(block[0].source_edge)
+            live_groups = {
+                key: targets
+                for key, targets in outgoing_groups.items()
+                if key not in blocked_groups[edge]
+            }
             assignment = _balanced_approach_assignment(
-                block, outgoing_groups, driving_side=driving_side
+                block, live_groups, driving_side=driving_side
             )
             if assignment is not None:
-                approach_assignments[tuple(block[0].source_edge)] = assignment
+                approach_assignments[edge] = assignment
         # A merge cannot also be a diverge: every approach of a clean merge brings
         # strictly fewer lanes than the one destination holds, so the rule above has
         # already declined each of them and there is nothing to overwrite.
         approach_assignments.update(
             _balanced_merge_assignment(
-                blocks, outgoing_groups, driving_side=driving_side
+                blocks, outgoing_groups, driving_side=driving_side, blocked=blocked_groups
             )
         )
         # Which approaches share each destination, for `_merge_side`. A merge is a fact
