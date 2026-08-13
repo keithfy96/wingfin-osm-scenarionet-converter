@@ -61,28 +61,6 @@ road-selection policy, builds a directed graph, reprojects it into local metres,
 audits the source data for missing lane counts, broken connectivity, restrictions and
 signals.
 
-### Inspect — the visual checkpoints
-
-```bash
-uv run osm-scenario inspect --osm-file ./workspaces/mosque/source/map.osm \
-  --workspace workspaces/mosque \
-  --driving-side left
-
-```
-
-`--view` takes five values:
-
-| View | What you see |
-| --- | --- |
-| `source` | Raw acquired OSM — which ways were included, which excluded, and why |
-| `normalized` | The directed, projected road graph |
-| `audit` | Stage 1B data audit: missing tags, restrictions, crossings, signals, direction warnings, plus OSM way/node search |
-| `stage-1` | The combined Stage 1 view (default) |
-| `review` | **The Stage 3 decision surface** over a generated lane model |
-
-Each writes a single self-contained HTML file into `<workspace>/inspection/`. Open it
-in a browser — no server needed.
-
 ### Stage 2 — generate the lane model
 
 ```bash

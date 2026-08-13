@@ -71,6 +71,7 @@ from osm_scenario.ego_route import (
     route_polyline,
     route_summary,
 )
+from osm_scenario.generation import MIN_TRIMMED_LANE_M
 from osm_scenario.ids import deterministic_id
 from osm_scenario.lane_model import ConnectorFeature, LaneFeature, PreliminaryLaneModel
 from osm_scenario.reachability_view import render_reachability_html
@@ -165,6 +166,12 @@ _DIVIDER_TYPE = "ROAD_LINE_BROKEN_SINGLE_WHITE"
 # below which those two copies are one line rather than two - the same threshold the rest of
 # the pipeline uses for "these two pieces of geometry are the same place".
 _SAME_LINE_M = 0.05
+
+# How close to `MIN_TRIMMED_LANE_M` a lane's centreline has to land to be the clamp rather than
+# a way that happens to be short. A trim is interpolated along the line, so the length comes back
+# a fraction of a millimetre off the constant; nothing else in either extract sits within 7 cm of
+# it, so the tolerance is picked to be unmistakably below that gap rather than tuned to a case.
+_STUB_LANE_TOLERANCE_M = 0.01
 
 # A junction turn carries no surveyed speed limit - it is not a way and has no `maxspeed` - and
 # the lanes either side of it may disagree. 30 km/h is the figure MetaDrive's own IDM would end
@@ -464,6 +471,38 @@ def _same_line(left: Any, right: Any) -> bool:
     second = _polyline(right)
     apart = min(np.abs(first - second).max(), np.abs(first - second[::-1]).max())
     return bool(apart <= _SAME_LINE_M)
+
+
+def _stub_lanes(model: PreliminaryLaneModel) -> set[str]:
+    """Lanes that survive only because the junction trim was clamped, and so sit in a junction.
+
+    Every lane is cut back from the junctions at its ends so a connector has room to bridge it.
+    A way shorter than its two setbacks together would trim to nothing, so `_trimmed_edge`
+    scales both setbacks down and stops at `MIN_TRIMMED_LANE_M` - which keeps the road, and is
+    right, but leaves that lane reaching further into the junction than any other. Its own
+    comment in `generation.py` says so, beside the `trim_clamped_edges` count.
+
+    The paint is what goes wrong there, not the lane. `junction-1`'s node 1927184814 is four
+    such ways in a loop around one open junction - 9 lanes, 18 boundaries, all of them inside
+    it - drawn as 2 m marks pointing four different ways across a box a car turns through. And
+    they are not only drawn: `ScenarioBlock` gives every line a ghost body, which is what sets
+    `on_white_continuous_line`, so a policy reading line contacts sees a violation mid-turn.
+
+    Length is the whole test, and it is exact rather than approximate. A lane comes out at
+    `MIN_TRIMMED_LANE_M` only when the clamp bound, and the clamp binding is what makes it
+    intrude; the next lanes up - 2.07 m, 2.37 m, 3.65 m - kept their full setbacks, so they end
+    outside both junctions and their markings are on open road. 28 of `junction-1`'s 285 lanes
+    and 43 of `mosque`'s 405 are clamped.
+    """
+    stubs: set[str] = set()
+    for lane in model.lanes:
+        points = _polyline(lane.centerline)
+        if len(points) < 2:
+            continue
+        length = float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum())
+        if length <= MIN_TRIMMED_LANE_M + _STUB_LANE_TOLERANCE_M:
+            stubs.add(lane.identifier)
+    return stubs
 
 
 def _divider_boundaries(
@@ -778,7 +817,11 @@ def _map_features(
             )
         features[bridge_id] = feature
 
+    # `_divider_boundaries` runs over every lane, stubs included, and must: it decides a line's
+    # style from its neighbours, so hiding the stubs from it would change a *surviving*
+    # neighbour's dashes. The stubs are dropped when the features are written, not before.
     dividers, superseded = _divider_boundaries(model, moves)
+    stubs = _stub_lanes(model)
     for lane in model.lanes:
         for boundary in lane.boundaries:
             if boundary.identifier in features:
@@ -786,7 +829,7 @@ def _map_features(
                     f"boundary {boundary.identifier} on lane {lane.identifier} shares an "
                     "id with another map feature"
                 )
-            if boundary.identifier in superseded:
+            if boundary.identifier in superseded or lane.identifier in stubs:
                 continue
             features[boundary.identifier] = {
                 "type": (
@@ -821,6 +864,13 @@ def _scenario(
     neighbours = _lane_neighbours(model)
     moves = _lane_change_moves(model)
     features = _map_features(model, neighbours, moves)
+    # Counted here, not inferred from the gap between what the model holds and what was
+    # written: `merged` is that gap, and letting the two reasons for a missing boundary share
+    # one number would report suppression as deduplication.
+    stubs = _stub_lanes(model)
+    stub_boundaries = sum(
+        len(lane.boundaries) for lane in model.lanes if lane.identifier in stubs
+    )
 
     # Checked over what the file actually says rather than over the resolved lane graph: the
     # written chain runs through the junction lanes, so it is that chain which must have no
@@ -913,15 +963,22 @@ def _scenario(
                 "edges": sum(
                     1 for item in features.values() if item["type"] == _BOUNDARY_TYPE
                 ),
-                # Boundaries the model holds, less the boundaries actually written. Counted by
-                # type rather than as `len(features) - len(lanes)`, which quietly stopped
-                # meaning "boundaries" once the junction turns became features too.
+                # Boundaries the model holds, less the boundaries actually written, less the
+                # ones `junction_stubs` accounts for. Counted by type rather than as
+                # `len(features) - len(lanes)`, which quietly stopped meaning "boundaries" once
+                # the junction turns became features too.
                 "merged": sum(len(lane.boundaries) for lane in model.lanes)
+                - stub_boundaries
                 - sum(
                     1
                     for item in features.values()
                     if item["type"] in (_BOUNDARY_TYPE, _DIVIDER_TYPE)
                 ),
+                # Markings left unpainted because their lane is a clamped trim sitting inside a
+                # junction - see `_stub_lanes`. Reported rather than folded into `merged`: a
+                # dropped duplicate and a deliberately blank junction are different facts, and
+                # this one is a choice a reader should be able to see us making.
+                "junction_stubs": stub_boundaries,
             },
             # Present only when `--signals` was given, and always marked `synthesised`.
             # OSM records that a signal exists and carries no cycle, split or offset, so a

@@ -491,6 +491,48 @@ Run `tools/drive.py --render offscreen` to check any of this without a display �
 `--render none` builds no terrain at all (`Terrain.reset` guards the whole path on
 `self.render or use_mesh_terrain`), so it checks the drive and not the view.
 
+Two things about markings are MetaDrive's and not ours, so do not go looking for them in
+`conversion.py`. **The 3D markings are a raster, not geometry**: `_construct_lane_line_segment`
+builds only a collision ghost, and what the eye sees is `BaseMap.get_semantic_map` painting
+every line with `cv2.polylines` at a hard-coded `white_line_thickness=2` **pixels**, so a line
+is `2 / pixels_per_meter` metres wide — 0.091 m at MetaDrive's own 22 px/m, 0.125 m at the 16
+`tools/drive.py` can fit on a 1024 m region. And **the white hairline round every road edge is
+drawn by nothing**: `terrain.frag.glsl` paints by value band (ground 0, lines 10, road 20) and
+`semantic_tex` is created with no filter, so the linear blend from road to grass passes through
+5–16 and the shader calls it white. Keith looked at both and chose to leave them.
+
+### A junction is not painted, and the lanes inside it are why
+
+`_map_features` writes boundary features for `model.lanes` only, so a `ConnectorFeature` — a
+junction turn — is a `LANE_SURFACE_STREET` polygon with no lines. A junction should therefore
+be bare road, and mostly is.
+
+**But some junctions have real lanes inside them.** A big intersection is often mapped as
+several nodes joined by short ways rather than one node: `junction-1`'s node `1927184814` is
+four one-way ways in a loop round the box. Those ways are shorter than the setbacks that cut
+every lane back from its junctions, so `_trimmed_edge` scales both setbacks down and stops at
+`MIN_TRIMMED_LANE_M` — keeping the road, which is right, and leaving a 2 m lane that reaches
+further into the junction than any other. `generation.py` counts these as `trim_clamped_edges`.
+
+Painted, that was eighteen 2 m marks pointing four ways across a box cars turn through — and
+not only cosmetic, because `ScenarioBlock` gives every line a ghost body and only a solid one
+sets `on_white_continuous_line`. `conversion._stub_lanes` now drops those boundaries at export.
+Three things not to re-derive:
+
+- **The test is the clamp, not a round number.** A lane measures `MIN_TRIMMED_LANE_M` only when
+  the clamp bound; the next ones up (2.07 m, 2.37 m, 3.65 m) kept their setbacks and end
+  outside both junctions, so their markings are on open road. At a 4 m threshold `junction-1`
+  loses 82 boundaries instead of 56 and `mosque` 108 instead of 86.
+- **Only the paint goes.** The lane polygon is still written — deleting the lane would cut the
+  network, and MetaDrive builds its surface from lane features alone.
+- **`_divider_boundaries` still runs over every lane, stubs included.** It decides broken vs
+  solid from a lane's neighbours, so hiding a stub from it restyles a *surviving* neighbour.
+  Suppress at write time, after the classification.
+
+`lane_markings.junction_stubs` reports the count, kept out of `merged` because a dropped
+duplicate and a deliberately blank junction are different facts. `tools/check_dataset.py`
+prints it.
+
 ### Conventions that bite
 
 - **OSM connectivity is via shared nodes.** Relations only carry turn restrictions.

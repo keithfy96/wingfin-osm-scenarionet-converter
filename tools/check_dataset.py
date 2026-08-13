@@ -115,13 +115,18 @@ def main() -> int:
             if feature.get("type") == "ROAD_LINE_BROKEN_SINGLE_WHITE"
             and _polyline_length(feature["polyline"]) <= 4.0
         )
+        stubs = (markings or {}).get("junction_stubs", 0)
         print(
-            "markings     {}{}{}".format(
+            "markings     {}{}{}{}".format(
                 ", ".join(f"{count} {name}" for name, count in sorted(styles.items()))
                 or "no boundaries",
                 f" · source {markings['source']}, {markings['merged']} second copies merged"
                 if markings
                 else " · no lane_markings metadata",
+                # Not a fault, and worth saying out loud: these are the markings of lanes the
+                # junction trim clamped, which sit inside a junction. Left in, a car turning
+                # through the box crosses them and the ghost bodies read as line violations.
+                f" · {stubs} left unpainted on junction stubs" if stubs else "",
                 f" · {short} divider(s) under 4 m, too short to dash" if short else "",
             )
         )

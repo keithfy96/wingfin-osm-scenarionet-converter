@@ -32,6 +32,7 @@ from osm_scenario.conversion import (
     convert_scenario,
     scenario_file_name,
 )
+from osm_scenario.generation import MIN_TRIMMED_LANE_M
 from osm_scenario.lane_model import (
     ConnectorFeature,
     LaneBoundary,
@@ -502,6 +503,91 @@ def test_lane_markings_say_the_style_was_derived_rather_than_surveyed() -> None:
     assert markings["source"] == "derived-from-lane-change-permissions"
     assert markings["dividers"] == 1
     assert markings["edges"] == 2
+    assert markings["merged"] == 1
+
+
+def test_a_lane_clamped_to_the_trim_minimum_is_paved_but_not_painted() -> None:
+    """The stub is real road inside a junction, so it keeps its surface and loses its lines.
+
+    Two junctions closer together than their setbacks leave a lane of exactly
+    `MIN_TRIMMED_LANE_M`, which by construction reaches further into the junction than any
+    other lane. Its markings land in the open middle - at `junction-1`'s node 1927184814,
+    eighteen of them pointing four ways across a box a car turns through.
+    """
+    stub = _lane(
+        "a",
+        x0=0.0,
+        x1=MIN_TRIMMED_LANE_M,
+        boundaries=[
+            LaneBoundary(
+                identifier="edge-1", side="left", points=_straight(0.0, MIN_TRIMMED_LANE_M)
+            )
+        ],
+    )
+    features = _built(_model(lanes=[stub, *_model().lanes[1:]]))["map_features"]
+    assert "edge-1" not in features
+    # The lane itself is untouched: deleting it would cut the network, and MetaDrive builds
+    # its road surface from the lane features alone.
+    assert features["a"]["type"] == "LANE_SURFACE_STREET"
+
+
+def test_a_lane_that_kept_its_setbacks_is_still_painted() -> None:
+    """Just above the clamp is a short way, not a stub, and it ends outside both junctions.
+
+    The nearest real lanes above the clamp measure 2.07 m and 2.37 m, so the criterion has to
+    separate them from 2.00 m rather than round them together.
+    """
+    short = _lane(
+        "a",
+        x0=0.0,
+        x1=MIN_TRIMMED_LANE_M + 0.07,
+        boundaries=[
+            LaneBoundary(
+                identifier="edge-1",
+                side="left",
+                points=_straight(0.0, MIN_TRIMMED_LANE_M + 0.07),
+            )
+        ],
+    )
+    features = _built(_model(lanes=[short, *_model().lanes[1:]]))["map_features"]
+    assert features["edge-1"]["type"] == "ROAD_EDGE_BOUNDARY"
+
+
+def test_suppressing_a_stub_does_not_restyle_its_neighbour() -> None:
+    """`_divider_boundaries` has to see the stub even though the stub will not be written.
+
+    It reads a lane's neighbours to decide which lines are broken. Hide the stub from it and a
+    *surviving* neighbour's dashes change, which is a marking moved on a road nobody touched.
+    """
+    model = _sharing_a_divider()
+    lanes = list(model.lanes)
+    lanes[0] = lanes[0].model_copy(
+        update={
+            "centerline": _straight(0.0, MIN_TRIMMED_LANE_M),
+            "polygon": _surface(0.0, MIN_TRIMMED_LANE_M),
+        }
+    )
+    shortened = model.model_copy(update={"lanes": lanes})
+    features = _built(shortened)["map_features"]
+    assert "a-left" not in features and "a-right" not in features
+    # `a2-right` was the copy dropped as a duplicate of `a-left`, and stays dropped: which of
+    # the two survives is decided before this, so suppression cannot resurrect it.
+    assert "a2-right" not in features
+    assert features["a2-left"]["type"] == "ROAD_EDGE_BOUNDARY"
+
+
+def test_a_suppressed_marking_is_reported_rather_than_counted_as_a_duplicate() -> None:
+    """`merged` means "the second copy of a shared line". A blank junction is a different fact."""
+    model = _sharing_a_divider()
+    lanes = list(model.lanes)
+    lanes[0] = lanes[0].model_copy(
+        update={
+            "centerline": _straight(0.0, MIN_TRIMMED_LANE_M),
+            "polygon": _surface(0.0, MIN_TRIMMED_LANE_M),
+        }
+    )
+    markings = _built(model.model_copy(update={"lanes": lanes}))["metadata"]["lane_markings"]
+    assert markings["junction_stubs"] == 2
     assert markings["merged"] == 1
 
 
