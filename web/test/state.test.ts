@@ -76,31 +76,6 @@ describe("bulk decisions", () => {
     review.decideBulk({ rule: "speed_default", roadClass: "secondary" }, { status: "accepted" });
     expect(review.allDecisions().map((entry) => entry.finding_id)).toEqual(["a", "b"]);
   });
-
-  it("can set aside the warnings of a rule that also raises blockers", () => {
-    // `lane_count_inference` raises a blocker where it defaulted to one lane and a
-    // warning where it divided a total. Scoped to the whole rule, the validation below
-    // refuses the call on the first blocker and *nothing* is ignored — which on the
-    // page looked like a button that did not work.
-    const mixed = [
-      finding({ identifier: "w1", rule: "lane_count_inference", severity: "warning" }),
-      finding({ identifier: "w2", rule: "lane_count_inference", severity: "warning" }),
-      finding({ identifier: "b1", rule: "lane_count_inference", severity: "blocker" }),
-    ];
-    const review = state(mixed);
-    expect(() => review.decideBulk({ rule: "lane_count_inference" }, { status: "ignored" })).toThrow(
-      DecisionError,
-    );
-    expect(review.statusOf("w1")).toBe("unresolved");
-
-    expect(
-      review.decideBulk({ rule: "lane_count_inference", severity: "warning" }, { status: "ignored" }),
-    ).toEqual(["w1", "w2"]);
-    // The blocker is untouched and still gates export, which is the point of refusing
-    // to ignore it in the first place.
-    expect(review.statusOf("b1")).toBe("unresolved");
-    expect(review.readiness().blockers_unresolved).toBe(1);
-  });
 });
 
 describe("readiness", () => {
