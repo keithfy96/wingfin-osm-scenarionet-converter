@@ -118,8 +118,9 @@ def main() -> int:
         stubs = (markings or {}).get("junction_stubs", 0)
         kerbs = (markings or {}).get("junction_kerbs", 0)
         ends = (markings or {}).get("road_ends_unpainted", 0)
+        sealed = (markings or {}).get("surfaces_sealed", 0)
         print(
-            "markings     {}{}{}{}{}{}".format(
+            "markings     {}{}{}{}{}{}{}".format(
                 ", ".join(f"{count} {name}" for name, count in sorted(styles.items()))
                 or "no boundaries",
                 f" · source {markings['source']}, {markings['merged']} second copies merged"
@@ -137,6 +138,10 @@ def main() -> int:
                 # Never painted - a line there draws as a stop line - and counted so the blank
                 # reads as a decision rather than as something nobody looked at.
                 f" · {ends} road end(s) left bare" if ends else "",
+                # Not a marking, but the road the markings are drawn on: lane surfaces grown to
+                # swallow a hole in the tarmac beside them, which would otherwise render as a
+                # white line nothing drew. See `conversion._sealed_surfaces`.
+                f" · {sealed} surface(s) sealed" if sealed else "",
                 f" · {short} divider(s) under 4 m, too short to dash" if short else "",
             )
         )

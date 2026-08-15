@@ -46,14 +46,14 @@ import pickle
 import re
 import statistics
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import networkx as nx
 import numpy as np
-from shapely import STRtree
+from shapely import STRtree, contains_xy, segmentize, union_all
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon
 from shapely.ops import linemerge, unary_union
 
@@ -211,6 +211,43 @@ _KERB_JOIN_REACH_M = 0.25
 # the radius. Mitred, nothing moves except where a gap is filled - measured, the kerb sits a median
 # 0.004 m from the true road edge and only reaches 0.46 m at the notch mouths it now bridges.
 _KERB_GAP_CLOSE_M = 0.35
+
+# How much of a shared edge two surfaces must have before a gap between them may be merged into
+# one of them. Numerical only: the wedge comes out of `sealed.difference(road)`, so the parts of
+# its ring that lie on a real surface are built from that surface's own coordinates and coincide
+# exactly. The tolerance is here for the parts that came through the two buffers, not for slop.
+_SEAM_CONTACT_M = 1e-6
+
+# The grid the road surfaces are unioned on - see `_road_union`. A nanometre, which is six orders
+# of magnitude below the tolerances anything else here works in and well inside what a double
+# holds at these coordinates, so it decides nothing about the geometry and only stops the union
+# losing a whole surface.
+_UNION_GRID_M = 1e-9
+
+# The furthest apart two points on a sealed polygon's ring may be. Nothing geometric depends on
+# it - `segmentize` only adds points to edges that already exist - and it is here for MetaDrive's
+# `sanity_check`, which measures where a polygon is by averaging its vertices. See the write-back
+# in `_sealed_surfaces`. At 5 m the worst polygon-against-centreline reading on either extract is
+# back to what an untouched map already gives.
+_RING_STEP_M = 5.0
+
+# How far to either side of a candidate kerb the road is looked for. A kerb separates road from
+# not-road; a line with tarmac on both sides of it is the wall of a slot between two surfaces,
+# which is the defect `_KERB_GAP_CLOSE_M` exists to remove and this catches where the slot is too
+# wide for it to seal.
+#
+# **The test is every sample, not most of them**, and the arcs themselves chose that. Scored over
+# both extracts, a wall of a slot reads 1.000 and is 0.38-1.00 m long - 6 of them on `mosque` and
+# 2 on `junction-1` - and the next score down is 0.750. Those are arcs of 2-4 m that run along a
+# seam for part of their length and along real road edge for the rest, and the majority rule threw
+# one out on `junction-1`: `12b7284b7f`, 3.80 m of kerb round a **118 m² traffic island**, which
+# happens to pass within 0.8 m of a lane and a junction bridge that fail to meet. An arc that is
+# half seam and half kerb is a kerb passing a seam, and the seam is the surfaces' fault.
+#
+# **An island cannot be caught by this however narrow it is**, which is why it can be a blunt
+# geometric test: an island is a hole in the union, so the probe lands outside the road on the
+# island side. `mosque`'s narrowest real island is 0.97 m across and `junction-1`'s 1.55 m.
+_KERB_SIDE_PROBE_M = 0.8
 
 # The shortest kerb line worth drawing, and it is numerical dust only. **`_MIN_KERB_M` was 2.0 m,
 # and calling that a proxy for "do not paint on road a car drives on" is what shipped the notch
@@ -926,6 +963,162 @@ def _uncreased(arc: LineString) -> list[np.ndarray]:
     ]
 
 
+def _road_union(surfaces: Sequence[Polygon]) -> Polygon | MultiPolygon:
+    """Every road surface as one shape - and `unary_union` is not reliable enough to do it.
+
+    On both extracts, plain `unary_union` over the lane polygons **silently drops one of them**:
+    `3cc5be39c0caf1c2` on `mosque`, 141.17 m² of lane, and `2fe4cf2f93...` on `junction-1`. The
+    union comes back valid, one piece, and simply does not cover that lane - union it a second
+    time and it appears. Unioning the same shapes on a grid of `_UNION_GRID_M` covers all 610 and
+    all 434, and the area rises by exactly the missing lane's.
+
+    That matters here beyond tidiness: a surface missing from the union is a hole in the road, and
+    a hole in the road is where this module draws kerb lines.
+    """
+    return union_all(list(surfaces), grid_size=_UNION_GRID_M)
+
+
+def _closed(road: Polygon | MultiPolygon) -> Polygon | MultiPolygon:
+    """`road` with every gap under `_KERB_GAP_CLOSE_M` sealed up.
+
+    Mitred, not rounded: a round join would pull every convex corner of the network out and back
+    by the radius, moving the whole outline. Mitred, nothing moves except where a gap is filled.
+    """
+    return road.buffer(
+        _KERB_GAP_CLOSE_M, join_style="mitre", mitre_limit=5.0
+    ).buffer(-_KERB_GAP_CLOSE_M, join_style="mitre", mitre_limit=5.0)
+
+
+def _sealed_surfaces(features: MutableMapping[str, dict[str, Any]]) -> int:
+    """Close the holes between road surfaces, by growing one of the surfaces that borders each.
+
+    **A hole in the tarmac draws as a white line, and nothing paints it.** A lane surface is built
+    by offsetting its own centreline, so where one edge of a road hands over to the next the two
+    rectangles meet end-to-end with square caps a few degrees apart, and a wedge of nothing is left
+    between them. `terrain.frag.glsl:115` paints everything in `5 < value < 16` white and the
+    semantic texture is filtered, so the blend from road surface (20) across a gap to ground (0)
+    passes straight through that band. Keith: *"lines that go into the lanes where the tarmac does
+    not fully cover it."* 80 of these on `mosque` were wider than a texel - 168.7 m², 69 of them
+    enclosed by road on every side, the widest 0.687 m - and 13 sat within 3 m of the driven line.
+
+    It is not the kerb rule and it is not adjacent lanes: three pairs of side-by-side lanes on
+    `mosque` way `859423754` share their facing edges to 0.0000 m. It is only the joins along a
+    road, and it is the same mitre gap the v25 change measured at a median 0.213 m.
+
+    Each wedge is added to the **one** surface it shares the most boundary with, because the union
+    is what MetaDrive paints and a wedge only needs covering once. That is what holds this to ~80
+    polygons on `mosque` rather than the 336 that border one. Surface is only ever added, no
+    feature is created or destroyed, and no painted line moves - the lines come from `left`/`right`
+    in `generation.py` and are not touched here, so a lane's kerb stays where it was and the tarmac
+    now reaches it.
+
+    Returns how many polygons grew, for `metadata.lane_markings`.
+    """
+    identifiers: list[str] = []
+    shapes: list[Polygon] = []
+    for identifier, feature in features.items():
+        if feature["type"] != _LANE_TYPE:
+            continue
+        shape = _surface(np.asarray(feature["polygon"], dtype=np.float64))
+        if shape is not None:
+            identifiers.append(identifier)
+            shapes.append(shape)
+    if len(shapes) < 2:
+        return 0
+
+    road = _road_union(shapes)
+    holes = _closed(road).difference(road)
+    if holes.is_empty:
+        return 0
+    tree = STRtree(shapes)
+
+    grown: dict[int, Polygon] = {}
+    for wedge in holes.geoms if hasattr(holes, "geoms") else [holes]:
+        if not isinstance(wedge, Polygon) or wedge.is_empty:
+            continue
+        reach = wedge.buffer(_SEAM_CONTACT_M)
+        contacts = sorted(
+            (
+                (shapes[index].exterior.intersection(reach).length, int(index))
+                for index in tree.query(reach)
+            ),
+            reverse=True,
+        )
+        contacts = [(length, index) for length, index in contacts if length > 0.0]
+        # A gap bounded by one surface alone is that surface's own concavity, not a seam between
+        # two of them, and closing it would change the shape of a road on nobody's evidence.
+        if len(contacts) < 2:
+            continue
+        # **A wedge is shared out among the surfaces along it, not given to one of them.** Given
+        # whole to its longest neighbour, `mosque`'s largest snakes 190 m through a junction and
+        # takes a 40 m lane's polygon with it - which MetaDrive's own `sanity_check` rejects,
+        # because the centroid of that polygon then stands more than 100 m from the centroid of
+        # the centreline it belongs to. Each surface takes only the part of the wedge within
+        # `_KERB_GAP_CLOSE_M` of itself, longest shared edge first, so what a polygon gains is
+        # always beside it.
+        remaining: Any = wedge
+        for _, index in contacts:
+            if remaining.is_empty:
+                break
+            share = remaining.intersection(shapes[index].buffer(_KERB_GAP_CLOSE_M))
+            for part in share.geoms if hasattr(share, "geoms") else [share]:
+                if not isinstance(part, Polygon) or part.is_empty:
+                    continue
+                # A union has to come out as one simple ring, because `ScenarioLane` reads the
+                # polygon straight through (`edge_road_network.py:121`). A part meeting its
+                # surface across a sliver a millionth of a metre wide unions to a `MultiPolygon`,
+                # which is what the buffered copy is for, and one that would close a ring round
+                # an island leaves an interior - there the answer is the next surface along.
+                for piece in (part, part.buffer(_SEAM_CONTACT_M)):
+                    merged = unary_union([grown.get(index, shapes[index]), piece])
+                    if isinstance(merged, Polygon) and not merged.interiors:
+                        grown[index] = merged
+                        remaining = remaining.difference(piece)
+                        break
+
+    for index, shape in grown.items():
+        # Spaced out before it is written, and MetaDrive's own gate is the reason.
+        # `ScenarioDescription.sanity_check` compares the **mean of the vertices** of the polygon
+        # against the mean of the vertices of the centreline (`scenario_description.py:270`) and
+        # refuses the map at 100 m. A ring is 5 points, so a 400 m lane that gains a hundred of
+        # them at one end has its vertex mean dragged there - measured 14.9 m -> 136.8 m on
+        # `mosque` way `ee2c3f00ec3383e0`, and the dataset stopped loading. Segmentizing inserts
+        # points along the edges the ring already has, so the polygon is **the same shape to the
+        # last decimal** and its vertex mean becomes a perimeter centre again.
+        features[identifiers[index]]["polygon"] = np.asarray(
+            segmentize(shape, _RING_STEP_M).exterior.coords, dtype=np.float64
+        )
+    return len(grown)
+
+
+def _road_on_both_sides(line: LineString, road: Polygon | MultiPolygon) -> bool:
+    """Whether `line` has tarmac on both sides of it, which means it is not a kerb.
+
+    See `_KERB_SIDE_PROBE_M`. Sampled rather than reasoned about, because the arcs this rejects
+    are the walls of a slot two surfaces left between them and a slot has no other description.
+    """
+    points = np.asarray(line.coords, dtype=np.float64)
+    if len(points) < 2 or line.length <= COINCIDENT_M:
+        return False
+    steps = np.linspace(0.0, line.length, max(3, int(line.length / 0.5) + 1))
+    heads = np.asarray(
+        [line.interpolate(min(line.length, at + 0.01)).coords[0] for at in steps]
+    )
+    tails = np.asarray([line.interpolate(at).coords[0] for at in steps])
+    reach = heads - tails
+    span = np.hypot(reach[:, 0], reach[:, 1])
+    usable = span > COINCIDENT_M
+    if not usable.any():
+        return False
+    normal = np.column_stack([-reach[:, 1], reach[:, 0]])[usable] / span[usable, None]
+    base = tails[usable]
+    both = np.ones(len(base), dtype=bool)
+    for side in (1.0, -1.0):
+        probe = base + normal * side * _KERB_SIDE_PROBE_M
+        both &= contains_xy(road, probe[:, 0], probe[:, 1])
+    return bool(both.all())
+
+
 def _kerb_rings(road: Polygon | MultiPolygon) -> list[LineString]:
     """Every edge of the road network a kerb could run along.
 
@@ -1056,14 +1249,11 @@ def _junction_kerb_boundaries(
     if not surfaces:
         return {}, 0
 
-    road = unary_union(surfaces)
+    road = _road_union(surfaces)
     # Traced round the road with its seams closed up, but judged against the real surfaces: what
     # `_KERB_INSET_M` must not let a line onto is tarmac a car drives on, and sealing a notch does
     # not make one. See `_KERB_GAP_CLOSE_M` for why the seams have to go before the ring is taken.
-    sealed = road.buffer(
-        _KERB_GAP_CLOSE_M, join_style="mitre", mitre_limit=5.0
-    ).buffer(-_KERB_GAP_CLOSE_M, join_style="mitre", mitre_limit=5.0)
-    candidate = unary_union(_kerb_rings(sealed))
+    candidate = unary_union(_kerb_rings(_closed(road)))
     if lines:
         candidate = candidate.difference(
             unary_union(lines).buffer(_KERB_PAINT_ALLOWANCE_M)
@@ -1104,6 +1294,11 @@ def _junction_kerb_boundaries(
             line = LineString(points)
             if line.interpolate(0.5, normalized=True).within(inside):
                 continue
+            # A kerb has road on one side of it and not the other. Where a slot between two
+            # surfaces is too wide for `_KERB_GAP_CLOSE_M` to seal, its two walls are both on the
+            # ring and both look like road edge, and this is what says they are not.
+            if _road_on_both_sides(line, road):
+                continue
             # Keyed on the whole line, because where it is is the only thing about it that is
             # stable: it is merged from however many turns happen to meet there and belongs to
             # no one of them. Its ends and its length are not enough - two arcs on either side
@@ -1126,8 +1321,8 @@ def _map_features(
     model: PreliminaryLaneModel,
     neighbours: Mapping[str, tuple[list[str], list[str]]],
     moves: Mapping[str, list[str]],
-) -> tuple[dict[str, dict[str, Any]], set[str], int]:
-    """The map features, which of them are kerb lines, and how many road ends were left bare.
+) -> tuple[dict[str, dict[str, Any]], set[str], int, int]:
+    """The map features, which are kerbs, how many road ends are bare, how many surfaces grew.
 
     The second element is not a nicety. `metadata.lane_markings` counts edges and merged copies
     **by feature type**, so a kerb line - a `ROAD_EDGE_BOUNDARY` belonging to no lane - would
@@ -1135,6 +1330,9 @@ def _map_features(
 
     The third is reported for the opposite reason: a bar of bare edge across the end of a road is
     a deliberate blank, and a blank nothing counts reads as a gap in the numbers.
+
+    The fourth is the blast radius of `_sealed_surfaces` - the only step in this file that changes
+    a feature rather than adding one, so the number a reader needs is how many it changed.
     """
     features: dict[str, dict[str, Any]] = {}
     # `neighbours` is still accepted, and still what the rest of Stage 6 reasons about, but the
@@ -1187,6 +1385,11 @@ def _map_features(
                 "lane_id": lane.identifier,
             }
 
+    # The holes between surfaces are closed before the kerb is traced, and it matters that it is
+    # this way round: the kerb runs along the road's edge, and until the tarmac is whole the
+    # road's edge includes the walls of every gap in it.
+    sealed = _sealed_surfaces(features)
+
     # Last, and over the features the loops above decided rather than over the model: the kerb is
     # drawn where the road has an edge and no line covers it, so it has to see every surface that
     # was written and every line that was written, which is exactly what `features` now holds.
@@ -1197,7 +1400,7 @@ def _map_features(
                 f"junction kerb {kerb_id} shares an id with another map feature"
             )
         features[kerb_id] = feature
-    return features, set(kerbs), road_ends
+    return features, set(kerbs), road_ends, sealed
 
 
 def _scenario(
@@ -1221,7 +1424,7 @@ def _scenario(
     """
     neighbours = _lane_neighbours(model)
     moves = _lane_change_moves(model)
-    features, kerbs, road_ends = _map_features(model, neighbours, moves)
+    features, kerbs, road_ends, sealed = _map_features(model, neighbours, moves)
     # Counted here, not inferred from the gap between what the model holds and what was
     # written: `merged` is that gap, and letting the two reasons for a missing boundary share
     # one number would report suppression as deduplication.
@@ -1353,6 +1556,11 @@ def _scenario(
                 # painted, because a line there draws as a stop line where there is none. Counted
                 # so the blank is a stated fact rather than a hole in the numbers.
                 "road_ends_unpainted": road_ends,
+                # Lane surfaces grown to swallow a hole in the tarmac beside them - see
+                # `_sealed_surfaces`. Not a marking, but it belongs beside these: every other
+                # number here counts a line that was or was not drawn, and this counts the road
+                # those lines are drawn on being made whole first.
+                "surfaces_sealed": sealed,
             },
             # Present only when `--signals` was given, and always marked `synthesised`.
             # OSM records that a signal exists and carries no cycle, split or offset, so a

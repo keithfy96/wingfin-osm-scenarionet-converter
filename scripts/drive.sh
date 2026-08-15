@@ -17,6 +17,7 @@
 #   METADRIVE_PYTHON  the MetaDrive checkout's interpreter
 #   GPU               auto (default), nvidia, or integrated
 #   LINE_WIDTH_M      painted lane-line width in metres; drive.py's own default applies
+#   LINE_INTERVAL_M   how finely a painted line is sampled; 2.0 restores MetaDrive's dashes
 #                     when unset, and a --line-width-m after -- still wins over this
 
 # shellcheck source=scripts/_common.sh
@@ -86,6 +87,9 @@ esac
 ARGS=(tools/drive.py "$DATASET" --render 3D)
 if [[ -n "${LINE_WIDTH_M:-}" ]]; then
     ARGS+=(--line-width-m "$LINE_WIDTH_M")
+fi
+if [[ -n "${LINE_INTERVAL_M:-}" ]]; then
+    ARGS+=(--line-interval-m "$LINE_INTERVAL_M")
 fi
 # Last wins in argparse, so anything repeated after -- overrides what this script chose.
 ARGS+=(${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"})

@@ -22,7 +22,7 @@ import pytest
 from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import unary_union
 
-from osm_scenario import signal_plan
+from osm_scenario import conversion, signal_plan
 from osm_scenario.apply_review import _sha256
 from osm_scenario.config import ConverterConfig
 from osm_scenario.conversion import (
@@ -31,11 +31,13 @@ from osm_scenario.conversion import (
     _LANE_TYPE,
     _MAX_KERB_TURN_DEG,
     ConversionError,
+    _closed,
     _kerb_rings,
     _lane_change_moves,
     _lane_neighbours,
     _map_features,
     _reachability,
+    _road_union,
     _scenario,
     convert_scenario,
     scenario_file_name,
@@ -628,7 +630,7 @@ def _real_models() -> list[tuple[str, PreliminaryLaneModel]]:
 
 
 def _kerbs(model: PreliminaryLaneModel) -> tuple[dict[str, Any], set[str]]:
-    features, kerbs, _ = _map_features(
+    features, kerbs, _, _ = _map_features(
         model, _lane_neighbours(model), _lane_change_moves(model)
     )
     return features, kerbs
@@ -654,6 +656,14 @@ def _road_edge(features: dict[str, Any]) -> tuple[Any, list[LineString]]:
     return road, lines
 
 
+# What `_end_alignment` returns when an end has no paint near enough to compare against. It has
+# to read as *neither* a break nor a road end: a break in one continuous kerb has paint at both
+# of its ends by definition, and a road end is square to paint at both. Returning 1.0 for both -
+# which an earlier version did - calls every unknown a break, and a road end that the surface
+# sealing moved 0.35 m clear of the line it used to touch is exactly that case.
+_UNKNOWN_END = (0.0, 1.0)
+
+
 def _end_alignment(arc: LineString, lines: list[LineString]) -> tuple[float, float]:
     """|cos| between `arc` and the nearest drawn line, at each of its two ends.
 
@@ -662,7 +672,7 @@ def _end_alignment(arc: LineString, lines: list[LineString]) -> tuple[float, flo
     """
     points = np.asarray(arc.coords, dtype=np.float64)
     if len(points) < 2:
-        return (1.0, 1.0)
+        return _UNKNOWN_END
     seen = []
     for tip, step in (
         (points[0], points[0] - points[min(3, len(points) - 1)]),
@@ -672,7 +682,7 @@ def _end_alignment(arc: LineString, lines: list[LineString]) -> tuple[float, flo
         node = Point(tip)
         near = [line for line in lines if line.distance(node) <= 0.25]
         if span <= 1e-3 or not near:
-            return (1.0, 1.0)
+            return _UNKNOWN_END
         line = min(near, key=lambda item: item.distance(node))
         along = line.project(node)
         back = np.asarray(line.interpolate(max(0.0, along - 1.0)).coords[0])
@@ -680,9 +690,40 @@ def _end_alignment(arc: LineString, lines: list[LineString]) -> tuple[float, flo
         reach = ahead - back
         length = float(np.hypot(*reach))
         if length <= 1e-3:
-            return (1.0, 1.0)
+            return _UNKNOWN_END
         seen.append(abs(float(np.dot(step / span, reach / length))))
     return (min(seen), max(seen))
+
+
+def _touches_a_slot(piece: LineString, road: Any) -> bool:
+    """Whether `piece` runs along - or up to - a slot between two surfaces that fail to meet.
+
+    Two surfaces that do not quite meet leave a slot, and a slot has road on both sides of it.
+    Where one is too wide for `_KERB_GAP_CLOSE_M`, its walls are left bare on purpose, and so are
+    the few centimetres at each end where the slot opens on to the real road edge - a line across
+    the mouth of a hole would be a line drawn over nothing. Neither is a break in a kerb.
+
+    So the reach goes `_KERB_SIDE_PROBE_M` past both ends, and one sample is enough. Written out
+    here rather than borrowed from `conversion`, like `_end_alignment` beside it: a test that
+    filtered its own input with the code under test would agree with a bug for free.
+    """
+    if len(piece.coords) < 2 or piece.length <= 1e-3:
+        return False
+    reach = 0.8
+    for at in np.linspace(-reach, piece.length + reach, max(5, int(piece.length / 0.25) + 5)):
+        clamped = min(max(at, 0.0), piece.length)
+        here = np.asarray(piece.interpolate(clamped).coords[0])
+        ahead = np.asarray(piece.interpolate(min(piece.length, clamped + 0.01)).coords[0])
+        step = ahead - here
+        span = float(np.hypot(*step))
+        if span <= 1e-9:
+            continue
+        along = step / span
+        here = here + along * (at - clamped)
+        normal = np.array([-along[1], along[0]])
+        if all(road.contains(Point(here + normal * side * reach)) for side in (1.0, -1.0)):
+            return True
+    return False
 
 
 def _unpainted_edge(features: dict[str, Any]) -> list[tuple[LineString, tuple[float, float]]]:
@@ -700,13 +741,152 @@ def _unpainted_edge(features: dict[str, Any]) -> list[tuple[LineString, tuple[fl
         _KERB_GAP_CLOSE_M, join_style="mitre", mitre_limit=5.0
     ).buffer(-_KERB_GAP_CLOSE_M, join_style="mitre", mitre_limit=5.0)
     rings = unary_union(_kerb_rings(sealed))
-    bare = rings.difference(unary_union(lines).buffer(1 / 16))
+    paint = unary_union(lines)
+    bare = rings.difference(paint.buffer(1 / 16))
     pieces = bare.geoms if hasattr(bare, "geoms") else [bare]
+    # A drawn line is 2 texels wide and centred on its polyline, so it covers a texel either
+    # side. A piece that never leaves that band is not a gap in the paint - it is road edge
+    # running a few centimetres beside its own line, which is what sealing a wedge at the
+    # outside of a bend leaves behind. A real break has paint at its two ends and none between.
+    covered = paint.buffer(2 / 16)
     return [
         (piece, _end_alignment(piece, lines))
         for piece in pieces
-        if not piece.is_empty and piece.length > 0.02
+        if not piece.is_empty
+        and piece.length > 0.02
+        and not piece.difference(covered).is_empty
+        # A slot too wide for the closing above still has two walls, and neither is a road edge.
+        # Left bare on purpose, so counting one as a break would ask for the very marks on open
+        # tarmac Keith reported.
+        and not _touches_a_slot(piece, road)
     ]
+
+
+def _widest(shape: Any) -> float:
+    """The widest circle that fits inside `shape`, by bisection on a negative buffer.
+
+    A hole between two surfaces is a snake rather than a blob, so its area says nothing about
+    whether it can be seen. What can be seen is how far across it is at its widest.
+    """
+    low, high = 0.0, 3.0
+    for _ in range(18):
+        middle = (low + high) / 2
+        if shape.buffer(-middle / 2).is_empty:
+            high = middle
+        else:
+            low = middle
+    return low
+
+
+def _surfaces(features: dict[str, Any]) -> dict[str, Polygon]:
+    return {
+        identifier: Polygon(item["polygon"]).buffer(0)
+        for identifier, item in features.items()
+        if item["type"] == _LANE_TYPE and len(item["polygon"]) >= 4
+    }
+
+
+def test_no_hole_is_left_in_the_tarmac_wider_than_the_line_that_would_draw_on_it() -> None:
+    """The road has to be whole, because a hole in it paints itself.
+
+    Lane surfaces are each built from their own centreline, so where one edge of a road hands
+    over to the next their square end caps leave a wedge of nothing between them - up to 0.687 m
+    across. `terrain.frag.glsl:115` whitens everything in `5 < value < 16` and the semantic
+    texture is filtered, so the blend from road (20) across the gap to ground (0) draws a line
+    nobody put there. Keith saw them running into the lane he was driving in: 80 wider than a
+    texel on `mosque` and 87 on `junction-1` before `_sealed_surfaces`.
+
+    The threshold is the width of a drawn line, 1/8 m: two texels of `mosque`'s 2048 m terrain
+    square against this machine's 32768 px ceiling, and about what a real road marking measures.
+    A hole narrower than the paint beside it cannot read as a mark. What is left after sealing is
+    0.011 m at its widest on `mosque` and 0.061 m on `junction-1`, against 0.687 m and 0.609 m
+    before, and 0.008 m² and 0.060 m² of hole in total against 168.7 m² and 43.8 m².
+    """
+    models = _real_models()
+    if not models:
+        pytest.skip("workspaces/ is gitignored and not present")
+    for name, model in models:
+        features, _ = _kerbs(model)
+        road = _road_union(list(_surfaces(features).values()))
+        holes = _closed(road).difference(road)
+        pieces = [
+            piece
+            for piece in (holes.geoms if hasattr(holes, "geoms") else [holes])
+            if piece.area > 1e-9 and _widest(piece) > 1 / 8
+        ]
+        assert not pieces, (
+            f"{name}: {len(pieces)} hole(s) in the tarmac wider than a texel, "
+            f"widest {max(_widest(piece) for piece in pieces):.3f} m"
+        )
+
+
+def test_sealing_a_surface_only_ever_adds_to_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_sealed_surfaces` is the one step here that changes a feature, so it must only grow one.
+
+    Every polygon it writes contains the polygon it was given, no feature appears or disappears,
+    and the road gains exactly the area of the holes that were closed - which is what says the
+    wedges went where they were meant to and nothing came along with them.
+
+    The unsealed side is taken by turning the step off rather than by rebuilding the polygons
+    here, so what is compared is this module's own output either way.
+    """
+    models = _real_models()
+    if not models:
+        pytest.skip("workspaces/ is gitignored and not present")
+    for name, model in models:
+        with monkeypatch.context() as patched:
+            patched.setattr(conversion, "_sealed_surfaces", lambda features: 0)
+            plain, _, _, _ = _map_features(
+                model, _lane_neighbours(model), _lane_change_moves(model)
+            )
+        sealed, _, _, grown = _map_features(
+            model, _lane_neighbours(model), _lane_change_moves(model)
+        )
+        before, after = _surfaces(plain), _surfaces(sealed)
+        assert set(before) == set(after), f"{name}: sealing added or removed a surface"
+        assert grown, f"{name}: nothing was sealed, so the check proved nothing"
+        for identifier, shape in before.items():
+            assert after[identifier].buffer(1e-9).contains(shape), (
+                f"{name}: {identifier} lost area to the sealing"
+            )
+        road = _road_union(list(before.values()))
+        holes = _closed(road).difference(road)
+        gained = _road_union(list(after.values())).area - road.area
+        # Only hole, and very nearly all of it. The shortfall is the few wedges whose parts do
+        # not all reach a surface within `_KERB_GAP_CLOSE_M` - 0.008 m2 on `mosque` and 0.054 m2
+        # on `junction-1`, none of it wider than a road marking, which the test above pins. The
+        # 0.01 m2 the other way is `_SEAM_CONTACT_M`, the micrometre a part is grown by where it
+        # meets its surface across a numerical sliver.
+        assert gained <= holes.area + 0.01, (
+            f"{name}: road gained {gained:.2f} m2 against {holes.area:.2f} m2 of hole - "
+            "sealing invented tarmac"
+        )
+        assert holes.area - gained < 0.1, (
+            f"{name}: {holes.area - gained:.3f} m2 of hole left unsealed"
+        )
+
+
+def test_the_road_union_does_not_quietly_lose_a_surface() -> None:
+    """Plain `unary_union` drops a whole lane on both extracts. `_road_union` is why it does not.
+
+    141.17 m² of `mosque` and 296 m² of `junction-1`, valid input, valid output, simply not
+    covered - union the same shapes a second time and they appear. It matters beyond tidiness:
+    a surface missing from the union is a hole in the road, and a hole in the road is where the
+    kerb is drawn.
+    """
+    models = _real_models()
+    if not models:
+        pytest.skip("workspaces/ is gitignored and not present")
+    for name, model in models:
+        features, _ = _kerbs(model)
+        shapes = _surfaces(features)
+        road = _road_union(list(shapes.values()))
+        lost = [
+            identifier
+            for identifier, shape in shapes.items()
+            if road.intersection(shape).area < shape.area * 0.999
+        ]
+        assert not lost, f"{name}: {len(lost)} surface(s) missing from the road: {lost[:3]}"
 
 
 def test_a_road_whose_edges_are_already_painted_is_given_no_kerb_at_all() -> None:

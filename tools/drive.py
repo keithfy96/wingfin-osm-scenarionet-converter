@@ -30,6 +30,12 @@ settings that fix that can be reached from it. What it leaves at its defaults:
   wide and its real width moves with the size of the map. `--line-width-m` asks in metres
   instead and works out the pixels; see `_set_line_width`.
 
+* **A painted line is drawn short, and that is a fault rather than a setting.**
+  `resample_polyline` steps with `np.arange(0, length, interval)` and never reaches the endpoint,
+  so every line over 4 m loses up to a whole interval off its end - 554.7 m of paint across 585
+  of `mosque`'s 690 painted lines. `_keep_line_ends` puts it back, unconditionally. The interval
+  is `--line-interval-m`, because MetaDrive's 2 m also sags inside every curve.
+
 * **`height_scale` (50).** `use_mesh_terrain` is false by default, so the car drives on a flat
   collision plane at z=0 while the *visible* ground is a noise heightfield around it. On
   `junction-1` at 50, the ground within 25 m of the drive reaches +10.4 m and 12% of it stands
@@ -71,6 +77,20 @@ FALLBACK_MAX_TEXTURE = 16384
 # 1024 m square at 32 - wrong in both directions from opposite ends. Asking in metres is the
 # only form that is right on both. 0 restores MetaDrive's own pixel counts.
 LINE_WIDTH_M = 0.15
+
+# How finely a painted line is sampled before it is drawn into the semantic texture. MetaDrive's
+# own default is 2 m (`base_map.py:194`, and `terrain.py:620` never passes anything else), which
+# on a curve lays 2 m chords inside an arc whose road polygon is filled at full resolution - so
+# the tarmac shows past its own line. At 0.25 m the paint is off the true edge by more than a
+# texel over about a metre of `mosque`'s 23 km of painted line, against 52.7 m of bare road edge
+# at 2 m.
+#
+# **It also moves the dashes, and that is the one thing here a reader will notice.** A broken line
+# is drawn by skipping `floor(STRIPE_LENGTH * 2 / interval)` samples, so at 2 m it comes out 2 m
+# on / 2 m off and at anything finer 3 m / 3 m. 3 m is what MetaDrive's own `STRIPE_LENGTH = 1.5`
+# asks for and the 2 m is the flooring; `--line-interval-m 2.0` puts the old dashes back and still
+# keeps the line ends, which is a separate fix - see `_keep_line_ends`.
+LINE_INTERVAL_M = 0.25
 
 # Ground either side of the flattened road, in metres. MetaDrive's 7 leaves our lanes as
 # narrow ribbons because they are single carriageways rather than Waymo's full road surfaces.
@@ -206,11 +226,11 @@ def _set_semantic_detail(pixels_per_meter: int) -> None:
     TerrainProperty.get_semantic_map_pixel_per_meter = classmethod(lambda cls: pixels_per_meter)
 
 
-def _set_line_width(thickness_px: int) -> None:
-    """Pin how many pixels wide a painted lane line is.
+def _set_line_width(thickness_px: int, sample_interval_m: float) -> None:
+    """Pin how wide a painted lane line is, and how finely it is sampled before it is painted.
 
-    The second monkeypatch, and it has to *override* rather than re-default: `terrain.py:625`
-    passes `white_line_thickness=2, yellow_line_thickness=3` explicitly, over
+    The second monkeypatch, and the thickness has to *override* rather than re-default:
+    `terrain.py:625` passes `white_line_thickness=2, yellow_line_thickness=3` explicitly, over
     `BaseMap.get_semantic_map`'s own defaults of 1 and 1. So the wrapper drops whatever the
     caller asked for. There is no config key between the two.
 
@@ -218,6 +238,10 @@ def _set_line_width(thickness_px: int) -> None:
     `conversion.py` writes only `ROAD_EDGE_BOUNDARY` and `ROAD_LINE_BROKEN_SINGLE_WHITE` - so
     the yellow value is unreachable today, and a different one would be an unexplained
     difference on the first map that does have one.
+
+    `line_sample_interval` is *added* rather than overridden - `terrain.py:620` never passes it,
+    so its default of 2 m stands and there is nothing to drop. See `_keep_line_ends` for what
+    that interval costs and `LINE_INTERVAL_M` for the dashes it moves.
 
     Nothing in the MetaDrive checkout is edited; delete this call and the defaults return.
     """
@@ -228,9 +252,50 @@ def _set_line_width(thickness_px: int) -> None:
     def with_line_width(self, *arguments, **keywords):
         keywords["white_line_thickness"] = thickness_px
         keywords["yellow_line_thickness"] = thickness_px
+        keywords["line_sample_interval"] = sample_interval_m
         return original(self, *arguments, **keywords)
 
     BaseMap.get_semantic_map = with_line_width
+
+
+def _keep_line_ends() -> None:
+    """Stop MetaDrive throwing away the last piece of every painted line.
+
+    `metadrive/utils/math.py:269 resample_polyline` steps with `np.arange(0, length, interval)`,
+    which **never includes the endpoint**, and `scenario_map.py:74/90` runs it over every line
+    longer than `interval * 2` before the raster is painted. So every line over 4 m is drawn
+    short by up to a whole interval: **554.7 m of paint discarded across 585 of `mosque`'s 690
+    painted lines** and 448.2 m across 453 of `junction-1`'s 548, a mean 0.95 m off the end of
+    each. It takes lane edges, dividers and junction kerbs alike, so a kerb butted 0.10 m into
+    the line beside it has both ends chopped off and the join it was built to close reopens.
+
+    What a reader sees is road edge with no thick line on it and only the shader's own hairline -
+    Keith: *"some of the edges are still not containing proper thick lane edges."* Measured
+    against the road outline at one texel: `mosque` 324.0 m of it, of which 185.0 m is purely
+    this and 52.7 m more is the chord sag a finer interval removes; `junction-1` 420.8 m, 203.5 m
+    and 101.4 m. What is left at both is **86.3 m and 115.9 m, which is the 39 and 38 road ends**
+    `_junction_kerb_boundaries` leaves bare on purpose and nothing else - the same figure as if
+    the resampling were removed altogether.
+
+    The third and last monkeypatch. Both importers took the name rather than the module, so the
+    two bindings are rebound separately and nothing else in MetaDrive imports it: `scenario_map`
+    is the raster, `scenario_block` the collision ghosts, which must agree with what is drawn.
+    """
+    import numpy as np
+    from metadrive.component.map import scenario_map
+    from metadrive.component.scenario_block import scenario_block
+
+    original = scenario_map.resample_polyline
+
+    def to_the_end(points, target_distance):
+        resampled = original(points, target_distance)
+        last = np.asarray(points)[-1]
+        if len(resampled) and np.allclose(resampled[-1], last):
+            return resampled
+        return np.vstack([resampled, last[: resampled.shape[1]]])
+
+    scenario_map.resample_polyline = to_the_end
+    scenario_block.resample_polyline = to_the_end
 
 
 def _ground_around(engine, path, radius_m=25):
@@ -321,6 +386,14 @@ def main() -> int:
         "1 px is the floor, so a very large map cannot go as thin as a small one. 0 uses "
         "MetaDrive's own 2 px / 3 px.",
     )
+    parser.add_argument(
+        "--line-interval-m",
+        type=float,
+        default=LINE_INTERVAL_M,
+        help="How finely a painted line is sampled before it is drawn, in metres. MetaDrive's "
+        f"own value is 2.0, which sags inside every curve. Default {LINE_INTERVAL_M}. Anything "
+        "under 1.5 also makes broken lines 3 m / 3 m instead of 2 m / 2 m; 2.0 restores both.",
+    )
     parser.add_argument("--height-scale", type=int, default=HEIGHT_SCALE)
     parser.add_argument("--drivable-area-extension", type=int, default=DRIVABLE_AREA_EXTENSION_M)
     parser.add_argument(
@@ -393,17 +466,23 @@ def main() -> int:
     # Metres in, pixels out, and the two do not meet exactly: `cv2.polylines` takes an integer
     # and cannot go below 1, so on a big map the floor decides the width rather than the
     # request does. Say which happened rather than rounding quietly.
+    dashes = 2.0 if arguments.line_interval_m > 1.5 else 3.0
     if arguments.line_width_m > 0:
         thickness = max(1, round(arguments.line_width_m * pixels_per_meter))
         drawn = thickness / pixels_per_meter
         floored = "; 1 px is the floor at this resolution" if thickness == 1 else ""
         print(
             f"lane lines   {thickness} px = {drawn:.3f} m "
-            f"(asked {arguments.line_width_m:.3f} m{floored})"
+            f"(asked {arguments.line_width_m:.3f} m{floored}), sampled every "
+            f"{arguments.line_interval_m:.2f} m, dashes {dashes:.0f} m on / {dashes:.0f} m off"
         )
-        _set_line_width(thickness)
+        _set_line_width(thickness, arguments.line_interval_m)
     else:
         print("lane lines   MetaDrive's own 2 px / 3 px, as asked")
+
+    # Unconditional, and not behind `--line-width-m`: a line drawn short is a fault in the
+    # renderer rather than a preference about how it looks. See `_keep_line_ends`.
+    _keep_line_ends()
 
     from metadrive.component.sensors.rgb_camera import RGBCamera
     from metadrive.envs.scenario_env import ScenarioEnv

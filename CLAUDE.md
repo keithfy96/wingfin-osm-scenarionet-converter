@@ -631,6 +631,14 @@ feature changes — and export-time, so no fingerprint moves. Seven things not t
   wall lies exactly *on* the boundary, so it passes cleanly — the stray count read 0 while 238 marks
   sat on the tarmac, telling the truth about the wrong thing. It is measured against the real
   surfaces, never the closed ones.
+- **`_road_on_both_sides` is what does see a notch wall**, and it asks the question directly: a kerb
+  separates road from not-road, so tarmac at ±`_KERB_SIDE_PROBE_M` (0.8 m) along the arc's **whole**
+  length means it is the wall of a slot the closing could not reach. 6 such on `mosque` and 2 on
+  `junction-1`, all 0.38–1.00 m. **Whole length, not most of it**: the next score down is 0.750, and
+  those are 2–4 m arcs that are seam for part of their length and road edge for the rest — a
+  majority rule threw out 3.80 m of kerb round a 118 m² traffic island on `junction-1`. An island
+  can never be caught by this however narrow, because an island is a hole in the union and the probe
+  lands outside the road on that side; `mosque`'s narrowest is 0.97 m.
 - **A road that stops must never be painted across.** `_node_setbacks` leaves the end of every road
   square, so the network's outline runs straight over it, and filling that gap draws a stop line
   where there is none — with a ghost body, on road a car drives along. `_ROAD_END_SQUARENESS`
@@ -661,18 +669,52 @@ acceptance check asked whether the road outline was within **0.20 m** of paint, 
 than the paint itself, and passed 393 m of edge on `mosque` that renders bare. Any check here uses
 1/16 m.
 
-**One cause of the hairline is MetaDrive's and is not fixed here.** `get_boundary_line_vector`
-(`scenario_map.py:61`) runs `resample_polyline(line, 2.0)` over every boundary polyline longer than
-4 m before painting it, while the road polygon is filled at full resolution — so on a curve the
-2 m chords sag inside and the tarmac shows past its own line. Measured by rebuilding MetaDrive's
-semantic raster from our pickles: **72% of the bare edge left on `mosque`** (61.2 m → 17.4 m in the
-140 m square round the ego with the resampling removed), and it hits the original lane edge lines
-exactly as hard as the kerbs. `get_semantic_map` takes `line_sample_interval` and `terrain.py:620`
-never passes it; `tools/drive.py` already monkeypatches that function for line width, so one
-keyword would do it — 0.25 m takes the 30 m square round the ego from 23.7 m to 6.9 m on `mosque`
-and 4.2 m to 0.3 m on `junction-1`, for 0.05 s of extra terrain build. **Not done**, because it
-also moves the broken-line dashes from 2 m/2 m to 3 m/3 m (`points_to_skip = floor(STRIPE_LENGTH *
-2 / interval)` floors to 1 at interval 2), and that is Keith's eye to judge.
+### The road has to be whole before the lines on it mean anything (2026-08-16)
+
+**A hole in the tarmac draws itself as a white line.** A lane surface is offset from its own
+centreline, so where one edge of a road hands over to the next their square caps leave a wedge —
+and the shader's `5 < value < 16` band catches the blend from road (20) across it to ground (0).
+`mosque` carried **78 of these wider than a texel, 172 m², the widest 0.687 m**, 13 of them within
+3 m of the driven line; `junction-1` 85 and 45.5 m². That is what Keith saw running into his lane,
+and it is missing road rather than paint. `conversion._sealed_surfaces` closes them, sharing each
+wedge out among the surfaces along it. Details and the four constants:
+`docs/mapping-algo-changes/2026-08-16-04:50:16-holes-in-the-tarmac-painted-themselves.md`.
+
+Two of them are worth having here, because both are MetaDrive gates rather than geometry:
+
+- **`sanity_check` measures where a polygon is by averaging its vertices**
+  (`scenario_description.py:270`) and refuses the map past 100 m. A ring is 5 points, so a 400 m
+  lane that gains a hundred at one end reads as 136.8 m out. `_RING_STEP_M` segmentizes a sealed
+  ring at 5 m, which adds points to edges that already exist and changes no shape.
+- **`unary_union` silently drops a whole lane** on both extracts — 141.17 m² of `mosque` and
+  295.9 m² of `junction-1`, valid in, valid out, that lane not covered. `_road_union` unions on a
+  1e-9 grid instead. It had been invisible because nothing asked.
+
+**MetaDrive draws every painted line short, and `tools/drive.py` now puts it back.**
+`resample_polyline` (`utils/math.py:269`) steps with `np.arange(0, length, interval)`, which never
+includes the endpoint, and `scenario_map.py:74/90` runs it over every line longer than
+`interval * 2`. So a line over 4 m loses up to a whole interval off its end — **554.7 m of paint
+across 585 of `mosque`'s 690 painted lines**, mean 0.95 m, and 448.2 m across 453 of
+`junction-1`'s 548. It takes lane edges, dividers and kerbs alike, so the 0.10 m butt-join the kerb
+makes into the line beside it is chopped off at both ends. `_keep_line_ends` rebinds the name in
+the two modules that imported it — `scenario_map` for the raster, `scenario_block` for the ghosts —
+and it is unconditional, because a line drawn short is a fault and not a preference.
+
+The **interval** is the older half of this, and it is a preference: at 2 m the chords sag inside
+every curve while the road polygon is filled at full resolution. `--line-interval-m` (default
+**0.25**, `LINE_INTERVAL_M` in `.env`) passes `line_sample_interval` through the wrapper that
+already sets the line width — `terrain.py:620` never passes it, so there is nothing to override.
+**It moves the broken-line dashes from 2 m/2 m to 3 m/3 m**, because `points_to_skip =
+floor(STRIPE_LENGTH * 2 / interval)` floors to 1 at interval 2; 3 m is what MetaDrive's own
+`STRIPE_LENGTH = 1.5` asks for and the 2 m is the flooring artefact. `--line-interval-m 2.0` puts
+the old dashes back and still keeps the line ends.
+
+Together, road edge carrying no thick line: **`mosque` 324.0 m → 86.3 m** and **`junction-1`
+420.8 m → 115.9 m**, split 185.0 m / 52.7 m and 203.5 m / 101.4 m between the two halves. What is
+left is the 39 and 38 road ends left bare on purpose **and nothing else** — the same figure as if
+the resampling were removed altogether. An earlier version of this section put the whole of the
+remaining bare edge down to the chord sag; the truncation is the larger half and had not been
+diagnosed.
 
 **But some junctions have real lanes inside them.** A big intersection is often mapped as
 several nodes joined by short ways rather than one node: `junction-1`'s node `1927184814` is
