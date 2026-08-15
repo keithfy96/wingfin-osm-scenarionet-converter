@@ -14,8 +14,10 @@ from shapely.geometry import Point as ShapelyPoint
 from osm_scenario.acquisition import acquire_osm
 from osm_scenario.config import ConverterConfig
 from osm_scenario.generation import (
+    ALIGNMENT_MAX_TURN_DEG,
     GenerationError,
     TaperTarget,
+    _aligned_blocks,
     _ambiguity_causes,
     _ambiguity_reason,
     _balanced_approach_assignment,
@@ -865,6 +867,170 @@ def test_placement_tagged_ways_on_the_real_maps_line_up_with_what_feeds_them() -
                 "degrees on a straight run"
             )
     assert seen, "none of the joins this test exists for were in any generated model"
+
+
+def test_untagged_roads_carrying_on_across_the_real_maps_run_straight_through() -> None:
+    """The second half of what Keith reported, on the ways OSM never tagged.
+
+    Way 776021087 is a two-lane stretch of Persiaran Perdana between three-lane stretches of
+    it, in both extracts, and carries no `placement`. Way 935525163 is the same shape on
+    mosque. Measured before `_aligned_blocks`: 3.78, 3.70, 6.26 and 2.30 degrees of bend at
+    the joins below.
+    """
+    straight_runs = {
+        ("776021090", "776021087"),  # mosque: the junction in Keith's screenshot
+        ("776021089", "776021087"),  # junction-1: the same place, split differently
+        ("776021087", "776370584"),
+        ("935525164", "935525163"),
+        ("935525163", "935525162"),
+    }
+
+    def heading(before: Point2D, after: Point2D) -> float:
+        return math.atan2(after.y - before.y, after.x - before.x)
+
+    seen = 0
+    for name, model in _generated_models():
+        lanes = {lane.identifier: lane for lane in model.lanes}
+        for connector in model.connectors:
+            if connector.status == "forbidden" or connector.movement != "through":
+                continue
+            leaves, enters = lanes[connector.from_lane_id], lanes[connector.to_lane_id]
+            if (leaves.source_way_ids[0], enters.source_way_ids[0]) not in straight_runs:
+                continue
+            seen += 1
+            turn = heading(*enters.centerline[:2]) - heading(*leaves.centerline[-2:])
+            bend = abs((math.degrees(turn) + 180.0) % 360.0 - 180.0)
+            assert bend <= 0.5, (
+                f"{name} way {leaves.source_way_ids[0]} idx{leaves.lane_index} into way "
+                f"{enters.source_way_ids[0]} idx{enters.lane_index} still bends {bend:.2f} "
+                "degrees on a straight run"
+            )
+    assert seen, "none of the joins this test exists for were in any generated model"
+
+
+def _straight_run(
+    lane_count: int, *, way: str, node_from: str, node_to: str, start: float
+) -> list[LaneFeature]:
+    """One centred block of `lane_count` lanes running due east from `start`."""
+    return [
+        LaneFeature(
+            identifier=f"{way}-{index}",
+            source_way_ids=[way],
+            source_edge=[node_from, node_to, "0"],
+            lane_index=index,
+            lane_count=lane_count,
+            direction="forward",
+            road_class="secondary",
+            width_m=3.5,
+            speed_limit_kph=50.0,
+            centerline=[
+                Point2D(x=start, y=(index + 0.5 - 0.5 * lane_count) * 3.5),
+                Point2D(x=start + 40.0, y=(index + 0.5 - 0.5 * lane_count) * 3.5),
+            ],
+            polygon=[Point2D(x=0.0, y=0.0), Point2D(x=1.0, y=0.0), Point2D(x=0.0, y=0.0)],
+            boundaries=[],
+            turn_permissions=[],
+        )
+        for index in range(lane_count)
+    ]
+
+
+def _run_alignment(
+    lanes: list[LaneFeature],
+    links: list[tuple[str, str, str]],
+    *,
+    pinned: set[str] | None = None,
+    centred: set[str] | None = None,
+) -> dict[str, float]:
+    """`_aligned_blocks` over hand-built lanes; returns how far each lane ended up moving."""
+    offsets = {
+        lane.identifier: (lane.lane_index + 0.5 - 0.5 * lane.lane_count) * lane.width_m
+        for lane in lanes
+    }
+    before = {lane.identifier: lane.centerline[0].y for lane in lanes}
+    _aligned_blocks(
+        lanes,
+        [],
+        links,
+        offsets,
+        pinned or set(),
+        {lane.identifier for lane in lanes} if centred is None else centred,
+        max_turn_degrees=ALIGNMENT_MAX_TURN_DEG,
+    )
+    return {
+        lane.identifier: round(lane.centerline[0].y - before[lane.identifier], 3) for lane in lanes
+    }
+
+
+def test_a_road_that_carries_on_is_placed_where_the_road_behind_it_is() -> None:
+    """Three lanes into two, the offside lane peeling off: the two that continue must not move.
+
+    Both blocks are centred on their own line, so the two-lane one balances 1.75 m from where
+    the three-lane one does and every surviving lane steps sideways on a dead-straight road.
+    """
+    wide = _straight_run(3, way="w", node_from="a", node_to="b", start=0.0)
+    narrow = _straight_run(2, way="n", node_from="b", node_to="c", start=40.0)
+    # idx1 and idx2 of the wide block carry on; idx0 peels off and is not in the pairing.
+    links = [("b", "w-1", "n-0"), ("b", "w-2", "n-1")]
+
+    moved = _run_alignment(wide + narrow, links)
+    assert moved["w-0"] == moved["w-1"] == moved["w-2"] == 0.0, "the wider road must not move"
+    assert moved["n-0"] == moved["n-1"] == 1.75, "the road carrying on takes the wider position"
+
+
+def test_alignment_stands_aside_where_the_step_is_not_a_defect() -> None:
+    """Each guard, on the shape that made it necessary."""
+    wide = _straight_run(3, way="w", node_from="a", node_to="b", start=0.0)
+    narrow = _straight_run(2, way="n", node_from="b", node_to="c", start=40.0)
+    links = [("b", "w-1", "n-0"), ("b", "w-2", "n-1")]
+    joining = _straight_run(1, way="j", node_from="x", node_to="b", start=0.0)
+
+    # A second feeder makes it a merge: the joining way has its own line and the taper's job
+    # is to close the gap, which alignment must not pre-empt.
+    merged = _run_alignment(wide + narrow + joining, [*links, ("b", "j-0", "n-1")])
+    assert set(merged.values()) == {0.0}
+
+    # A two-way way's block sits half a carriageway off its line by design, so its offset is
+    # not commensurable with a centred one. junction-1 `1016771782` into `106667716`.
+    straddled = _run_alignment(
+        wide + narrow, links, centred={lane.identifier for lane in narrow}
+    )
+    assert set(straddled.values()) == {0.0}
+
+    # The survey outranks the inference: a `placement`-tagged block never moves, and its
+    # neighbour takes its position instead.
+    pinned = _run_alignment(wide + narrow, links, pinned={"n-0", "n-1"})
+    assert pinned["n-0"] == pinned["n-1"] == 0.0
+    assert pinned["w-0"] == pinned["w-1"] == pinned["w-2"] == -1.75
+
+    # Lane pairs that disagree are a road genuinely widening, not a block in the wrong place:
+    # mosque `777816410` into `777816409` pairs idx0 to idx0 and idx1 to idx2.
+    widening = _straight_run(2, way="v", node_from="z", node_to="a", start=-40.0)
+    disagreeing = _run_alignment(
+        widening + wide, [("a", "v-0", "w-0"), ("a", "v-1", "w-2")]
+    )
+    assert set(disagreeing.values()) == {0.0}
+
+
+def test_alignment_will_not_follow_a_road_round_a_corner() -> None:
+    """A continuation link carries no turn angle, so `_aligned_blocks` measures one.
+
+    "Carries straight on at a node that is not a decision node" is a much looser test than
+    "the same block position applies to both": junction-1 `1016771782` turns 22.24 degrees
+    into `106667716` and is still a direct continuation.
+    """
+    wide = _straight_run(3, way="w", node_from="a", node_to="b", start=0.0)
+    narrow = _straight_run(2, way="n", node_from="b", node_to="c", start=40.0)
+    for lane in narrow:  # swing the whole block round by 22 degrees about its own start
+        first = lane.centerline[0]
+        radians = math.radians(22.0)
+        lane.centerline[1] = Point2D(
+            x=first.x + 40.0 * math.cos(radians), y=first.y + 40.0 * math.sin(radians)
+        )
+    moved = _run_alignment(
+        wide + narrow, [("b", "w-1", "n-0"), ("b", "w-2", "n-1")]
+    )
+    assert set(moved.values()) == {0.0}
 
 
 def _block(
@@ -2062,20 +2228,16 @@ def test_no_merging_road_on_the_real_maps_ends_past_the_lane_it_joins() -> None:
     `182502409` ramp by 1.21 m, and the lane doing the crossing was `15438e6fd90cf39e`, which
     the merge code never redrew.
 
-    The four merges on `mosque` way `935525163` are excluded by name: that road runs 1.75 m off
-    the line for 115.6 m, a carriageway-width mismatch rather than an overshoot at a junction.
+    Four merges on `mosque` way `935525163` used to be excluded by name — that road ran 1.75 m
+    off the line for 115.6 m, which was read as two carriageways of different widths mapped as
+    separate ways. It was not: `935525163` is a two-lane stretch of Persiaran Perdana between
+    three-lane stretches of it, so its block sat half a lane off both, and `_aligned_blocks`
+    (v25) puts it where the road it carries on from is. The exclusion is gone and the four
+    lanes are asserted with the rest.
     """
-    width_mismatch = {
-        "009a07ebe027c644",
-        "4aebb94cfa4ed5b1",
-        "6fd8e4f18611c914",
-        "7ca159f8f067657a",
-    }
     for name, model in _generated_models():
         lanes = {lane.identifier: lane for lane in model.lanes}
         for subject, moved_end, anchor, anchor_end in _merging_lanes(model):
-            if subject.identifier in width_mismatch:
-                continue
             at_end = moved_end == "end"
             joined = anchor.centerline[-1 if anchor_end == "end" else 0]
             before, after = (

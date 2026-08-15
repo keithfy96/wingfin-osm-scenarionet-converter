@@ -6,7 +6,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Mapping
+from collections import deque
+from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,7 +64,7 @@ from osm_scenario.topology import (
     way_adjacency,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v24"
+GENERATOR_VERSION = "direct-osm-stage2-v25"
 LANE_MODEL_SCHEMA_VERSION = 3
 
 # How much clear road to leave beyond the crossing carriageway when a lane is cut back at a
@@ -85,6 +87,18 @@ MIN_TRIMMED_LANE_M = 2.0
 # a hairpin between two long ways cannot eat the road either side of it.
 BEND_FILLET_RADIUS_M = 12.0
 BEND_FILLET_MAX_SETBACK_M = 8.0
+
+# How straight a join has to be before `_aligned_blocks` will read it as one road carrying on.
+# `classify_movement` calls anything under 35 degrees `through`, which is far too loose here:
+# the lane peeling off at junction-1 node 13946726031 leaves at -17.79 and is a `through`
+# movement. Swept over both extracts, 5 and 10 give the identical answer, 15 pulls in one more
+# way, and 20 pulls in the slip roads themselves - 182502392, 1530245743, 182502406, 182502423,
+# 191861354 - which must never be dragged onto the road they join.
+#
+# It is `side_movement_min_degrees`' number and deliberately not that constant: there the
+# question is *which side* a road joins from, which has an answer at any angle. Here it is "is
+# this a turn?", and the two must stay free to move apart.
+ALIGNMENT_MAX_TURN_DEG = 10.0
 
 # One outgoing carriageway at a node: its OSM way and the directed edge it leaves on.
 GroupKey = tuple[str, tuple[str, ...]]
@@ -453,6 +467,168 @@ class JoinLine(NamedTuple):
         """`point` moved perpendicular onto the line, keeping its distance along it."""
         offset = self.across(point)
         return (point[0] + self.direction[1] * offset, point[1] - self.direction[0] * offset)
+
+
+BlockKey = tuple[tuple[str, ...], str]
+
+
+def _lane_block(lane: LaneFeature) -> BlockKey:
+    """One carriageway on one graph edge — the unit `_lane_offset` positions as a whole."""
+    return (tuple(lane.source_edge), lane.direction)
+
+
+def _join_turn_degrees(source: LaneFeature, target: LaneFeature) -> float:
+    """How far a direct continuation turns, measured the way a connector's angle is.
+
+    `continuation_links` carries no angle — the pair was chosen because the road carries
+    straight on at a node that is not a decision node — and "straight on" there is a much
+    looser test than "the same block position applies to both".
+    """
+    if len(source.centerline) < 2 or len(target.centerline) < 2:
+        return 180.0
+    before, after = source.centerline[-2], source.centerline[-1]
+    onward_from, onward_to = target.centerline[0], target.centerline[1]
+    turn = math.degrees(
+        math.atan2(onward_to.y - onward_from.y, onward_to.x - onward_from.x)
+        - math.atan2(after.y - before.y, after.x - before.x)
+    )
+    return abs((turn + 180.0) % 360.0 - 180.0)
+
+
+def _aligned_blocks(
+    lanes: Sequence[LaneFeature],
+    connectors: Sequence[ConnectorFeature],
+    continuation_links: Sequence[tuple[str, str, str]],
+    lane_offsets: Mapping[str, float],
+    placement_pinned: AbstractSet[str],
+    centred_lanes: AbstractSet[str],
+    *,
+    max_turn_degrees: float,
+) -> set[str]:
+    """Give a road that simply carries on the position of the road it carries on from.
+
+    `_lane_offset` balances a one-way block about its own way line, which is an inference
+    made per way. Two ways drawn on the same line with different lane counts therefore get
+    blocks of different widths balanced about the same point, and every lane continuing
+    between them steps half a lane-width sideways on a road that is dead straight. The merge
+    taper then reads that step as a gap and spends it over the whole lane.
+
+    Three things have to be true before that step is read as a defect, and each of them was a
+    road this moved wrongly before it was added:
+
+    - **The destination is fed by one block only.** More than one is a merge: the joining way
+      has its own line, is its own road, and closing the gap is the taper's job — which
+      already works and must not be pre-empted. A source that *also* goes elsewhere is fine,
+      because a lane peeling off is the usual reason the counts differ at all.
+    - **Both sides are one-way carriageways centred on their line.** A two-way way puts each
+      direction's block wholly on its own side, so it sits half a carriageway off its line
+      *by design*; comparing that to a centred block compares two conventions and reads the
+      straddle as an error. junction-1's `1016771782` is two-way and `106667716` is a one-way
+      single lane, and aligning them shifted a seven-edge residential road off its own line.
+    - **The join is straight.** A continuation link carries no turn angle of its own, so one
+      is measured: `1016771782` into `106667716` bends 22.24 degrees across a 5.25 m gap,
+      which is two roads meeting at a corner rather than one road carrying on.
+
+    Returns the lane ids whose centreline moved; the surface is rebuilt by the caller.
+    """
+    members: dict[BlockKey, list[LaneFeature]] = {}
+    for lane in lanes:
+        members.setdefault(_lane_block(lane), []).append(lane)
+    lane_lookup = {lane.identifier: lane for lane in lanes}
+
+    # Feeders are counted over *every* movement a vehicle can make into the block, not only
+    # the straight ones: a turn arriving from the side still means the block is not simply
+    # the road behind it carrying on.
+    feeders: dict[BlockKey, set[BlockKey]] = {block: set() for block in members}
+    joins: set[tuple[BlockKey, BlockKey]] = set()
+    for connector in connectors:
+        if connector.status == "forbidden":
+            continue
+        source, target = lane_lookup[connector.from_lane_id], lane_lookup[connector.to_lane_id]
+        feeders[_lane_block(target)].add(_lane_block(source))
+        if (
+            connector.movement == "through"
+            and abs(connector.turn_angle_degrees) <= max_turn_degrees
+        ):
+            joins.add((_lane_block(source), _lane_block(target)))
+    for _node_id, source_id, target_id in continuation_links:
+        source, target = lane_lookup[source_id], lane_lookup[target_id]
+        feeders[_lane_block(target)].add(_lane_block(source))
+        if _join_turn_degrees(source, target) <= max_turn_degrees:
+            joins.add((_lane_block(source), _lane_block(target)))
+
+    # What one block would have to move by to land on the other, per lane pair.
+    steps: dict[tuple[BlockKey, BlockKey], set[float]] = {}
+
+    def record(source: LaneFeature, target: LaneFeature) -> None:
+        pair = (_lane_block(source), _lane_block(target))
+        if pair not in joins or len(feeders[pair[1]]) != 1:
+            return
+        if source.identifier not in centred_lanes or target.identifier not in centred_lanes:
+            return
+        steps.setdefault(pair, set()).add(
+            round(lane_offsets[source.identifier] - lane_offsets[target.identifier], 4)
+        )
+
+    for connector in connectors:
+        if connector.status != "forbidden":
+            record(lane_lookup[connector.from_lane_id], lane_lookup[connector.to_lane_id])
+    for _node_id, source_id, target_id in continuation_links:
+        record(lane_lookup[source_id], lane_lookup[target_id])
+
+    # A join whose lane pairs disagree is a road genuinely widening — mosque `777816410`
+    # into `777816409` pairs idx0 to idx0 and idx1 to idx2, a new lane appearing *between*
+    # them — and no single translation satisfies both. Say nothing and leave it to the taper.
+    graph: dict[BlockKey, list[tuple[BlockKey, float]]] = {block: [] for block in members}
+    for (source_block, target_block), values in sorted(steps.items()):
+        if len(values) != 1:
+            continue
+        step = next(iter(values))
+        graph[source_block].append((target_block, step))
+        graph[target_block].append((source_block, -step))
+
+    moved: set[str] = set()
+    settled: set[BlockKey] = set()
+    for start in sorted(members):
+        if start in settled:
+            continue
+        relative = {start: 0.0}
+        queue = deque([start])
+        while queue:
+            current = queue.popleft()
+            for neighbour, step in graph[current]:
+                if neighbour not in relative:
+                    relative[neighbour] = relative[current] + step
+                    queue.append(neighbour)
+        settled |= set(relative)
+        # A block the survey placed never moves; otherwise the widest one stays put, the same
+        # principle `_merge_taper_plan` applies so the through carriageway is never bent.
+        # Anchoring on the majority instead moves whole three-lane carriageways to suit the
+        # two-lane stretches between them, which is backwards.
+        pinned = sorted(
+            -relative[block]
+            for block in relative
+            if any(lane.identifier in placement_pinned for lane in members[block])
+        )
+        if pinned:
+            constant = pinned[0]
+        else:
+            widest = max(len(members[block]) for block in relative)
+            constant = -relative[
+                min(block for block in relative if len(members[block]) == widest)
+            ]
+        for block in sorted(relative):
+            shift = relative[block] + constant
+            # Every step is a difference of exact lane-width arithmetic, so anything that is
+            # not zero is a real half-lane; this only rejects floating-point dust.
+            if abs(shift) <= 1e-6:
+                continue
+            for lane in members[block]:
+                line = LineString((point.x, point.y) for point in lane.centerline)
+                shifted = _as_line(line.offset_curve(shift, join_style="mitre"), line)
+                lane.centerline = _points(shifted)
+                moved.add(lane.identifier)
+    return moved
 
 
 def _join_line(lane: LaneFeature, *, at_end: bool) -> JoinLine | None:
@@ -2160,6 +2336,13 @@ def build_lane_model(
     findings: list[ReviewFinding] = []
     lanes_by_start: dict[str, list[str]] = {}
     lanes_by_end: dict[str, list[str]] = {}
+    # Where each lane was placed across its way, and whether a `placement` tag decided it.
+    # `_aligned_blocks` needs both and runs long after this loop, by which time the way, its
+    # tags and the untrimmed edge geometry are all out of scope: a lane's centreline records
+    # where it ended up but not what it was measured from.
+    lane_offsets: dict[str, float] = {}
+    placement_pinned: set[str] = set()
+    centred_lanes: set[str] = set()
     # Lane count, width and speed are properties of a *way*, and a decision on one
     # writes a tag onto that way. The loop below runs once per graph edge, so asking
     # per edge put the same question to the reviewer once for every segment a road
@@ -2211,6 +2394,10 @@ def build_lane_model(
         created: list[str] = []
         side_sign = 1.0 if driving_side == "left" else -1.0
         centred = _carries_whole_carriageway(way.tags, one_way_in_graph=one_way)
+        placement = way.tags.get("placement") if centred else None
+        placed_by_survey = placement is not None and (
+            _placement_edge_distance(placement, count, width) is not None
+        )
         for lane_index in range(count):
             offset = _lane_offset(
                 lane_index,
@@ -2218,7 +2405,7 @@ def build_lane_model(
                 width=width,
                 side_sign=side_sign,
                 centred=centred,
-                placement=way.tags.get("placement") if centred else None,
+                placement=placement,
             )
             center = base.offset_curve(offset, join_style="mitre")
             if not isinstance(center, LineString) or center.is_empty:
@@ -2259,6 +2446,11 @@ def build_lane_model(
             )
             lanes.append(lane)
             created.append(lane_id)
+            lane_offsets[lane_id] = offset
+            if placed_by_survey:
+                placement_pinned.add(lane_id)
+            if centred:
+                centred_lanes.add(lane_id)
             lanes_by_start.setdefault(str(u), []).append(lane_id)
             lanes_by_end.setdefault(str(v), []).append(lane_id)
         for lane_index, _lane_id in enumerate(created):
@@ -2867,6 +3059,20 @@ def build_lane_model(
     # Geometry only. Every movement, angle and status above was decided from the
     # untapered OSM geometry and stays as it is: letting a taper change an angle would
     # let it change the classification that selected it.
+    #
+    # Alignment runs first, and it has to run here rather than while the lanes are built: it
+    # reads which block feeds which, and that is not settled until every movement has been
+    # filtered, restored, side-resolved and either kept or forbidden. Running it before the
+    # taper is what lets the taper find nothing left to close where a road merely carries on.
+    aligned = _aligned_blocks(
+        lanes,
+        connectors,
+        continuation_links,
+        lane_offsets,
+        placement_pinned,
+        centred_lanes,
+        max_turn_degrees=ALIGNMENT_MAX_TURN_DEG,
+    )
     taper_plan = _merge_taper_plan(
         connectors, lane_lookup, min_gap=config.lane_geometry.merge_taper_min_gap_m
     )
@@ -2878,6 +3084,7 @@ def build_lane_model(
         taper_length=config.lane_geometry.merge_taper_length_m,
         min_gap=config.lane_geometry.merge_taper_min_gap_m,
     )
+    redrawn |= aligned
     for (lane_id, moved_end), destination in sorted(taper_plan.items()):
         lane = lane_lookup[lane_id]
         tapered = _tapered_line(
@@ -3135,6 +3342,10 @@ def build_lane_model(
         "connectors": len(connectors),
         "direct_continuations": direct_continuations,
         "merge_tapers": len(taper_plan),
+        # Lanes moved sideways because the road they carry on from sits elsewhere. Counted
+        # apart from `merge_tapers` because they are opposite answers to the same-looking
+        # gap: one road continuing, against two roads meeting.
+        "aligned_lanes": len(aligned),
         "signals": len(signals),
         "stop_lines": len(stop_lines),
         "restrictions": len(restrictions),

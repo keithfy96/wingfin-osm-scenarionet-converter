@@ -798,10 +798,13 @@ along it. Five things not to re-derive:
 - **Stopping the lane short and letting the junction band cover the gap was also tried and
   reverted**: it opens a hole at **26** `mosque` merges that were seamless. A merge may never
   part a join.
-- **A road past the line further back than `merge_taper_length_m` is left alone entirely.** That
-  is two carriageways of different widths mapped as separate ways: `mosque` way `935525163` runs
-  1.75 m off — half a lane — for **115.6 m** across four merges. Pulling a 70 m lane sideways is
-  not a merge correction, and the four are excluded by name in the workspace-backed test.
+- **A road past the line further back than `merge_taper_length_m` is left alone entirely.**
+  Pulling a 70 m lane sideways is not a merge correction. This was read as two carriageways of
+  different widths mapped as separate ways — `mosque` way `935525163` running 1.75 m off, half a
+  lane, for 115.6 m across four merges — and **that reading was wrong**: `935525163` is a
+  two-lane stretch of Persiaran Perdana between three-lane stretches of it, so its block sat half
+  a lane off both. v25's `_aligned_blocks` puts it where the road it carries on from is, and the
+  four names the workspace-backed test used to exclude are gone from it.
 - **Only a single continuation counts.** `entry_lanes` / `exit_lanes` name a lane for a direct
   continuation and a connector for a junction movement; a fork has no one road behind it, and a
   junction movement is another lane's traffic rather than this road carrying on.
@@ -845,11 +848,69 @@ or status changed. Four things not to re-derive:
   at the new position, redistributing its interior bends (22.53°→13.05°, 19.50°→29.92°) while its
   worst stays 35.08°.
 
-**19 straight joins on mosque and 9 on junction-1 still carry a 1.75 m step**, junction-1's
-776021089 → 776021087 among them. Those ways carry no tag, and Keith's decision was to read the
-survey and only the survey: enforcing continuity by inference moves 79 of 405 mosque lanes and 88
-of 285 junction-1 lanes, by up to 3.50 m, including lanes that are correct today. See
+That left **19 straight joins on mosque and 9 on junction-1** still stepping, on ways OSM never
+tagged — the second half of what Keith reported, fixed in v25 below. See
 `docs/mapping-algo-changes/2026-08-15-22:21:37-a-lane-block-was-centred-where-the-survey-placed-it.md`.
+
+### A road that carries on takes its position from the road behind it (v25)
+
+Where a block sits is decided per way, from that way's own tags — a local decision about
+something that is not local. **A road is a chain of ways, and where its tarmac lies is a property
+of the road.** `_aligned_blocks` runs immediately before `_merge_taper_plan`, works out which
+block feeds which, and where a block's position is settled by the road behind it, translates it
+there. It moves centrelines only; the `redrawn` set and the single `_lane_surface` rebuild below
+it already re-derive the surfaces.
+
+It cannot run while the lanes are built — it reads the feeder graph, which is not settled until
+every movement has been filtered, restored, side-resolved and either kept or forbidden — and it
+must run before the taper, so the taper finds nothing left to close. Blast radius: **10 of 405
+mosque lanes** (ways 776021087 and 935525163) and **4 of 285 junction-1 lanes** (776021087), all
+by exactly 1.75 m, `aligned_lanes` in `feature_counts`.
+
+Three guards, and **each is a road this moved wrongly before the guard existed**:
+
+- **The destination must have exactly one feeder.** More than one is a merge, where the joining
+  way has its own line and closing the gap is the taper's job. A source that *also* goes
+  elsewhere is fine — a lane peeling off is why the counts differ at all.
+- **Both sides must be centred one-way carriageways.** A two-way block sits half a carriageway
+  off its line *by design*, so comparing it to a centred one reads the straddle as an error.
+  Without this, junction-1's one-way `106667716` was shifted 1.75 m off its own line across seven
+  edges to suit two-way `1016771782`.
+- **The join must be straight**, measured by `_join_turn_degrees` because a continuation link
+  carries no angle. `1016771782` into `106667716` bends **22.24°** and is still a direct
+  continuation: "carries straight on at a node that is not a decision node" is a far looser test
+  than "the same block position applies to both".
+
+A join whose lane pairs disagree is skipped — mosque `777816410` into `777816409` pairs idx0→idx0
+and idx1→idx2, a lane appearing *between* them, and no translation satisfies both. Within a
+component a `placement`-tagged block never moves (the survey outranks the inference) and
+otherwise **the widest block stays**, the same rule `_merge_taper_plan` applies; anchoring on the
+majority instead moved three-lane 935525164 to suit the two-lane stretch beside it.
+
+**`ALIGNMENT_MAX_TURN_DEG` is 10.0 and is not `side_movement_min_degrees`.** `classify_movement`
+calls anything under 35° `through`, and the lane peeling off at node 13946726031 leaves at
+−17.79° as a `through` movement. Swept: 5° and 10° agree exactly, 15° pulls in way 859429322, and
+**20° pulls in the slip roads** (182502392, 1530245743, 182502406, 182502423, 191861354), which
+must never be dragged onto the road they join.
+
+Two costs worth not re-deriving. Moving a block further from its way line **opens the mitre at
+that way's own interior bends** — 776021087's two edges go from 3.09°/0.133 m to 4.36°/0.265 m —
+which is unavoidable for any lateral shift and lands mid-distribution (median gap at a direct
+continuation is 0.213 m, median bend 4.92°). And the remaining steps are all at merges, where the
+taper is correct. See
+`docs/mapping-algo-changes/2026-08-16-01:58:09-a-road-that-carries-on-re-centred-on-its-own-line.md`.
+
+### `ego_route` still turns over the gate on two 2 m clamped lanes
+
+`test_no_route_on_the_real_map_turns_more_than_the_gate_allows` fails: **3 of 396 swept routes
+turn more than 30° at a vertex, worst 50.92°**. It is not v24 and not v25 — sweeping the same
+1,500 seeded pairs on models built at v23, v24 and v25 gives the identical three routes. It
+became visible on 2026-08-16 only because `workspaces/junction-1/lane-model/reviewed.json`, which
+that test reads, was rebuilt; the model it had been passing against was **v17**.
+
+All three run 777160375 idx0/3 → 777159293 idx0/1 → 777160374 idx0/1 → 777159294 idx0/2, where a
+**−88.97°** right turn is taken across two lanes `MIN_TRIMMED_LANE_M` clamped to **2.0 m**, with
+2.6 m and 10.6 m gaps either side. Undiagnosed further, and Keith's to judge.
 
 ### Starved middle lanes: mostly fixed, one left
 
