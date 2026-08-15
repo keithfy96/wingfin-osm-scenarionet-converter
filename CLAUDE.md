@@ -709,6 +709,42 @@ where the ramp merges (that is what a slip means — it joins beyond it), and Ke
 `review_required` blocker. See
 `docs/mapping-algo-changes/2026-08-13-16:32:06-a-turn-an-off-ramp-already-carries-was-offered-twice.md`.
 
+### A merging road must not cross the lane it is joining (v23)
+
+**A joining way's last edges aim at the junction node, and that node sits inside the
+carriageway** — on the other way's centreline, which on a three-lane road *is* the middle lane.
+So the road converges on the lane it merges into, **overshoots it**, and the merge taper hauls
+the last lane back out. That is the turning *in* before turning *out* Keith reported, and why a
+ramp's ribbon lands on the lane beside the one it enters. Measured: 1.21 m, 1.40 m and 1.52 m of
+overshoot on the three merges he named.
+
+**The overshoot is usually not in the lane the merge owns.** On the `182502409` ramp it is
+`15438e6fd90cf39e`, an ordinary lane, which is why three separate attempts confined to
+`72fdbea2a86f51e8` could not fix it. `_uncrossed_lanes` walks back through single continuations
+and pulls every vertex on the wrong side **perpendicular onto the line**, keeping its distance
+along it. Five things not to re-derive:
+
+- **The correction is a sideways pull, never a bend.** Drawing it as a cubic tangent to the road
+  behind and to the lane ahead bowed every lane it touched in `junction-1` — all dead straight
+  before — by up to **2.31 m**, and pushed the ramp's ribbon on the middle lane from 14.7 to
+  **22.1 m²**, making the reported defect worse. Keith reverted it on sight.
+- **Stopping the lane short and letting the junction band cover the gap was also tried and
+  reverted**: it opens a hole at **26** `mosque` merges that were seamless. A merge may never
+  part a join.
+- **A road past the line further back than `merge_taper_length_m` is left alone entirely.** That
+  is two carriageways of different widths mapped as separate ways: `mosque` way `935525163` runs
+  1.75 m off — half a lane — for **115.6 m** across four merges. Pulling a 70 m lane sideways is
+  not a merge correction, and the four are excluded by name in the workspace-backed test.
+- **Only a single continuation counts.** `entry_lanes` / `exit_lanes` name a lane for a direct
+  continuation and a connector for a junction movement; a fork has no one road behind it, and a
+  junction movement is another lane's traffic rather than this road carrying on.
+- **The pull runs before `_tapered_line`**, so the taper's move is along the lane rather than
+  back out across it. `_tapered_line` itself is unchanged, and `topology.py` is not involved.
+
+10 lanes move on `mosque` and 8 on `junction-1`; three on each are lanes the merge code did not
+previously own. See
+`docs/mapping-algo-changes/2026-08-15-19:15:13-a-merging-road-crossed-the-lane-it-was-joining.md`.
+
 ### Starved middle lanes: mostly fixed, one left
 
 Two allocation rules now run before the proportional mapping, and between them they

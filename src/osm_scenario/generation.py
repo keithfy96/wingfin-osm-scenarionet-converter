@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, NamedTuple
 
 import osmnx as ox
 from pyproj import Transformer
@@ -62,7 +62,7 @@ from osm_scenario.topology import (
     way_adjacency,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v22"
+GENERATOR_VERSION = "direct-osm-stage2-v23"
 LANE_MODEL_SCHEMA_VERSION = 3
 
 # How much clear road to leave beyond the crossing carriageway when a lane is cut back at a
@@ -385,6 +385,152 @@ def _trimmed_edge(line: LineString, start_m: float, end_m: float) -> tuple[LineS
     return trimmed, clamped
 
 
+class JoinLine(NamedTuple):
+    """The line of the lane a road merges into: a point on it and its unit direction."""
+
+    origin: tuple[float, float]
+    direction: tuple[float, float]
+
+    def across(self, point: tuple[float, float]) -> float:
+        """Signed distance from the line, positive to the left of the direction of travel."""
+        offset = (point[0] - self.origin[0], point[1] - self.origin[1])
+        return self.direction[0] * offset[1] - self.direction[1] * offset[0]
+
+    def pulled_onto(self, point: tuple[float, float]) -> tuple[float, float]:
+        """`point` moved perpendicular onto the line, keeping its distance along it."""
+        offset = self.across(point)
+        return (point[0] + self.direction[1] * offset, point[1] - self.direction[0] * offset)
+
+
+def _join_line(lane: LaneFeature, *, at_end: bool) -> JoinLine | None:
+    """Where a lane is entered, and the direction of travel there."""
+    points = lane.centerline
+    if len(points) < 2:
+        return None
+    before, after = (points[-2], points[-1]) if at_end else (points[0], points[1])
+    direction = _unit((after.x - before.x, after.y - before.y))
+    if direction is None:
+        return None
+    joined = points[-1] if at_end else points[0]
+    return JoinLine((joined.x, joined.y), direction)
+
+
+def _unit(vector: tuple[float, float]) -> tuple[float, float] | None:
+    span = math.hypot(*vector)
+    return None if span <= 0.0 else (vector[0] / span, vector[1] / span)
+
+
+def _road_behind(
+    lane_id: str,
+    lane_lookup: dict[str, LaneFeature],
+    *,
+    at_end: bool,
+    reach: float,
+) -> list[str]:
+    """The lane and the road it continues from, back as far as `reach` metres.
+
+    Only a **single** continuation counts. `entry_lanes` / `exit_lanes` name a lane for a direct
+    continuation and a connector for a junction movement; a fork has no one road behind it, and
+    a junction movement is another lane's traffic rather than this road carrying on.
+    """
+    chain = [lane_id]
+    walked = 0.0
+    current = lane_id
+    while walked < reach and len(chain) < 8:
+        lane = lane_lookup[current]
+        links = [
+            other
+            for other in (lane.entry_lanes if at_end else lane.exit_lanes)
+            if other in lane_lookup
+        ]
+        if len(links) != 1 or links[0] in chain:
+            break
+        walked += LineString((point.x, point.y) for point in lane_lookup[current].centerline).length
+        current = links[0]
+        chain.append(current)
+    return chain
+
+
+def _uncrossed_lanes(
+    plan: dict[tuple[str, str], TaperTarget],
+    lane_lookup: dict[str, LaneFeature],
+    *,
+    taper_length: float,
+    min_gap: float,
+) -> set[str]:
+    """Pull a merging road back off the lane it is joining, where it has crossed it.
+
+    **A joining way's last edges aim at the junction node, and that node sits inside the
+    carriageway** — on the other way's centreline, which on a three-lane road *is* the middle
+    lane. So the road converges on the lane it merges into and then overshoots it: measured on
+    the two extracts, by 1.21 m, 1.40 m and 1.52 m on the three merges Keith reported. The
+    merge taper then hauls the last lane back out again. That is the turning *in* before turning
+    *out* he described, and it is why a ramp's ribbon lands on the lane beside the one it enters.
+
+    The overshoot is not confined to the lane the taper owns. On the `182502409` ramp it is
+    `15438e6fd90cf39e` — an ordinary lane the merge code has never redrawn — that ends 1.21 m
+    past the lane it joins, so no change confined to the final lane could have fixed it.
+
+    Every vertex on the wrong side is moved **perpendicular** onto the line, keeping its distance
+    along it. Nothing bends, nothing is resampled, nothing lengthens and no join opens or closes.
+    Drawing the correction as a curve instead was tried and reverted: it bowed lanes that were
+    dead straight by up to 2.31 m and pushed the ramp *further* onto its neighbour.
+
+    Two guards, both off numbers already in `ConverterConfig`:
+
+    - A road within `min_gap` of the line at the far end of the walk never approached from a
+      side, so there is no crossing to read.
+    - **A road past the line further back than `taper_length` is left alone entirely.** That is
+      not an overshoot at a junction; it is two carriageways of different widths mapped as
+      separate ways, running parallel. `mosque` way `935525163` is exactly this — off the line
+      by 1.75 m, half a lane, for **115.6 m** of road across four merges — and pulling a 70 m
+      lane sideways is not a merge correction.
+
+    Returns the lanes it moved, so their surfaces and the connectors touching them are rebuilt.
+    """
+    moved: set[str] = set()
+    for (lane_id, moved_end), target in sorted(plan.items()):
+        at_end = moved_end == "end"
+        line = _join_line(lane_lookup[target.anchor_lane_id], at_end=target.anchor_end == "end")
+        if line is None:
+            continue
+        chain = _road_behind(lane_id, lane_lookup, at_end=at_end, reach=taper_length)
+        far = lane_lookup[chain[-1]].centerline[0 if at_end else -1]
+        approach = line.across((far.x, far.y))
+        if abs(approach) <= min_gap:
+            continue
+        side = 1.0 if approach > 0.0 else -1.0
+
+        # How far back along the road the crossing reaches, walking away from the merge.
+        back = 0.0
+        crossed: list[str] = []
+        for step in chain:
+            points = [(point.x, point.y) for point in lane_lookup[step].centerline]
+            ordered = points[::-1] if at_end else points
+            if any(line.across(point) * side < 0.0 for point in points):
+                crossed.append(step)
+            if all(line.across(point) * side >= 0.0 for point in points):
+                break
+            back += LineString(ordered).length
+        if not crossed or back > taper_length:
+            continue
+
+        for step in crossed:
+            lane = lane_lookup[step]
+            free = len(lane.centerline) - 1 if at_end else 0
+            points = [(point.x, point.y) for point in lane.centerline]
+            drawn = [
+                point
+                if line.across(point) * side >= 0.0 or (step == lane_id and index == free)
+                else line.pulled_onto(point)
+                for index, point in enumerate(points)
+            ]
+            if drawn != points:
+                lane.centerline = _points(LineString(drawn))
+                moved.add(step)
+    return moved
+
+
 def _tapered_line(
     line: LineString, *, at_end: bool, target: tuple[float, float], taper_length: float
 ) -> LineString:
@@ -426,12 +572,25 @@ def _tapered_line(
     return LineString(moved)
 
 
+class TaperTarget(NamedTuple):
+    """Where a merging lane's free end has to land, and which lane it is landing on.
+
+    The anchor rides along because `_uncrossed_lanes` needs that lane's **line** — its direction
+    as well as its position. Where a road has crossed the lane it is joining, only the line can
+    say so; the endpoint alone cannot.
+    """
+
+    point: tuple[float, float]
+    anchor_lane_id: str
+    anchor_end: str
+
+
 def _merge_taper_plan(
     connectors: list[ConnectorFeature],
     lane_lookup: dict[str, LaneFeature],
     *,
     min_gap: float,
-) -> dict[tuple[str, str], tuple[float, float]]:
+) -> dict[tuple[str, str], TaperTarget]:
     """Decide which lane ends should be pulled onto the lane they merge into.
 
     A lane must not stop on another road's centreline, where OSM ends its way; it has
@@ -447,7 +606,7 @@ def _merge_taper_plan(
     until someone makes one. A forbidden movement is the exception: it does not exist,
     so it may not drag geometry.
     """
-    candidates: list[tuple[tuple[str, str], tuple[str, str], tuple[float, float], int]] = []
+    candidates: list[tuple[tuple[str, str], tuple[str, str], TaperTarget, int]] = []
     for connector in sorted(connectors, key=lambda item: item.identifier):
         if connector.status == "forbidden" or connector.movement != "through":
             continue
@@ -462,7 +621,7 @@ def _merge_taper_plan(
                 (
                     (source.identifier, "end"),
                     (target.identifier, "start"),
-                    (enters.x, enters.y),
+                    TaperTarget((enters.x, enters.y), target.identifier, "start"),
                     rank,
                 )
             )
@@ -471,7 +630,7 @@ def _merge_taper_plan(
                 (
                     (target.identifier, "start"),
                     (source.identifier, "end"),
-                    (leaves.x, leaves.y),
+                    TaperTarget((leaves.x, leaves.y), source.identifier, "end"),
                     rank,
                 )
             )
@@ -486,7 +645,7 @@ def _merge_taper_plan(
         for subject in best_rank
         if len(
             {
-                destination
+                destination.point
                 for other, _, destination, rank in candidates
                 if other == subject and rank == best_rank[subject]
             }
@@ -494,7 +653,7 @@ def _merge_taper_plan(
         > 1
     }
     moving = {subject for subject, _, _, _ in candidates} - contested
-    plan: dict[tuple[str, str], tuple[float, float]] = {}
+    plan: dict[tuple[str, str], TaperTarget] = {}
     for subject, anchor, destination, rank in candidates:
         # Chasing an endpoint that is itself moving would reopen the gap it closed.
         if subject not in contested and anchor not in moving and rank == best_rank[subject]:
@@ -2653,16 +2812,31 @@ def build_lane_model(
     taper_plan = _merge_taper_plan(
         connectors, lane_lookup, min_gap=config.lane_geometry.merge_taper_min_gap_m
     )
+    # A road that has crossed the lane it merges into is pulled back onto it *before* the
+    # taper runs, so the taper's move is along the lane rather than back out across it.
+    redrawn = _uncrossed_lanes(
+        taper_plan,
+        lane_lookup,
+        taper_length=config.lane_geometry.merge_taper_length_m,
+        min_gap=config.lane_geometry.merge_taper_min_gap_m,
+    )
     for (lane_id, moved_end), destination in sorted(taper_plan.items()):
         lane = lane_lookup[lane_id]
         tapered = _tapered_line(
             LineString((point.x, point.y) for point in lane.centerline),
             at_end=moved_end == "end",
-            target=destination,
+            target=destination.point,
             taper_length=config.lane_geometry.merge_taper_length_m,
         )
-        polygon, left, right = _lane_surface(tapered, lane.width_m)
         lane.centerline = _points(tapered)
+        redrawn.add(lane_id)
+    # Both passes above move a centreline and nothing else, so the surface is rebuilt once,
+    # here — a lane pulled off the road it had crossed needs it just as much as a tapered one,
+    # and three lanes on each extract are pulled without being tapered.
+    for lane_id in sorted(redrawn):
+        lane = lane_lookup[lane_id]
+        line = LineString((point.x, point.y) for point in lane.centerline)
+        polygon, left, right = _lane_surface(line, lane.width_m)
         lane.polygon = _polygon_points(polygon)
         lane.boundaries = [
             LaneBoundary(
@@ -2676,14 +2850,13 @@ def build_lane_model(
                 points=_points(right),
             ),
         ]
-    if taper_plan:
-        tapered_lanes = {lane_id for lane_id, _ in taper_plan}
+    if redrawn:
         node_xy = {
             str(node): (float(data["x"]), float(data["y"]))
             for node, data in graph.nodes(data=True)
         }
         for connector in connectors:
-            if not tapered_lanes & {connector.from_lane_id, connector.to_lane_id}:
+            if not redrawn & {connector.from_lane_id, connector.to_lane_id}:
                 continue
             curve = connector_curve(
                 LineString(

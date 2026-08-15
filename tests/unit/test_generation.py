@@ -9,11 +9,13 @@ import osmnx as ox
 import pytest
 from pydantic import ValidationError
 from shapely.geometry import LineString
+from shapely.geometry import Point as ShapelyPoint
 
 from osm_scenario.acquisition import acquire_osm
 from osm_scenario.config import ConverterConfig
 from osm_scenario.generation import (
     GenerationError,
+    TaperTarget,
     _ambiguity_causes,
     _ambiguity_reason,
     _balanced_approach_assignment,
@@ -39,6 +41,7 @@ from osm_scenario.generation import (
     _tagged_side_block,
     _tapered_line,
     _turn_permissions,
+    _uncrossed_lanes,
     _unproven_sharp_movement,
     generate_lane_model,
 )
@@ -528,6 +531,125 @@ def _taper_lane(identifier: str, lane_count: int, start: float, end: float) -> L
     )
 
 
+def _road_lane(identifier: str, points: list[tuple[float, float]], behind: str = "") -> LaneFeature:
+    """A lane placed by hand, with the single lane it continues from named."""
+    return _approach(0, 1).model_copy(
+        update={
+            "identifier": identifier,
+            "centerline": [Point2D(x=x, y=y) for x, y in points],
+            "entry_lanes": [behind] if behind else [],
+            "exit_lanes": [],
+        }
+    )
+
+
+# The `182502409` ramp's shape, to scale, with the lane it joins running east along y = 0 from
+# the origin: the road converges on that lane from the kerb side, overshoots it by 1.21 m, and
+# the merge then hauls the last lane back out. `y` here *is* the distance across the lane.
+def _overshooting_ramp() -> dict[str, LaneFeature]:
+    return {
+        "join": _road_lane("join", [(0.0, 0.0), (20.0, 0.0)]),
+        "merge": _road_lane("merge", [(-15.0, -1.21), (0.0, 0.0)], behind="approach"),
+        "approach": _road_lane("approach", [(-24.0, 1.77), (-15.0, -1.21)], behind="far"),
+        "far": _road_lane("far", [(-34.0, 7.39), (-24.0, 1.77)]),
+    }
+
+
+_RAMP_PLAN = {("merge", "end"): TaperTarget((0.0, 0.0), "join", "start")}
+
+
+def _pull(lookup: dict[str, LaneFeature], plan: dict | None = None) -> set[str]:
+    return _uncrossed_lanes(
+        plan if plan is not None else _RAMP_PLAN,
+        lookup,
+        taper_length=30.0,
+        min_gap=0.5,
+    )
+
+
+def test_a_road_that_overshoots_the_lane_it_joins_is_pulled_back_onto_it() -> None:
+    lookup = _overshooting_ramp()
+    assert _pull(lookup) == {"merge", "approach"}
+
+    # The vertex that had crossed now sits exactly on the lane, not 1.21 m past it.
+    assert lookup["approach"].centerline[-1].y == pytest.approx(0.0)
+    assert lookup["merge"].centerline[0].y == pytest.approx(0.0)
+
+    # The correction reaches back past the merge lane into the one before it, which is where
+    # the crossing actually happens: on the real ramp that lane is `15438e6fd90cf39e`, which
+    # the merge code has never otherwise redrawn.
+    assert lookup["approach"].centerline[0].y == pytest.approx(1.77)
+    assert [(p.x, p.y) for p in lookup["far"].centerline] == [(-34.0, 7.39), (-24.0, 1.77)]
+
+
+def test_pulling_a_road_back_moves_it_sideways_and_never_bends_it() -> None:
+    """The regression that reverted the previous attempt.
+
+    Drawing the correction as a curve tangent to both ends bowed lanes that were dead straight
+    by up to 2.31 m and pushed the ramp *further* onto the lane beside the one it enters. A
+    vertex moves perpendicular onto the line and keeps its distance along it, so a straight
+    lane stays straight and no lane changes length by more than the correction itself.
+    """
+    lookup = _overshooting_ramp()
+    _pull(lookup)
+    for lane in lookup.values():
+        points = [(p.x, p.y) for p in lane.centerline]
+        assert len(points) == 2, "no vertex may be added: nothing is resampled"
+        # Two-point lanes cannot bow; assert it anyway, because it is the property that failed.
+        chord = LineString([points[0], points[-1]])
+        assert max(chord.distance(ShapelyPoint(p)) for p in points) == pytest.approx(0.0)
+    assert LineString(
+        [(p.x, p.y) for p in lookup["approach"].centerline]
+    ).length == pytest.approx(9.49, abs=0.4)
+
+
+def test_a_road_running_parallel_off_the_line_is_left_alone() -> None:
+    """Two carriageways of different widths, mapped as separate ways.
+
+    `mosque` way `935525163` runs 1.75 m — half a lane — off the line of the lane it joins for
+    **115.6 m** of road, across four merges. That is a width mismatch, not an overshoot at a
+    junction, and pulling a 70 m lane sideways is not a merge correction.
+    """
+    lookup = {
+        "join": _road_lane("join", [(0.0, 0.0), (20.0, 0.0)]),
+        "merge": _road_lane("merge", [(-20.0, -1.75), (0.0, 0.0)], behind="approach"),
+        "approach": _road_lane("approach", [(-50.0, -1.75), (-20.0, -1.75)], behind="far"),
+        "far": _road_lane("far", [(-80.0, 7.0), (-50.0, -1.75)]),
+    }
+    before = {k: [(p.x, p.y) for p in v.centerline] for k, v in lookup.items()}
+    assert _pull(lookup) == set()
+    assert {k: [(p.x, p.y) for p in v.centerline] for k, v in lookup.items()} == before
+
+
+def test_a_road_with_nothing_behind_it_is_left_alone() -> None:
+    # A fork has no one road behind it, and a junction movement is another lane's traffic
+    # rather than this road carrying on — `entry_lanes` names a connector there, not a lane.
+    fork = _overshooting_ramp()
+    fork["other"] = _road_lane("other", [(-24.0, 4.0), (-15.0, -1.21)])
+    fork["merge"].entry_lanes = ["approach", "other"]
+
+    junction_movement = _overshooting_ramp()
+    junction_movement["merge"].entry_lanes = ["a-connector-id"]
+
+    nothing = _overshooting_ramp()
+    nothing["merge"].entry_lanes = []
+
+    for lookup in (fork, junction_movement, nothing):
+        before = {k: [(p.x, p.y) for p in v.centerline] for k, v in lookup.items()}
+        assert _pull(lookup) == set()
+        assert {k: [(p.x, p.y) for p in v.centerline] for k, v in lookup.items()} == before
+
+
+def test_a_road_that_never_approached_from_a_side_is_left_alone() -> None:
+    # Within `min_gap` of the line all the way back, so there is no crossing to read.
+    lookup = _overshooting_ramp()
+    lookup["far"].centerline = [Point2D(x=-34.0, y=0.2), Point2D(x=-24.0, y=0.1)]
+    lookup["approach"].centerline = [Point2D(x=-24.0, y=0.1), Point2D(x=-15.0, y=-0.1)]
+    before = {k: [(p.x, p.y) for p in v.centerline] for k, v in lookup.items()}
+    assert _pull(lookup) == set()
+    assert {k: [(p.x, p.y) for p in v.centerline] for k, v in lookup.items()} == before
+
+
 def test_an_unreviewed_movement_still_pulls_its_lane_off_the_centreline() -> None:
     # A link peeling off a road it shares a lane with: the lane serves two movements, so
     # both are flagged for review, but the link still has to start on the lane that
@@ -541,7 +663,7 @@ def test_an_unreviewed_movement_still_pulls_its_lane_off_the_centreline() -> Non
         lookup,
         min_gap=0.5,
     )
-    assert plan == {("link", "start"): (-5.25, 0.0)}
+    assert plan == {("link", "start"): TaperTarget((-5.25, 0.0), "road", "end")}
 
     # A forbidden movement does not exist, so it may not drag geometry.
     assert (
@@ -573,7 +695,9 @@ def test_an_endpoint_two_movements_disagree_about_is_left_where_osm_put_it() -> 
         _taper_connector("a", "road", "link", "through", "review_required"),
         _taper_connector("b", "other", "link", "through", "active"),
     ]
-    assert _merge_taper_plan(mixed, lookup, min_gap=0.5) == {("link", "start"): (-9.75, 0.0)}
+    assert _merge_taper_plan(mixed, lookup, min_gap=0.5) == {
+        ("link", "start"): TaperTarget((-9.75, 0.0), "other", "end")
+    }
 
 
 def test_only_the_minor_side_of_a_shallow_merge_yields() -> None:
@@ -607,7 +731,7 @@ def test_only_the_minor_side_of_a_shallow_merge_yields() -> None:
 
     # The side with fewer lanes yields, so the through carriageway is never bent.
     plan = _merge_taper_plan([connector("c", "ramp", "road", "through")], lookup, min_gap=0.5)
-    assert plan == {("ramp", "end"): (5.25, 0.0)}
+    assert plan == {("ramp", "end"): TaperTarget((5.25, 0.0), "road", "start")}
 
     # A real turn ends at a stop line; its connector curve is already the right shape.
     assert _merge_taper_plan([connector("c", "ramp", "road", "left")], lookup, min_gap=0.5) == {}
@@ -1807,6 +1931,92 @@ def _merge_stream(model: PreliminaryLaneModel, connector: ConnectorFeature) -> L
         if math.dist(point, kept[-1]) > 1e-6:
             kept.append(point)
     return LineString(kept)
+
+
+def _merging_lanes(
+    model: PreliminaryLaneModel,
+) -> list[tuple[LaneFeature, str, LaneFeature, str]]:
+    """Every merge the geometry owns, as (subject, the end that moves, anchor, the end joined)."""
+    lanes = {lane.identifier: lane for lane in model.lanes}
+    found = []
+    for connector in model.connectors:
+        if connector.status == "forbidden" or connector.movement != "through":
+            continue
+        source, target = lanes[connector.from_lane_id], lanes[connector.to_lane_id]
+        if source.lane_count < target.lane_count:
+            found.append((source, "end", target, "start"))
+        elif target.lane_count < source.lane_count:
+            found.append((target, "start", source, "end"))
+    return found
+
+
+def test_the_link_parked_on_a_centreline_still_reaches_the_lane_it_enters() -> None:
+    """The v12 case, which every later change to this geometry has to keep working."""
+    for name, model in _generated_models():
+        lanes = {lane.identifier: lane for lane in model.lanes}
+        if "cab3280515d4b733" not in lanes or "b3f6c9d7ed8c200f" not in lanes:
+            continue
+        link = lanes["cab3280515d4b733"].centerline[0]
+        feeds = lanes["b3f6c9d7ed8c200f"].centerline
+        gap = min(
+            math.dist((link.x, link.y), (point.x, point.y)) for point in (feeds[0], feeds[-1])
+        )
+        assert gap == pytest.approx(0.0, abs=1e-6), f"{name} parked the link {gap:.3f} m away"
+
+
+def test_no_merging_road_on_the_real_maps_ends_past_the_lane_it_joins() -> None:
+    """The defect Keith reported, asserted on both extracts.
+
+    A joining way's last edges aim at the junction node, and that node sits inside the
+    carriageway — on the other way's centreline, which on a three-lane road *is* the middle
+    lane. So the road overshot the lane it merges into and the merge hauled it back out: on the
+    `182502409` ramp by 1.21 m, and the lane doing the crossing was `15438e6fd90cf39e`, which
+    the merge code never redrew.
+
+    The four merges on `mosque` way `935525163` are excluded by name: that road runs 1.75 m off
+    the line for 115.6 m, a carriageway-width mismatch rather than an overshoot at a junction.
+    """
+    width_mismatch = {
+        "009a07ebe027c644",
+        "4aebb94cfa4ed5b1",
+        "6fd8e4f18611c914",
+        "7ca159f8f067657a",
+    }
+    for name, model in _generated_models():
+        lanes = {lane.identifier: lane for lane in model.lanes}
+        for subject, moved_end, anchor, anchor_end in _merging_lanes(model):
+            if subject.identifier in width_mismatch:
+                continue
+            at_end = moved_end == "end"
+            joined = anchor.centerline[-1 if anchor_end == "end" else 0]
+            before, after = (
+                (anchor.centerline[-2], anchor.centerline[-1])
+                if anchor_end == "end"
+                else (anchor.centerline[0], anchor.centerline[1])
+            )
+            span = math.hypot(after.x - before.x, after.y - before.y)
+            if span <= 0.0:
+                continue
+            unit = ((after.x - before.x) / span, (after.y - before.y) / span)
+            links = [
+                other
+                for other in (subject.entry_lanes if at_end else subject.exit_lanes)
+                if other in lanes
+            ]
+            if len(links) != 1:
+                continue  # No road behind it, so there is no crossing to read.
+            crossing = lanes[links[0]].centerline[-1 if at_end else 0]
+            offset = (crossing.x - joined.x, crossing.y - joined.y)
+            across = unit[0] * offset[1] - unit[1] * offset[0]
+            far = subject.centerline[0 if at_end else -1]
+            side = unit[0] * (far.y - joined.y) - unit[1] * (far.x - joined.x)
+            if abs(side) <= 0.5:
+                continue
+            past = -across if side > 0 else across
+            assert past <= 0.5, (
+                f"{name} {links[0]} ends {past:.2f} m past {anchor.identifier}, "
+                f"the lane {subject.identifier} merges into"
+            )
 
 
 def test_no_two_roads_merging_into_one_carriageway_cross_each_other() -> None:
