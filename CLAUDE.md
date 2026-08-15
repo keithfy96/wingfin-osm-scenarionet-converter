@@ -147,6 +147,38 @@ uv run ruff check
 The `-w` is required and easy to miss. `ruff format --check` fails on 8
 pre-existing files and is **not** a gate — do not mass-reformat to satisfy it.
 
+### Running the whole pipeline
+
+Two scripts cover the six stages, split where Stage 3 stops for a human. The workspace
+is set once in `.env` (gitignored; copy `.env.example`) and can be overridden per run by
+a positional argument.
+
+```bash
+./scripts/run-stages-1-3.sh               # fetch -> generate-map -> inspect --view review
+./scripts/run-stages-1-3.sh --skip-fetch  # when source/map.osm has not changed
+./scripts/run-stages-4-6.sh mosque        # apply-review -> validate-map -> convert
+```
+
+Stage 6 runs **without** `--routes` and `--signals`, so the dataset is map-only; routes
+and signal timing are drawn by hand afterwards in the pages that run writes.
+
+**`--skip-fetch` is not only a time saver.** Stage 1 rebuilds
+`normalized/road-network-local.graphml`, osmnx stamps a build timestamp into GraphML, and
+that file's checksum is an input to the Stage 2 `generation_fingerprint` — so a full
+1→3 run mints a **new fingerprint even when `source/map.osm` is byte-identical**, and the
+existing `review.json` stops applying. Measured: two Stage 1 runs over one unchanged
+`map.osm` produced two different graphml checksums. Skip Stage 1 unless the OSM moved.
+
+A code change in `src/osm_scenario/` does **not** move the fingerprint on its own — only
+`GENERATOR_VERSION`, `configuration_checksum`, the source OSM and that graphml do. So a
+generator fix plus `--skip-fetch` keeps a review usable; bumping `GENERATOR_VERSION` does
+not.
+
+The scripts refuse a workspace whose `source.type` is not `local_file`: re-running `fetch`
+on a `place` or `bbox` workspace re-downloads and **overwrites `source/map.osm`**, taking
+hand edits with it. For a local file already sitting in `<ws>/source/`, `fetch` uses it in
+place (`acquisition.py:79`) and writes nothing to it.
+
 ### Workspaces
 
 `workspaces/` is gitignored, so its contents never appear in `git status` — run
