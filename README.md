@@ -248,6 +248,13 @@ runners are invoked with MetaDrive's own interpreter:
 # actually drive it
 /home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
   tools/drive.py workspaces/junction-1/scenarionet --render 3D
+
+# driving it with GPU
+  __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
+    /home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
+    tools/drive.py workspaces/mosque/scenarionet --render 3D --semantic-pixels-per-meter 8
+
+
 ```
 
 Use `tools/drive.py`, not `python -m scenarionet.sim`. Both load the dataset
