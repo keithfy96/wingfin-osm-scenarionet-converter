@@ -812,6 +812,45 @@ along it. Five things not to re-derive:
 previously own. See
 `docs/mapping-algo-changes/2026-08-15-19:15:13-a-merging-road-crossed-the-lane-it-was-joining.md`.
 
+### Where a lane block sits across the way line is surveyed, not inferred (v24)
+
+`_lane_offset` **centres** a one-way carriageway's block on the OSM line. That is an inference
+about where the tarmac is, applied to each way on its own — so two ways drawn on the same line
+with different lane counts get blocks of different widths balanced about the same point, and
+every lane that continues between them steps **half a lane-width** sideways on a road that is
+dead straight. `_merge_taper_plan` reads that step as a gap and `_tapered_line` spends it; at
+`merge_taper_length_m` 30 m against a 24.4 m lane the taper is longer than the lane, so the whole
+lane becomes the slope rather than a straight line with a bend in it. Keith reported it as lanes
+that kink instead of following the centreline.
+
+**`placement` is the survey of it and was never read.** `placement=middle_of:2` on mosque way
+776079597 puts idx0 at +0.00 and idx1 at +3.50 — exactly where the three-lane approach's
+surviving lanes already are. Four ways carry the tag across both extracts, all Persiaran Perdana:
+mosque 776079597 and 1250683199 (`middle_of:2`) and 776022253 (`right_of:2`, in both). Reading it
+took the bend at six straight joins from 4.02°/5.29°/2.60° to ≤ 0.09°, with no connector, finding
+or status changed. Four things not to re-derive:
+
+- **OSM numbers placement lanes 1..n from the left in the way's direction.** With
+  `driving_side=left` our idx0 is offside, which is the *right* of travel, so idx0 is OSM lane
+  `count − idx`; right-hand traffic makes it `idx + 1`. The driving side renames lanes rather
+  than moving tarmac, so the two orders **reverse** rather than negate — unlike the centred
+  layout, where the block is symmetric and reversing and negating are the same thing.
+- **One-way carriageways only.** On a two-way way the tag numbers lanes across both directions
+  and the backward block runs the other way, flipping what "left" means. Neither extract has that
+  case, and a block on the wrong side of the road is worse than one centred on the line.
+- **`transition`, an out-of-range lane number and anything unparseable fall back to centring.**
+- **A lane that stops being tapered moves.** Untagged way 776022254 is straight now that 776022253
+  sits where the tag says, and the 2.6° its taper used to spend has moved to its junction with way
+  776021086, where the road genuinely turns +5.07°. Ramp 182502392's `_uncrossed_lanes` pull aims
+  at the new position, redistributing its interior bends (22.53°→13.05°, 19.50°→29.92°) while its
+  worst stays 35.08°.
+
+**19 straight joins on mosque and 9 on junction-1 still carry a 1.75 m step**, junction-1's
+776021089 → 776021087 among them. Those ways carry no tag, and Keith's decision was to read the
+survey and only the survey: enforcing continuity by inference moves 79 of 405 mosque lanes and 88
+of 285 junction-1 lanes, by up to 3.50 m, including lanes that are correct today. See
+`docs/mapping-algo-changes/2026-08-15-22:21:37-a-lane-block-was-centred-where-the-survey-placed-it.md`.
+
 ### Starved middle lanes: mostly fixed, one left
 
 Two allocation rules now run before the proportional mapping, and between them they

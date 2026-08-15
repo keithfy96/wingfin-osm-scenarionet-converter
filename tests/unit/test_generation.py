@@ -778,6 +778,95 @@ def test_one_way_carriageways_are_centred_on_the_osm_centreline() -> None:
         assert mirrored == [-value for value in offsets(4, centred=centred)]
 
 
+def test_a_placement_tag_moves_the_block_off_the_centre_of_the_line() -> None:
+    """`placement` is the survey of where the carriageway sits; centring is the inference.
+
+    Without it, a lane-count change on a straight run steps every surviving lane half a
+    lane-width sideways, because both blocks balance about the same line.
+    """
+
+    def offsets(lane_count: int, placement: str | None, *, side_sign: float = 1.0) -> list[float]:
+        return [
+            _lane_offset(
+                index,
+                lane_count=lane_count,
+                width=3.5,
+                side_sign=side_sign,
+                centred=True,
+                placement=placement,
+            )
+            for index in range(lane_count)
+        ]
+
+    # OSM numbers placement lanes 1..n from the left in the way's direction, and with
+    # left-hand traffic index 0 is offside, which is the right of travel — so index 0 is
+    # OSM lane n. mosque way 776079597 and junction-1 way 776022253, to their real values.
+    assert offsets(2, "middle_of:2") == [0.0, 3.5]
+    assert offsets(3, "right_of:2") == [-1.75, 1.75, 5.25]
+    assert offsets(2, "left_of:2") == [-1.75, 1.75]  # the centred layout, said explicitly
+
+    # Driving on the other side does not move the tarmac, it only renames the lanes, so the
+    # offsets reverse rather than negate. (For a centred block the two are the same thing,
+    # which is why the test above can assert negation and this one cannot.)
+    assert offsets(3, "right_of:2", side_sign=-1.0) == [5.25, 1.75, -1.75]
+
+    # Anything not understood falls back to centring: acting on a value we did not read
+    # throws the whole block sideways with nothing on the map to say why.
+    centred = offsets(2, None)
+    assert centred == [-1.75, 1.75]
+    for unusable in ("transition", "middle_of:9", "middle_of:0", "nonsense", "middle_of:x", ""):
+        assert offsets(2, unusable) == centred
+
+    # A two-way way numbers placement lanes across *both* directions and its backward block
+    # runs the other way, which flips what "left" means. Neither extract has that case, so
+    # the tag is ignored there rather than guessed at.
+    assert [
+        _lane_offset(
+            index, lane_count=2, width=3.5, side_sign=1.0, centred=False, placement="middle_of:2"
+        )
+        for index in range(2)
+    ] == [1.75, 5.25]
+
+
+def test_placement_tagged_ways_on_the_real_maps_line_up_with_what_feeds_them() -> None:
+    """The defect Keith reported: straight lanes sloped sideways instead of running straight.
+
+    mosque way 776079597 is tagged `placement=middle_of:2`, and its two lanes continue from
+    way 777816409's idx1 and idx2 after the offside lane peels off. Centring the two-lane
+    block put them 1.75 m off their own approach, and the merge taper — 30 m against a 24.4 m
+    lane — spent that step over the whole length, so the lane was a slope end to end.
+    """
+    # Each pair is a straight run where the lane count changes and the narrower way carries
+    # `placement`. Measured before the fix: 4.02, 5.29 and 2.60 degrees of bend at the join.
+    straight_runs = {
+        ("777816409", "776079597"),
+        ("1250683199", "184015392"),
+        ("776022253", "776022254"),
+    }
+
+    def heading(before: Point2D, after: Point2D) -> float:
+        return math.atan2(after.y - before.y, after.x - before.x)
+
+    seen = 0
+    for name, model in _generated_models():
+        lanes = {lane.identifier: lane for lane in model.lanes}
+        for connector in model.connectors:
+            if connector.status == "forbidden" or connector.movement != "through":
+                continue
+            leaves, enters = lanes[connector.from_lane_id], lanes[connector.to_lane_id]
+            if (leaves.source_way_ids[0], enters.source_way_ids[0]) not in straight_runs:
+                continue
+            seen += 1
+            turn = heading(*enters.centerline[:2]) - heading(*leaves.centerline[-2:])
+            bend = abs((math.degrees(turn) + 180.0) % 360.0 - 180.0)
+            assert bend <= 0.5, (
+                f"{name} way {leaves.source_way_ids[0]} idx{leaves.lane_index} into way "
+                f"{enters.source_way_ids[0]} idx{enters.lane_index} still bends {bend:.2f} "
+                "degrees on a straight run"
+            )
+    assert seen, "none of the joins this test exists for were in any generated model"
+
+
 def _block(
     way: str, node_from: str, node_to: str, lane_count: int, bearing_degrees: float
 ) -> list[LaneFeature]:

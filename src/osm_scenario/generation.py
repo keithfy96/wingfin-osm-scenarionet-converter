@@ -62,7 +62,7 @@ from osm_scenario.topology import (
     way_adjacency,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v23"
+GENERATOR_VERSION = "direct-osm-stage2-v24"
 LANE_MODEL_SCHEMA_VERSION = 3
 
 # How much clear road to leave beyond the crossing carriageway when a lane is cut back at a
@@ -215,8 +215,43 @@ def _single_direction_ways(graph: Any, snapshot: OsmSnapshot) -> frozenset[str]:
     )
 
 
+def _placement_edge_distance(placement: str, lane_count: int, width: float) -> float | None:
+    """How far the OSM way line sits from the left edge of the carriageway, per `placement`.
+
+    OSM numbers placement lanes 1..n **from the left in the way's direction**, so lane `k`
+    spans `[(k - 1) * width, k * width]` measured from that left edge, and the tag names an
+    edge or the middle of one of them.
+
+    `transition`, an out-of-range lane number and anything that does not parse are all
+    returned as `None`: centring is a defensible default, whereas acting on a value we did
+    not understand throws the whole block sideways with nothing to say why.
+    """
+    kind, separator, number = placement.partition(":")
+    if not separator:
+        return None
+    try:
+        lane = int(number)
+    except ValueError:
+        return None
+    if not 1 <= lane <= lane_count:
+        return None
+    if kind == "middle_of":
+        return (lane - 0.5) * width
+    if kind == "left_of":
+        return (lane - 1) * width
+    if kind == "right_of":
+        return lane * width
+    return None
+
+
 def _lane_offset(
-    lane_index: int, *, lane_count: int, width: float, side_sign: float, centred: bool
+    lane_index: int,
+    *,
+    lane_count: int,
+    width: float,
+    side_sign: float,
+    centred: bool,
+    placement: str | None = None,
 ) -> float:
     """Lateral offset of a generated lane from the OSM way centreline.
 
@@ -224,7 +259,25 @@ def _lane_offset(
     blocks straddle the centreline. A one-way carriageway has no opposite block to
     balance against and is centred on the line instead. `side_sign` keeps lane index 0
     offside and index `lane_count - 1` kerbside in both cases.
+
+    Centring is an *inference* about where the carriageway sits, and `placement` is the
+    survey of it: without the tag, a lane-count change on a straight run forces every
+    surviving lane half a lane-width sideways, because both blocks are centred on the same
+    line. So the tag wins where it is present — the standing rule that surveyed tags outrank
+    inferred geometry. It is honoured only on a one-way carriageway: on a two-way way the tag
+    numbers lanes across *both* directions and the backward block runs the other way, which
+    flips what "left" means, and neither extract has that case to check against.
     """
+    if centred and placement is not None:
+        edge_distance = _placement_edge_distance(placement, lane_count, width)
+        if edge_distance is not None:
+            # Lane index 0 is offside. With left-hand traffic the offside is the right of
+            # travel, so index 0 is OSM lane `lane_count`; with right-hand traffic it is the
+            # left of travel, so index 0 is OSM lane 1. Both branches return the same
+            # left-of-travel-positive quantity the formula below already produces, which is
+            # why `side_sign` is spent here rather than multiplied in afterwards.
+            osm_lane = lane_count - lane_index if side_sign > 0 else lane_index + 1
+            return edge_distance - (osm_lane - 0.5) * width
     return side_sign * (lane_index + 0.5 - (0.5 * lane_count if centred else 0.0)) * width
 
 
@@ -2160,7 +2213,12 @@ def build_lane_model(
         centred = _carries_whole_carriageway(way.tags, one_way_in_graph=one_way)
         for lane_index in range(count):
             offset = _lane_offset(
-                lane_index, lane_count=count, width=width, side_sign=side_sign, centred=centred
+                lane_index,
+                lane_count=count,
+                width=width,
+                side_sign=side_sign,
+                centred=centred,
+                placement=way.tags.get("placement") if centred else None,
             )
             center = base.offset_curve(offset, join_style="mitre")
             if not isinstance(center, LineString) or center.is_empty:
