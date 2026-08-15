@@ -116,8 +116,9 @@ def main() -> int:
             and _polyline_length(feature["polyline"]) <= 4.0
         )
         stubs = (markings or {}).get("junction_stubs", 0)
+        kerbs = (markings or {}).get("junction_kerbs", 0)
         print(
-            "markings     {}{}{}{}".format(
+            "markings     {}{}{}{}{}".format(
                 ", ".join(f"{count} {name}" for name, count in sorted(styles.items()))
                 or "no boundaries",
                 f" · source {markings['source']}, {markings['merged']} second copies merged"
@@ -127,6 +128,10 @@ def main() -> int:
                 # junction trim clamped, which sit inside a junction. Left in, a car turning
                 # through the box crosses them and the ghost bodies read as line violations.
                 f" · {stubs} left unpainted on junction stubs" if stubs else "",
+                # The other half of that: a junction's interior stays bare, but the edge of it
+                # facing open ground is painted, so the kerb line does not stop at the mouth.
+                # Counted separately from `edges` because these belong to no lane.
+                f" · {kerbs} kerb line(s) round the junctions" if kerbs else "",
                 f" · {short} divider(s) under 4 m, too short to dash" if short else "",
             )
         )

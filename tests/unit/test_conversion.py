@@ -19,14 +19,20 @@ from typing import Any
 
 import numpy as np
 import pytest
+from shapely.geometry import LineString, Polygon
+from shapely.ops import unary_union
 
 from osm_scenario import signal_plan
 from osm_scenario.apply_review import _sha256
 from osm_scenario.config import ConverterConfig
 from osm_scenario.conversion import (
+    _BOUNDARY_TYPE,
+    _LANE_TYPE,
+    _MAX_KERB_TURN_DEG,
     ConversionError,
     _lane_change_moves,
     _lane_neighbours,
+    _map_features,
     _reachability,
     _scenario,
     convert_scenario,
@@ -271,7 +277,14 @@ def test_a_passing_workspace_converts_and_records_stage_6(tmp_path: Path) -> Non
     scenario = pickle.loads(scenario_paths[0].read_bytes())
     # `c` is the junction turn. It is a feature in its own right because MetaDrive builds its
     # road network out of lane features and would otherwise have no surface across the junction.
-    assert set(scenario["map_features"]) == {"a", "b", "c", "d"}
+    features = scenario["map_features"]
+    named = {"a", "b", "c", "d"}
+    assert named <= set(features)
+    # Everything else is a kerb line round that turn. They belong to no lane, so they are keyed
+    # on where they are rather than on a model id, and the count is the only stable handle.
+    kerbs = set(features) - named
+    assert len(kerbs) == scenario["metadata"]["lane_markings"]["junction_kerbs"]
+    assert all(features[identifier]["type"] == "ROAD_EDGE_BOUNDARY" for identifier in kerbs)
 
     # Both index files key on the same computed filename, and it is the one MetaDrive will
     # accept - not a name we found readable.
@@ -281,8 +294,8 @@ def test_a_passing_workspace_converts_and_records_stage_6(tmp_path: Path) -> Non
     assert pickle.loads(mapping_path.read_bytes()) == {name: ""}
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    # Three lanes and the junction turn between two of them.
-    assert report["map_features"] == 4
+    # Three lanes, the junction turn between two of them, and the kerb round that turn.
+    assert report["map_features"] == 4 + len(kerbs)
     assert report["scenario_files"] == [name]
     # Empty rather than absent: a map-only dataset is one MetaDrive can check and cannot
     # drive, and the report is where that difference is stated.
@@ -589,6 +602,118 @@ def test_a_suppressed_marking_is_reported_rather_than_counted_as_a_duplicate() -
     markings = _built(model.model_copy(update={"lanes": lanes}))["metadata"]["lane_markings"]
     assert markings["junction_stubs"] == 2
     assert markings["merged"] == 1
+
+
+# --- the kerb round a junction -----------------------------------------------------------
+
+
+def _real_models() -> list[tuple[str, PreliminaryLaneModel]]:
+    """Every reviewed model on this machine, for the checks a hand-written map cannot make.
+
+    `workspaces/` is gitignored, so on a clean checkout this is empty and the sweeps that use
+    it skip - the same arrangement `test_ego_route._real_model` makes, and for the same reason:
+    what is being checked is where turns overlap each other on a real map.
+    """
+    root = Path(__file__).resolve().parents[2] / "workspaces"
+    found = []
+    for path in sorted(root.glob("*/lane-model/reviewed.json")) if root.exists() else []:
+        model = PreliminaryLaneModel.model_validate(json.loads(path.read_text()))
+        found.append((path.parents[1].name, model))
+    return found
+
+
+def _kerbs(model: PreliminaryLaneModel) -> tuple[dict[str, Any], set[str]]:
+    return _map_features(model, _lane_neighbours(model), _lane_change_moves(model))
+
+
+def test_a_road_with_no_junction_is_given_no_kerb_at_all() -> None:
+    """Nothing to paint round: the kerb is the outline of a *junction*, not of the road."""
+    lanes = [
+        _lane("a", x0=0.0, x1=50.0, exit_lanes=["b"]),
+        _lane("b", x0=50.0, x1=100.0, entry_lanes=["a"], source_edge=["2", "3", "0"]),
+    ]
+    model = PreliminaryLaneModel.model_validate(
+        {"metadata": _METADATA, "lanes": [lane.model_dump() for lane in lanes], "connectors": []}
+    )
+    features, kerbs = _kerbs(model)
+    assert kerbs == set()
+    assert set(features) == {"a", "b"}
+
+
+def test_a_junction_kerb_never_lands_on_road_a_car_drives_on() -> None:
+    """The one thing that must not happen, checked where it would: on the real maps.
+
+    A kerb line is the outline of a junction *facing open ground*. Anything of it that comes
+    out over the drivable surface is a seam between two overlapping turns rather than a kerb -
+    and it would not only look wrong: `ScenarioBlock` gives every line a ghost body and a solid
+    one sets `on_white_continuous_line`, so a line here reads to a policy as a violation the
+    car cannot avoid.
+    """
+    models = _real_models()
+    if not models:
+        pytest.skip("workspaces/ is gitignored and not present")
+    for name, model in models:
+        features, kerbs = _kerbs(model)
+        assert kerbs, f"{name} produced no kerb lines at all"
+        road = unary_union(
+            [
+                Polygon(item["polygon"])
+                for item in features.values()
+                if item["type"] == _LANE_TYPE and len(item["polygon"]) >= 4
+            ]
+        ).buffer(-0.25)
+        stray = [
+            identifier
+            for identifier in kerbs
+            if road.intersects(
+                LineString(features[identifier]["polyline"]).interpolate(0.5, normalized=True)
+            )
+        ]
+        assert not stray, f"{name}: {len(stray)} kerb line(s) lie on drivable road: {stray[:3]}"
+
+
+def test_no_kerb_line_doubles_back_on_itself() -> None:
+    """`_uncreased` is what keeps a seam from being drawn as a mark across the junction."""
+    models = _real_models()
+    if not models:
+        pytest.skip("workspaces/ is gitignored and not present")
+    for name, model in models:
+        features, kerbs = _kerbs(model)
+        for identifier in kerbs:
+            points = np.asarray(features[identifier]["polyline"], dtype=np.float64)
+            steps = np.diff(points, axis=0)
+            spans = np.hypot(steps[:, 0], steps[:, 1])
+            unit = steps[spans > 0] / spans[spans > 0][:, None]
+            if len(unit) < 2:
+                continue
+            cross = unit[:-1, 0] * unit[1:, 1] - unit[:-1, 1] * unit[1:, 0]
+            dot = unit[:-1, 0] * unit[1:, 0] + unit[:-1, 1] * unit[1:, 1]
+            worst = float(np.abs(np.degrees(np.arctan2(cross, dot))).max())
+            assert worst <= _MAX_KERB_TURN_DEG, f"{name}: {identifier} turns {worst:.1f} degrees"
+
+
+def test_a_kerb_line_is_a_road_edge_and_belongs_to_no_lane() -> None:
+    """Solid, like the lane edge it takes over from, and with no `lane_id` to be wrong about."""
+    features, kerbs = _kerbs(_model())
+    assert kerbs
+    for identifier in kerbs:
+        feature = features[identifier]
+        assert feature["type"] == _BOUNDARY_TYPE
+        assert "lane_id" not in feature and "side" not in feature
+
+
+def test_the_kerb_is_counted_apart_from_the_markings_that_belong_to_lanes() -> None:
+    """`edges` and `merged` are counted by type, so a kerb left in them would corrupt both."""
+    model = _sharing_a_divider()
+    markings = _built(model)["metadata"]["lane_markings"]
+    _, kerbs = _kerbs(model)
+    assert markings["junction_kerbs"] == len(kerbs)
+    # `merged` is a difference against what the model holds, so a kerb counted here would push
+    # it below zero rather than merely make it larger.
+    assert markings["merged"] >= 0
+    assert markings["edges"] == sum(
+        1 for lane in model.lanes for boundary in lane.boundaries
+    ) - markings["merged"] - markings["dividers"]
 
 
 def test_a_boundary_sharing_a_lane_id_is_refused() -> None:

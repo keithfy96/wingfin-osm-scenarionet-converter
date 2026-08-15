@@ -568,11 +568,49 @@ re-derive:
   is a `convert`-time file. It lives on the command line, with `LINE_WIDTH_M` in `.env` for
   anyone who does not want to type it.
 
-### A junction is not painted, and the lanes inside it are why
+### A junction is bare inside and kerbed outside, and both halves are deliberate
 
 `_map_features` writes boundary features for `model.lanes` only, so a `ConnectorFeature` — a
-junction turn — is a `LANE_SURFACE_STREET` polygon with no lines. A junction should therefore
-be bare road, and mostly is.
+junction turn — is a `LANE_SURFACE_STREET` polygon with no lines of its own. The **inside** of a
+junction is therefore bare road, which is right: traffic crosses it, and painting every
+connector's two edges would put 82 turns' worth of white line crossing each other through the
+middle of every intersection.
+
+**The edge of a junction is a different thing, and it was blank by accident until 2026-08-16.**
+Every lane is cut back from its node by `_node_setbacks`, which left a median 9.17 m and up to
+14.43 m of road edge with no paint on it — 61 of `junction-1`'s 82 active connectors bridge a gap
+that wide; the other 21 are stubs where the lanes already touch and nothing was missing. What a
+reader saw there instead was `terrain.frag.glsl:115` painting anything in `5 < value < 16` pure
+white: ground is 0, a white line 10 and road surface 20, the semantic texture is filtered, so
+**every road-to-grass edge gets a hairline about one texel wide whether a line is there or not** —
+0.031 m on `junction-1` at 32 px/m against 0.156 m for a real marking. Keith looked at that and
+said the connectors had no lane lines, which was exactly right. That hairline is also what draws
+round every road on the map, and is the one Keith earlier chose to leave.
+
+`conversion._junction_kerb_boundaries` now paints the outside: take the outline of every surface
+carrying no paint (connectors, the straight-through bridges, the clamped stub lanes), cut away
+what abuts a painted lane, cut away what a line already covers, and draw the rest. 91 lines on
+`junction-1` and 103 on `mosque`, strictly additive — not one existing feature changes — and
+export-time, so no fingerprint moves. Four things not to re-derive:
+
+- **Grow the painted lane surface before subtracting it; never shrink it.** A connector's surface
+  is buffered `cap_style="flat"`, so its end cap sits exactly on the lane's own end cap. Shrinking
+  leaves that cap standing as a bar straight across the carriageway at every junction mouth,
+  reading as a stop line — 233 of `junction-1`'s 268 pieces, each a lane width long.
+- **`_MIN_KERB_M` is 2.0 because that is where the strays stop**, not because it is round. Swept:
+  1.0 leaves 2 lines on drivable road on `junction-1` and 1 on `mosque`, 1.5 leaves 2 and 1, 2.0
+  leaves none, 3.0 buys nothing and costs 45 m and 69 m of real kerb.
+- **`_MAX_KERB_TURN_DEG` is 150 and the histogram chose it.** Per-vertex turns over both extracts:
+  6740 under 10°, a cluster of 40 at 80–89° where a connector's flat cap meets its side, then
+  nothing until 32 sit at 170–179°. Those are seams between overlapping turns drawn as zero-width
+  needles. `_uncreased` cuts at them and keeps both sides, because a needle is usually a metre of
+  seam on the end of an arc that is otherwise kerb — and it rejects steps under
+  `ego_route.COINCIDENT_M` for that constant's own reason: shapely repeats a vertex a fraction of
+  a micrometre away, and a bearing over 78 µm is noise that hides the reversal it is looking for.
+- **A kerb arc has no `side` and no `lane_id`.** It is merged from however many turns meet there
+  and belongs to none of them; nothing in this repo or in MetaDrive reads either field on a
+  boundary feature. `lane_markings.junction_kerbs` counts them, kept out of `edges` and `merged`
+  because both of those are counted by feature type and a kerb would drive `merged` negative.
 
 **But some junctions have real lanes inside them.** A big intersection is often mapped as
 several nodes joined by short ways rather than one node: `junction-1`'s node `1927184814` is
@@ -598,7 +636,9 @@ Three things not to re-derive:
 
 `lane_markings.junction_stubs` reports the count, kept out of `merged` because a dropped
 duplicate and a deliberately blank junction are different facts. `tools/check_dataset.py`
-prints it.
+prints it beside `junction_kerbs`. **The stubs' outward-facing edges do come back as kerb** —
+they are in the unpainted union above — while their interior marks stay dropped, which is the
+distinction the whole of this section turns on.
 
 ### Conventions that bite
 
