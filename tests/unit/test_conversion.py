@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 import pytest
-from shapely.geometry import LineString, Polygon
+from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import unary_union
 
 from osm_scenario import signal_plan
@@ -27,9 +27,11 @@ from osm_scenario.apply_review import _sha256
 from osm_scenario.config import ConverterConfig
 from osm_scenario.conversion import (
     _BOUNDARY_TYPE,
+    _KERB_GAP_CLOSE_M,
     _LANE_TYPE,
     _MAX_KERB_TURN_DEG,
     ConversionError,
+    _kerb_rings,
     _lane_change_moves,
     _lane_neighbours,
     _map_features,
@@ -338,8 +340,11 @@ def test_a_forbidden_connector_is_dropped_rather_than_followed() -> None:
     neighbours = _lane_neighbours(model)
     assert neighbours["a"][1] == []
     assert neighbours["b"][0] == []
-    # The lanes survive; only the movement the review forbade is gone.
-    assert set(_built(model)["map_features"]) == {"a", "b", "d"}
+    # The lanes survive; only the movement the review forbade is gone. The kerb lines round them
+    # are keyed on their own geometry and belong to no lane, so they are counted rather than named.
+    features = _built(model)["map_features"]
+    _, kerbs = _kerbs(model)
+    assert set(features) - kerbs == {"a", "b", "d"}
 
 
 def test_an_unknown_reference_names_the_lane_that_holds_it() -> None:
@@ -623,21 +628,121 @@ def _real_models() -> list[tuple[str, PreliminaryLaneModel]]:
 
 
 def _kerbs(model: PreliminaryLaneModel) -> tuple[dict[str, Any], set[str]]:
-    return _map_features(model, _lane_neighbours(model), _lane_change_moves(model))
+    features, kerbs, _ = _map_features(
+        model, _lane_neighbours(model), _lane_change_moves(model)
+    )
+    return features, kerbs
 
 
-def test_a_road_with_no_junction_is_given_no_kerb_at_all() -> None:
-    """Nothing to paint round: the kerb is the outline of a *junction*, not of the road."""
+def _road_edge(features: dict[str, Any]) -> tuple[Any, list[LineString]]:
+    """The rings a kerb could run along, and every line already drawn on the map.
+
+    The same two things `_junction_kerb_boundaries` works from, rebuilt here from what was
+    written rather than shared with it, so a test cannot pass by agreeing with the bug.
+    """
+    surfaces = [
+        Polygon(item["polygon"])
+        for item in features.values()
+        if item["type"] == _LANE_TYPE and len(item["polygon"]) >= 4
+    ]
+    lines = [
+        LineString(item["polyline"])
+        for item in features.values()
+        if item["type"] != _LANE_TYPE and len(item.get("polyline", ())) >= 2
+    ]
+    road = unary_union([shape.buffer(0) for shape in surfaces])
+    return road, lines
+
+
+def _end_alignment(arc: LineString, lines: list[LineString]) -> tuple[float, float]:
+    """|cos| between `arc` and the nearest drawn line, at each of its two ends.
+
+    A break in one continuous kerb runs *along* the paint at both ends; a bar across the end of
+    a road is square to it at both. One number cannot say both, so both are returned.
+    """
+    points = np.asarray(arc.coords, dtype=np.float64)
+    if len(points) < 2:
+        return (1.0, 1.0)
+    seen = []
+    for tip, step in (
+        (points[0], points[0] - points[min(3, len(points) - 1)]),
+        (points[-1], points[-1] - points[max(-4, -len(points))]),
+    ):
+        span = float(np.hypot(*step))
+        node = Point(tip)
+        near = [line for line in lines if line.distance(node) <= 0.25]
+        if span <= 1e-3 or not near:
+            return (1.0, 1.0)
+        line = min(near, key=lambda item: item.distance(node))
+        along = line.project(node)
+        back = np.asarray(line.interpolate(max(0.0, along - 1.0)).coords[0])
+        ahead = np.asarray(line.interpolate(min(line.length, along + 1.0)).coords[0])
+        reach = ahead - back
+        length = float(np.hypot(*reach))
+        if length <= 1e-3:
+            return (1.0, 1.0)
+        seen.append(abs(float(np.dot(step / span, reach / length))))
+    return (min(seen), max(seen))
+
+
+def _unpainted_edge(features: dict[str, Any]) -> list[tuple[LineString, tuple[float, float]]]:
+    """Every stretch of road edge with no paint on it, scored at both ends.
+
+    The tolerance is one texel - 1/16 m, `mosque`'s 2048 m terrain square against this machine's
+    32768 px ceiling - because a drawn line is two of them. Measuring this at 0.20 m is what let
+    the first version of the kerb ship with 154 breaks in it: at three times the width of the
+    paint, an edge that renders bare passes as painted.
+    """
+    road, lines = _road_edge(features)
+    # Sealed, like the generator: the wall of a 0.2 m notch between two surfaces is not an edge
+    # anything should paint, so leaving it bare is not a break in a kerb.
+    sealed = road.buffer(
+        _KERB_GAP_CLOSE_M, join_style="mitre", mitre_limit=5.0
+    ).buffer(-_KERB_GAP_CLOSE_M, join_style="mitre", mitre_limit=5.0)
+    rings = unary_union(_kerb_rings(sealed))
+    bare = rings.difference(unary_union(lines).buffer(1 / 16))
+    pieces = bare.geoms if hasattr(bare, "geoms") else [bare]
+    return [
+        (piece, _end_alignment(piece, lines))
+        for piece in pieces
+        if not piece.is_empty and piece.length > 0.02
+    ]
+
+
+def test_a_road_whose_edges_are_already_painted_is_given_no_kerb_at_all() -> None:
+    """The kerb fills gaps; where a lane's own edge lines already cover the road, there are none.
+
+    Both ends of the pair are road ends - the road simply stops - and a bar of paint across a
+    carriageway draws as a stop line, so those are left bare rather than filled.
+    """
+    def edges(name: str, x0: float, x1: float) -> list[LaneBoundary]:
+        half = WIDTH / 2
+        return [
+            LaneBoundary(
+                identifier=f"{name}-{side}",
+                side=side,
+                points=[Point2D(x=x0, y=y), Point2D(x=x1, y=y)],
+            )
+            for side, y in (("left", half), ("right", -half))
+        ]
+
     lanes = [
-        _lane("a", x0=0.0, x1=50.0, exit_lanes=["b"]),
-        _lane("b", x0=50.0, x1=100.0, entry_lanes=["a"], source_edge=["2", "3", "0"]),
+        _lane("a", x0=0.0, x1=50.0, exit_lanes=["b"], boundaries=edges("a", 0.0, 50.0)),
+        _lane(
+            "b",
+            x0=50.0,
+            x1=100.0,
+            entry_lanes=["a"],
+            source_edge=["2", "3", "0"],
+            boundaries=edges("b", 50.0, 100.0),
+        ),
     ]
     model = PreliminaryLaneModel.model_validate(
         {"metadata": _METADATA, "lanes": [lane.model_dump() for lane in lanes], "connectors": []}
     )
     features, kerbs = _kerbs(model)
     assert kerbs == set()
-    assert set(features) == {"a", "b"}
+    assert set(features) == {"a", "b", "a-left", "a-right", "b-left", "b-right"}
 
 
 def test_a_junction_kerb_never_lands_on_road_a_car_drives_on() -> None:
@@ -672,6 +777,32 @@ def test_a_junction_kerb_never_lands_on_road_a_car_drives_on() -> None:
         assert not stray, f"{name}: {len(stray)} kerb line(s) lie on drivable road: {stray[:3]}"
 
 
+def test_no_kerb_line_has_tarmac_on_both_sides_of_it() -> None:
+    """A kerb separates road from not-road. With road either side it is not a kerb.
+
+    This is the one the test above cannot make. Lane and connector surfaces are each buffered from
+    their own centreline, so a junction mouth is left with a notch 0.10-0.30 m wide; traced
+    literally, the road's ring dives in along one wall and back out along the other and paints
+    both. Those marks lie exactly *on* the boundary rather than inside it, so
+    `test_a_junction_kerb_never_lands_on_road_a_car_drives_on` passes them - which is how 238 of
+    `mosque`'s 408 kerb lines shipped as paint on open tarmac.
+    """
+    models = _real_models()
+    if not models:
+        pytest.skip("workspaces/ is gitignored and not present")
+    for name, model in models:
+        features, kerbs = _kerbs(model)
+        road, _ = _road_edge(features)
+        marks = []
+        for identifier in kerbs:
+            around = LineString(features[identifier]["polyline"]).buffer(0.15)
+            if around.difference(road).area / max(around.area, 1e-12) < 0.15:
+                marks.append(identifier)
+        assert not marks, (
+            f"{name}: {len(marks)} kerb line(s) have road on both sides: {marks[:3]}"
+        )
+
+
 def test_no_kerb_line_doubles_back_on_itself() -> None:
     """`_uncreased` is what keeps a seam from being drawn as a mark across the junction."""
     models = _real_models()
@@ -690,6 +821,61 @@ def test_no_kerb_line_doubles_back_on_itself() -> None:
             dot = unit[:-1, 0] * unit[1:, 0] + unit[:-1, 1] * unit[1:, 1]
             worst = float(np.abs(np.degrees(np.arctan2(cross, dot))).max())
             assert worst <= _MAX_KERB_TURN_DEG, f"{name}: {identifier} turns {worst:.1f} degrees"
+
+
+def test_no_kerb_on_the_real_maps_is_broken_where_it_should_run_on() -> None:
+    """The defect this whole pass exists to remove, asserted at zero.
+
+    One physical kerb has to draw as one line. The version that shipped stood every arc off
+    0.15 m from the line it met and threw away anything under 2 m, which left `mosque` with 154
+    breaks over 276 m and `junction-1` with 186 over 292 m - a kerb chopped into larger and
+    smaller pieces with holes between them, which reads as a marking that means something.
+
+    A break is a stretch of road edge with no paint that runs *along* the paint at both of its
+    ends. A bar across the end of a road does not qualify and is the test below.
+    """
+    models = _real_models()
+    if not models:
+        pytest.skip("workspaces/ is gitignored and not present")
+    for name, model in models:
+        features, kerbs = _kerbs(model)
+        assert kerbs, f"{name} produced no kerb lines at all"
+        broken = [
+            piece for piece, (low, _) in _unpainted_edge(features) if low > 0.6
+        ]
+        assert not broken, (
+            f"{name}: {len(broken)} break(s) in a continuous kerb, "
+            f"{sum(piece.length for piece in broken):.0f} m of gap"
+        )
+
+
+def test_the_end_of_a_road_is_never_painted_across() -> None:
+    """A bar of paint across a carriageway is a stop line, and there is no stop line there.
+
+    `_node_setbacks` leaves the end of every road square, so the outline of the network runs
+    straight across it. Filling that gap is what "make the kerb continuous" would do if the rule
+    were applied without looking, and it would put a solid line - with its ghost body - across
+    road a car drives along.
+    """
+    models = _real_models()
+    if not models:
+        pytest.skip("workspaces/ is gitignored and not present")
+    for name, model in models:
+        features, kerbs = _kerbs(model)
+        road, _ = _road_edge(features)
+        inside = road.buffer(-0.25)
+        crossing = [
+            identifier
+            for identifier in kerbs
+            if LineString(features[identifier]["polyline"])
+            .interpolate(0.5, normalized=True)
+            .within(inside)
+        ]
+        assert not crossing, f"{name}: kerb(s) across the carriageway: {crossing[:3]}"
+        # And the ends really are still there to have been left alone - a run that painted over
+        # all of them would pass the check above while doing the thing it guards against.
+        ends = [piece for piece, (_, high) in _unpainted_edge(features) if high < 0.35]
+        assert ends, f"{name}: no road end left bare, so the guard proved nothing"
 
 
 def test_a_kerb_line_is_a_road_edge_and_belongs_to_no_lane() -> None:

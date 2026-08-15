@@ -46,14 +46,15 @@ import pickle
 import re
 import statistics
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import networkx as nx
 import numpy as np
-from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
+from shapely import STRtree
+from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon
 from shapely.ops import linemerge, unary_union
 
 # Private helpers imported across modules on purpose, for the reason `validation` gives:
@@ -175,26 +176,73 @@ _SAME_LINE_M = 0.05
 # it, so the tolerance is picked to be unmistakably below that gap rather than tuned to a case.
 _STUB_LANE_TOLERANCE_M = 0.01
 
-# How far the painted lane surface is grown before it is cut out of a junction's outline, and the
-# sign is the whole of it. A connector's surface is buffered with `cap_style="flat"`, so its end
-# cap lies exactly on the lane's own end cap; *shrinking* the lane leaves that cap standing as a
-# bar straight across the carriageway at every junction mouth, which draws as a stop line. That
-# was 233 of `junction-1`'s 268 pieces, every one of them a lane width long. Growing swallows it:
-# 268 lines over 1109 m became 86 over 521 m, and none of the survivors crosses a lane.
-_KERB_LANE_CLEARANCE_M = 0.05
+# How much of a line that is already drawn is taken out of the kerb candidate. Only enough that
+# the kerb is not laid a second time over paint that exists - two coincident lines are resampled
+# out of phase by MetaDrive (`scenario_map.py:61` resamples at 2 m) and draw as something neither
+# of them is. It is deliberately *not* a stand-off: an earlier 0.15 m here left a visible gap
+# wherever a kerb took over from a lane's edge line, and those gaps were 58 of `mosque`'s 154
+# breaks in an otherwise continuous kerb and 85 of `junction-1`'s 186.
+_KERB_PAINT_ALLOWANCE_M = 0.02
 
-# How far a kerb line stands off a line that is already drawn, so the two do not overlap into a
-# smear. It is also the gap the kerb leaves where it takes over from a lane's edge line; at the
-# 0.156 m these draw at on `junction-1` the join reads as continuous.
-_KERB_PAINT_CLEARANCE_M = 0.15
+# How far each end of a kerb line is pushed along its own end tangent, so it runs into the line it
+# meets instead of stopping beside it. The end sits on the road edge and a tenth of a metre along
+# that edge is still the road edge, so this cannot wander off it; the overlap is what makes one
+# physical kerb read as one line rather than a chain of unequal ones.
+_KERB_JOIN_OVERLAP_M = 0.10
 
-# The shortest kerb line worth drawing. Adjacent connector surfaces overlap by centimetres, which
-# leaves slivers of outline between them - hundreds of them, about half a metre each. They are
-# not kerb, they are the seams between two turns, and they are the only things that come out
-# lying on road a car drives on. Swept over both workspaces, this is the first value at which
-# none does: 1.0 leaves 2 strays on `junction-1` and 1 on `mosque`, 1.5 leaves 2 and 1, 2.0
-# leaves none, and 3.0 buys nothing while costing 45 m and 69 m of kerb that is real.
-_MIN_KERB_M = 2.0
+# How far from an arc's end a drawn line has to be to count as the line that arc meets there. It
+# is the paint allowance plus a little, because that subtraction is what put the end where it is.
+_KERB_JOIN_REACH_M = 0.25
+
+# How wide a gap between two road surfaces is closed up before the kerb is traced round them. Lane
+# and connector surfaces are each buffered from their own centreline, so where they meet they leave
+# a notch 0.10-0.30 m wide - narrower than the 0.125 m line drawn on it. Traced literally, the ring
+# dives in along one wall of that notch and back out along the other, so **both walls get painted**.
+# 238 of `mosque`'s 408 kerb lines and 140 of `junction-1`'s 284 were that: 459 m and 270 m of paint
+# lying on open tarmac in pairs about 1.93 m long. A gap that narrow is an artefact of how the
+# surfaces are built, not a road edge, so the kerb should run straight past it.
+#
+# 0.35 m is the smallest closing that reaches zero on both extracts - 0.30 leaves one on each, 0.40
+# and 0.45 are also clean, so it is not a knife edge, and 0.50 swallows a real island on `mosque`.
+# It settles the islands too: enclosed holes fall from 693 to exactly `mosque`'s 20 real ones and
+# from 330 to exactly `junction-1`'s 9, those being the same defect seen from the inside.
+#
+# Mitred, not rounded: a round join would pull every convex corner of the network out and back by
+# the radius. Mitred, nothing moves except where a gap is filled - measured, the kerb sits a median
+# 0.004 m from the true road edge and only reaches 0.46 m at the notch mouths it now bridges.
+_KERB_GAP_CLOSE_M = 0.35
+
+# The shortest kerb line worth drawing, and it is numerical dust only. **`_MIN_KERB_M` was 2.0 m,
+# and calling that a proxy for "do not paint on road a car drives on" is what shipped the notch
+# walls.** It was the needle filter, and a notch wall is 1.93 m. Lowering it was still right - the
+# proxy cost 19 of `mosque`'s breaks and 22 of `junction-1`'s, arcs that bridged two painted lines
+# and were thrown away for being short - but what replaced it had to be `_KERB_GAP_CLOSE_M`, which
+# removes the seam, rather than `_KERB_INSET_M`, which cannot see it.
+_MIN_KERB_M = 0.05
+
+# How far inside the carriageway a kerb line has to be before it is refused. Every line MetaDrive
+# draws gets a ghost body and a solid one sets `on_white_continuous_line`, so a line the far side of
+# this is one a car can be judged to have crossed. **It catches a line that strays into the road and
+# nothing else** - a notch wall lies exactly *on* the boundary, so it passes this cleanly, and the
+# stray count read 0 while 238 marks sat on the tarmac. Measured against the real surfaces, never
+# against the closed ones.
+_KERB_INSET_M = 0.25
+
+# How square-on to the paint at both of its ends an arc has to run before it is read as the end of
+# a road rather than a length of kerb. A road that simply stops - at the edge of the extract, or a
+# dead end - leaves a bar of bare edge straight across the carriageway, and painting it would draw
+# a stop line where there is none. `_MAX_ROAD_END_M` bounds it to something a carriageway wide, so
+# a genuinely long kerb that happens to meet its neighbours squarely is not mistaken for one. 100
+# of these are left bare on `mosque` and 96 on `junction-1`.
+_ROAD_END_SQUARENESS = 0.35
+_MAX_ROAD_END_M = 6.0
+
+# The smallest enclosed gap in the road that is treated as a real island - a roundabout centre, or
+# the block a ring road runs round - and given a kerb on its inward-facing side. A backstop rather
+# than the thing doing the work: `_KERB_GAP_CLOSE_M` already seals the needle-thin slivers where two
+# lane polygons fail to meet, and what is left as a hole afterwards is exactly the 20 real islands
+# on `mosque` and 9 on `junction-1`.
+_MIN_ISLAND_M = 0.3
 
 # Where a kerb line is cut because it has turned back on itself. Where two turns cross, the
 # outline of their union can run out along a seam and straight back down it - a zero-width needle
@@ -878,85 +926,183 @@ def _uncreased(arc: LineString) -> list[np.ndarray]:
     ]
 
 
-def _junction_kerb_boundaries(
-    model: PreliminaryLaneModel,
-    links: Mapping[str, tuple[list[str], list[str]]],
-    bridges: Mapping[str, dict[str, Any]],
-    stubs: set[str],
-    superseded: set[str],
-) -> dict[str, dict[str, Any]]:
-    """The kerb line round a junction, where nothing else paints one.
+def _kerb_rings(road: Polygon | MultiPolygon) -> list[LineString]:
+    """Every edge of the road network a kerb could run along.
 
-    A junction's surface carries no markings. `_map_features` writes boundaries for `model.lanes`
-    and nothing else, so a `ConnectorFeature` is a road polygon with no lines at all, and
-    `_stub_lanes` drops 56 more on `junction-1`. That is right for the *inside* of the box - real
-    junctions are bare there - but every lane is also cut back from the node by `_node_setbacks`,
-    which on `junction-1` leaves a median 9.17 m and up to 14.43 m of road edge with no paint on
-    it. What a reader sees instead is `terrain.frag.glsl` colouring anything in `5 < value < 16`
-    white, so the filtered blend from road surface (20) to ground (0) draws a hairline about one
-    texel wide - 3 cm against the 0.156 m a real marking draws at. It traces the junction
-    convincingly and is not a line.
+    The *exterior* of each piece, plus the ring of any enclosed gap wide enough to be a real
+    island - a roundabout centre, or the block a ring road runs round, whose inward-facing kerb is
+    as real as the outward one and was getting nothing.
 
-    So: take the outline of everything that carries no paint, cut away the part of it that abuts
-    painted road, cut away anything a line already covers, and draw what is left. What survives is
-    the outside of a turn and the corners of the box, which is the kerb; nothing lands inside the
-    junction, because the inside is where the turns overlap each other and is cut away by the
-    first subtraction. 86 lines over 521 m on `junction-1`, 99 over 630 m on `mosque`, and on
-    neither does a single one fall inside the drivable surface.
+    **Called on the road with its seams closed**, never on the raw union: a sliver between two
+    surfaces that fail to meet is a defect in the surfaces, and drawing a kerb down both sides of
+    one draws the defect rather than a road edge. `_KERB_GAP_CLOSE_M` removes them, and
+    `_MIN_ISLAND_M` here is the backstop for anything wider that survives.
 
-    Additive by construction: no existing feature is read for anything but its position, and none
-    is changed. Every line MetaDrive draws also gets a ghost body, and a solid one sets
-    `on_white_continuous_line`, which is the other reason nothing here may land on drivable road.
+    Nothing here can reach the inside of a junction: the interior of the box is covered road, so
+    it is not on any ring.
     """
-    unpainted: list[Polygon] = []
-    painted: list[Polygon] = []
-    drawn: list[LineString] = []
-    for lane in model.lanes:
-        shape = _surface(lane.polygon)
-        if shape is None:
-            continue
-        if lane.identifier in stubs:
-            unpainted.append(shape)
-            continue
-        painted.append(shape)
-        for boundary in lane.boundaries:
-            if boundary.identifier in superseded or len(boundary.points) < 2:
-                continue
-            drawn.append(LineString(_polyline(boundary.points)))
-    for connector in model.connectors:
-        if connector.identifier not in links:
-            continue
-        shape = _surface(connector.polygon)
-        if shape is not None:
-            unpainted.append(shape)
-    for feature in bridges.values():
-        shape = _surface(feature["polygon"])
-        if shape is not None:
-            unpainted.append(shape)
+    parts = list(road.geoms) if isinstance(road, MultiPolygon) else [road]
+    rings: list[LineString] = []
+    for part in parts:
+        rings.append(LineString(part.exterior))
+        for hole in part.interiors:
+            if not Polygon(hole).buffer(-_MIN_ISLAND_M).is_empty:
+                rings.append(LineString(hole))
+    return rings
 
-    if not unpainted:
-        return {}
 
-    outline = unary_union(unpainted).boundary
-    if painted:
-        outline = outline.difference(unary_union(painted).buffer(_KERB_LANE_CLEARANCE_M))
-    if drawn:
-        outline = outline.difference(unary_union(drawn).buffer(_KERB_PAINT_CLEARANCE_M))
-    if outline.is_empty:
-        return {}
+def _end_squareness(arc: LineString, paint: STRtree, lines: Sequence[LineString]) -> float:
+    """How square-on `arc` runs to the paint it meets, at whichever of its ends is squarer.
 
-    merged = linemerge(outline)
-    arcs = list(merged.geoms) if isinstance(merged, MultiLineString) else [merged]
+    A length of kerb leaves an existing line pointing the way that line was going; a bar across
+    the end of a road leaves both of them sideways. Returned as the larger of the two |cos|, so a
+    piece is only read as a road end when *both* ends are square - one square end is a kerb
+    turning a corner into a line that carries straight on, which is ordinary.
 
-    features: dict[str, dict[str, Any]] = {}
+    1.0 where there is no paint within reach to compare against, which reads as "not a road end":
+    an arc with nothing at its ends is not closing a gap between two lines.
+    """
+    points = np.asarray(arc.coords, dtype=np.float64)
+    if len(points) < 2:
+        return 1.0
+    # Each end's heading is taken over a few vertices rather than the last segment alone: a ring
+    # from `unary_union` carries vertices a few millimetres apart, and one of those on its own has
+    # no reliable direction.
+    ends = (
+        (points[0], points[0] - points[min(3, len(points) - 1)]),
+        (points[-1], points[-1] - points[max(-4, -len(points))]),
+    )
+    best = 0.0
+    for tip, step in ends:
+        span = float(np.hypot(*step))
+        if span <= COINCIDENT_M:
+            return 1.0
+        heading = step / span
+        node = Point(tip)
+        nearby = paint.query_nearest(node, max_distance=_KERB_JOIN_REACH_M)
+        if not len(nearby):
+            return 1.0
+        line = lines[int(nearby[0])]
+        along = line.project(node)
+        back = np.asarray(line.interpolate(max(0.0, along - 1.0)).coords[0])
+        ahead = np.asarray(line.interpolate(min(line.length, along + 1.0)).coords[0])
+        reach = ahead - back
+        length = float(np.hypot(*reach))
+        if length <= COINCIDENT_M:
+            return 1.0
+        best = max(best, abs(float(np.dot(heading, reach / length))))
+    return best
+
+
+def _extended(points: np.ndarray) -> np.ndarray:
+    """`points` pushed `_KERB_JOIN_OVERLAP_M` further along its own end tangent at both ends."""
+
+    def push(tip: np.ndarray, inward: np.ndarray) -> np.ndarray:
+        step = tip - inward
+        span = float(np.hypot(*step))
+        if span <= COINCIDENT_M:
+            return tip
+        return tip + step / span * _KERB_JOIN_OVERLAP_M
+
+    return np.vstack([push(points[0], points[1]), points, push(points[-1], points[-2])])
+
+
+def _junction_kerb_boundaries(
+    features: Mapping[str, dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], int]:
+    """The kerb, wherever the road has an edge and nothing already paints it.
+
+    `_map_features` writes boundaries for `model.lanes` and nothing else, so a `ConnectorFeature`
+    is a road polygon with no lines at all, and `_stub_lanes` drops 56 more on `junction-1`. That
+    is right for the *inside* of a junction - real ones are bare, and 82 turns' worth of edge line
+    would cross each other through the middle of every box - but the *edge* of a junction is a
+    kerb, and a kerb is painted everywhere else on the map. What a reader sees in its place is
+    `terrain.frag.glsl` colouring anything in `5 < value < 16` white, so the filtered blend from
+    road surface (20) to ground (0) draws a hairline about one texel wide - 3 cm against the
+    0.156 m a real marking draws at. It traces the road convincingly and is not a line.
+
+    **The rule is continuity, and that is the whole of the second attempt at this.** The first
+    version took the outline of the *junction* surfaces alone and then stood it off 0.15 m from
+    every line it met, dropping anything under 2 m. Both of those break a kerb that is physically
+    one thing into a chain of unequal lines, which is what Keith reported: 154 breaks over 276 m
+    on `mosque` and 186 over 292 m on `junction-1`, half of them those two constants and half of
+    them gaps on a *lane's* own edge that were never candidates at all.
+
+    So the candidate is every ring of the road network (`_kerb_rings`), less only what is already
+    painted, and each surviving arc is pushed into the line it meets rather than held off it.
+    Nothing is rejected for being short; the two things that must not be drawn are rejected for
+    what they are - an arc lying inside the carriageway, and a bar across the end of a road.
+
+    **And the ring is taken round the road with its seams closed**, which is the third attempt and
+    the reason for `_KERB_GAP_CLOSE_M`. Traced round the raw union, the ring dives into the notch
+    between two surfaces that fail to meet and comes back out along its other wall, so both walls
+    get painted: 238 of `mosque`'s 408 lines and 140 of `junction-1`'s 284 were marks lying on open
+    tarmac. Keith: *"it's adding the edges between the lanes as well… I just need it on either
+    side."*
+
+    Additive by construction: existing features are read for their geometry and none is changed.
+    Every line MetaDrive draws also gets a ghost body, and a solid one sets
+    `on_white_continuous_line`, which is why nothing here may land on drivable road.
+    """
+    surfaces: list[Polygon] = []
+    lines: list[LineString] = []
+    for feature in features.values():
+        if feature["type"] == _LANE_TYPE:
+            shape = _surface(np.asarray(feature["polygon"], dtype=np.float64))
+            if shape is not None:
+                surfaces.append(shape)
+        elif len(feature.get("polyline", ())) >= 2:
+            lines.append(LineString(feature["polyline"]))
+    if not surfaces:
+        return {}, 0
+
+    road = unary_union(surfaces)
+    # Traced round the road with its seams closed up, but judged against the real surfaces: what
+    # `_KERB_INSET_M` must not let a line onto is tarmac a car drives on, and sealing a notch does
+    # not make one. See `_KERB_GAP_CLOSE_M` for why the seams have to go before the ring is taken.
+    sealed = road.buffer(
+        _KERB_GAP_CLOSE_M, join_style="mitre", mitre_limit=5.0
+    ).buffer(-_KERB_GAP_CLOSE_M, join_style="mitre", mitre_limit=5.0)
+    candidate = unary_union(_kerb_rings(sealed))
+    if lines:
+        candidate = candidate.difference(
+            unary_union(lines).buffer(_KERB_PAINT_ALLOWANCE_M)
+        )
+    if candidate.is_empty:
+        return {}, 0
+
+    # Only a `MultiLineString` may be merged - `linemerge` refuses a lone closed ring, which is
+    # what a road nobody has painted yet comes out as. Anything else is already one piece.
+    if isinstance(candidate, MultiLineString):
+        candidate = linemerge(candidate)
+    arcs = [
+        part
+        for part in (candidate.geoms if hasattr(candidate, "geoms") else [candidate])
+        if isinstance(part, LineString) and not part.is_empty
+    ]
+    paint = STRtree(lines) if lines else None
+    inside = road.buffer(-_KERB_INSET_M)
+
+    kerbs: dict[str, dict[str, Any]] = {}
+    road_ends = 0
     for arc in arcs:
         if arc.is_empty or arc.length < _MIN_KERB_M:
             continue
+        # Before the crease cut, because a road end is a straight bar and cutting it in half would
+        # leave two pieces that are each too short to recognise as one.
+        if (
+            paint is not None
+            and arc.length < _MAX_ROAD_END_M
+            and _end_squareness(arc, paint, lines) < _ROAD_END_SQUARENESS
+        ):
+            road_ends += 1
+            continue
         for points in _uncreased(arc):
-            if len(points) < 2:
+            if len(points) < 2 or LineString(points).length < _MIN_KERB_M:
                 continue
+            points = _extended(points)
             line = LineString(points)
-            if line.length < _MIN_KERB_M:
+            if line.interpolate(0.5, normalized=True).within(inside):
                 continue
             # Keyed on the whole line, because where it is is the only thing about it that is
             # stable: it is merged from however many turns happen to meet there and belongs to
@@ -972,21 +1118,23 @@ def _junction_kerb_boundaries(
             # needle is cut into are one segment traversed each way. Dropped rather than raised
             # for the reason `_divider_boundaries` drops a duplicated divider: two copies of one
             # line resample out of phase and draw as something neither of them is.
-            features.setdefault(identifier, {"type": _BOUNDARY_TYPE, "polyline": points})
-    return features
+            kerbs.setdefault(identifier, {"type": _BOUNDARY_TYPE, "polyline": points})
+    return kerbs, road_ends
 
 
 def _map_features(
     model: PreliminaryLaneModel,
     neighbours: Mapping[str, tuple[list[str], list[str]]],
     moves: Mapping[str, list[str]],
-) -> tuple[dict[str, dict[str, Any]], set[str]]:
-    """The map features, and which of them are the kerb lines drawn round the junctions.
+) -> tuple[dict[str, dict[str, Any]], set[str], int]:
+    """The map features, which of them are kerb lines, and how many road ends were left bare.
 
-    The second half of the return is not a nicety. `metadata.lane_markings` counts edges and
-    merged copies **by feature type**, so a kerb line - a `ROAD_EDGE_BOUNDARY` belonging to no
-    lane - would inflate one count and drive the other negative if the caller could not tell the
-    two apart.
+    The second element is not a nicety. `metadata.lane_markings` counts edges and merged copies
+    **by feature type**, so a kerb line - a `ROAD_EDGE_BOUNDARY` belonging to no lane - would
+    inflate one count and drive the other negative if the caller could not tell the two apart.
+
+    The third is reported for the opposite reason: a bar of bare edge across the end of a road is
+    a deliberate blank, and a blank nothing counts reads as a gap in the numbers.
     """
     features: dict[str, dict[str, Any]] = {}
     # `neighbours` is still accepted, and still what the rest of Stage 6 reasons about, but the
@@ -1039,16 +1187,17 @@ def _map_features(
                 "lane_id": lane.identifier,
             }
 
-    # Last, and over what the loops above decided rather than over the model: the kerb is drawn
-    # only where no line was written, so it has to know which ones were.
-    kerbs = _junction_kerb_boundaries(model, links, bridges, stubs, superseded)
+    # Last, and over the features the loops above decided rather than over the model: the kerb is
+    # drawn where the road has an edge and no line covers it, so it has to see every surface that
+    # was written and every line that was written, which is exactly what `features` now holds.
+    kerbs, road_ends = _junction_kerb_boundaries(features)
     for kerb_id, feature in kerbs.items():
         if kerb_id in features:
             raise ConversionError(
                 f"junction kerb {kerb_id} shares an id with another map feature"
             )
         features[kerb_id] = feature
-    return features, set(kerbs)
+    return features, set(kerbs), road_ends
 
 
 def _scenario(
@@ -1072,7 +1221,7 @@ def _scenario(
     """
     neighbours = _lane_neighbours(model)
     moves = _lane_change_moves(model)
-    features, kerbs = _map_features(model, neighbours, moves)
+    features, kerbs, road_ends = _map_features(model, neighbours, moves)
     # Counted here, not inferred from the gap between what the model holds and what was
     # written: `merged` is that gap, and letting the two reasons for a missing boundary share
     # one number would report suppression as deduplication.
@@ -1199,6 +1348,11 @@ def _scenario(
                 # `junction_stubs` has one: these belong to no lane, and folding them into
                 # `edges` would say a lane had markings it does not have.
                 "junction_kerbs": len(kerbs),
+                # Places where a road simply stops - at the edge of the extract, or a dead end -
+                # leaving a bar of bare edge straight across the carriageway. Deliberately not
+                # painted, because a line there draws as a stop line where there is none. Counted
+                # so the blank is a stated fact rather than a hole in the numbers.
+                "road_ends_unpainted": road_ends,
             },
             # Present only when `--signals` was given, and always marked `synthesised`.
             # OSM records that a signal exists and carries no cycle, split or offset, so a

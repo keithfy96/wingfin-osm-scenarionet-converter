@@ -587,19 +587,62 @@ white: ground is 0, a white line 10 and road surface 20, the semantic texture is
 said the connectors had no lane lines, which was exactly right. That hairline is also what draws
 round every road on the map, and is the one Keith earlier chose to leave.
 
-`conversion._junction_kerb_boundaries` now paints the outside: take the outline of every surface
-carrying no paint (connectors, the straight-through bridges, the clamped stub lanes), cut away
-what abuts a painted lane, cut away what a line already covers, and draw the rest. 91 lines on
-`junction-1` and 103 on `mosque`, strictly additive — not one existing feature changes — and
-export-time, so no fingerprint moves. Four things not to re-derive:
+`conversion._junction_kerb_boundaries` paints it. **The rule is continuity, and the first version
+of this got that wrong**: it took the outline of the junction surfaces alone, stood every arc
+0.15 m off the line it met, and threw away anything under 2 m — so one physical kerb came out as a
+chain of unequal lines with holes between them. Keith: *"it breaks the line into larger and smaller
+lines on the exact same kerb."* Counted on the shipped datasets, **154 breaks over 276 m on
+`mosque` and 186 over 292 m on `junction-1`**, split as 38%/46% the stand-off, 12%/12% the length
+filter and 50%/43% gaps on a *lane's* own edge that were never candidates at all.
 
-- **Grow the painted lane surface before subtracting it; never shrink it.** A connector's surface
-  is buffered `cap_style="flat"`, so its end cap sits exactly on the lane's own end cap. Shrinking
-  leaves that cap standing as a bar straight across the carriageway at every junction mouth,
-  reading as a stop line — 233 of `junction-1`'s 268 pieces, each a lane width long.
-- **`_MIN_KERB_M` is 2.0 because that is where the strays stop**, not because it is round. Swept:
-  1.0 leaves 2 lines on drivable road on `junction-1` and 1 on `mosque`, 1.5 leaves 2 and 1, 2.0
-  leaves none, 3.0 buys nothing and costs 45 m and 69 m of real kerb.
+**And the second version got it wrong the other way**, which is the constant below that matters
+most. Traced round the raw union, the ring dives into the notch between two surfaces that fail to
+meet and comes back out along its other wall, painting **both**: 238 of `mosque`'s 408 lines and 140
+of `junction-1`'s 284 were marks lying on open tarmac, 459 m and 270 m of them, in pairs about
+1.93 m long. Keith: *"it's adding the edges between the lanes as well… I just need it on either
+side."*
+
+The rule now: **close the seams**, take every ring of the road network, subtract only what is
+already painted, push each survivor into the line it meets, and reject the two things that must not
+be drawn. **0 breaks and 0 marks on tarmac on both extracts**, 142 lines over 636 m on `mosque` and
+115 over 489 m on `junction-1`, strictly additive — +142/−0/~0 and +115/−0/~0, not one existing
+feature changes — and export-time, so no fingerprint moves. Seven things not to re-derive:
+
+- **Close the road before tracing it, and judge it against the road that was not closed.**
+  `_KERB_GAP_CLOSE_M` is 0.35 m, `buffer(+ε).buffer(−ε)` with **mitre** joins — round joins would
+  pull every convex corner of the network out and back by the radius. 0.35 is the smallest that
+  reaches zero marks on both extracts (0.30 leaves one on each, 0.40 and 0.45 are also clean, 0.50
+  swallows a real island on `mosque`). It settles the islands for free: enclosed holes fall from 693
+  to exactly `mosque`'s 20 and from 330 to exactly `junction-1`'s 9, the rest being the same defect
+  seen from the inside. The kerb still sits a **median 0.004 m** from the true road edge, reaching
+  0.46 m only at the notch mouths it now bridges, which is the point of it.
+
+- **Never stand a kerb off the paint it meets.** `_KERB_PAINT_ALLOWANCE_M` is 0.02 m — enough that
+  the kerb is not laid a second time over paint that exists, and no more, because two coincident
+  lines are resampled out of phase by MetaDrive and draw as something neither of them is. The join
+  is then made by `_KERB_JOIN_OVERLAP_M`, 0.10 m pushed along the arc's own end tangent: the end
+  sits on the road edge and a tenth of a metre along that edge is still the road edge.
+- **`_MIN_KERB_M = 2.0` was the needle filter, not a proxy for the drivable-road test**, and
+  calling it one is exactly how the tarmac marks shipped: a notch wall is 1.93 m. Lowering it to
+  numerical dust (0.05 m) was still right — the proxy cost 19 of `mosque`'s breaks and 22 of
+  `junction-1`'s — but what had to replace it is `_KERB_GAP_CLOSE_M`, which removes the seam, not
+  `_KERB_INSET_M`, which cannot see it.
+- **`_KERB_INSET_M` (0.25 m) catches a line that strays *into* the road and nothing else.** A notch
+  wall lies exactly *on* the boundary, so it passes cleanly — the stray count read 0 while 238 marks
+  sat on the tarmac, telling the truth about the wrong thing. It is measured against the real
+  surfaces, never the closed ones.
+- **A road that stops must never be painted across.** `_node_setbacks` leaves the end of every road
+  square, so the network's outline runs straight over it, and filling that gap draws a stop line
+  where there is none — with a ghost body, on road a car drives along. `_ROAD_END_SQUARENESS`
+  (0.35) rejects an arc that runs square to the paint at **both** ends and is under
+  `_MAX_ROAD_END_M`; one square end is a kerb turning a corner, which is ordinary. 39 left bare on
+  `mosque`, 38 on `junction-1`, reported as `lane_markings.road_ends_unpainted`. It was 100 and 96
+  before the closing, because most of that count was notch caps rather than roads that stop.
+- **`_kerb_rings` takes exteriors plus islands**, and `_MIN_ISLAND_M` (0.3 m) is now a backstop
+  rather than the thing doing the work — the closing has already sealed the slivers. It keeps the
+  20 real islands on `mosque` and 9 on `junction-1`, whose inward-facing kerb was getting nothing.
+  **The inside of a junction cannot be reached from here at all**: it is covered road, so it is on
+  no ring.
 - **`_MAX_KERB_TURN_DEG` is 150 and the histogram chose it.** Per-vertex turns over both extracts:
   6740 under 10°, a cluster of 40 at 80–89° where a connector's flat cap meets its side, then
   nothing until 32 sit at 170–179°. Those are seams between overlapping turns drawn as zero-width
@@ -611,6 +654,25 @@ export-time, so no fingerprint moves. Four things not to re-derive:
   and belongs to none of them; nothing in this repo or in MetaDrive reads either field on a
   boundary feature. `lane_markings.junction_kerbs` counts them, kept out of `edges` and `merged`
   because both of those are counted by feature type and a kerb would drive `merged` negative.
+
+**Measure coverage at one texel, not at 0.20 m.** A drawn line is 2 px — `mosque`'s 2048 m terrain
+square against this machine's 32768 px ceiling is 16 px/m, so 0.125 m. The first version's
+acceptance check asked whether the road outline was within **0.20 m** of paint, three times wider
+than the paint itself, and passed 393 m of edge on `mosque` that renders bare. Any check here uses
+1/16 m.
+
+**One cause of the hairline is MetaDrive's and is not fixed here.** `get_boundary_line_vector`
+(`scenario_map.py:61`) runs `resample_polyline(line, 2.0)` over every boundary polyline longer than
+4 m before painting it, while the road polygon is filled at full resolution — so on a curve the
+2 m chords sag inside and the tarmac shows past its own line. Measured by rebuilding MetaDrive's
+semantic raster from our pickles: **72% of the bare edge left on `mosque`** (61.2 m → 17.4 m in the
+140 m square round the ego with the resampling removed), and it hits the original lane edge lines
+exactly as hard as the kerbs. `get_semantic_map` takes `line_sample_interval` and `terrain.py:620`
+never passes it; `tools/drive.py` already monkeypatches that function for line width, so one
+keyword would do it — 0.25 m takes the 30 m square round the ego from 23.7 m to 6.9 m on `mosque`
+and 4.2 m to 0.3 m on `junction-1`, for 0.05 s of extra terrain build. **Not done**, because it
+also moves the broken-line dashes from 2 m/2 m to 3 m/3 m (`points_to_skip = floor(STRIPE_LENGTH *
+2 / interval)` floors to 1 at interval 2), and that is Keith's eye to judge.
 
 **But some junctions have real lanes inside them.** A big intersection is often mapped as
 several nodes joined by short ways rather than one node: `junction-1`'s node `1927184814` is
