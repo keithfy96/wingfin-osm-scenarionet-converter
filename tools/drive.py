@@ -17,10 +17,18 @@ settings that fix that can be reached from it. What it leaves at its defaults:
   script measures each scenario and picks the smallest power of two that covers it.
 
 * **The semantic texture, which has no config key at all.** MetaDrive builds the image that
-  paints road surface and lane lines at `map_region_size x 22` pixels square: 22528 at 1024,
-  45056 at 2048. A GL context reports its own ceiling - 16384 on an Intel iGPU, 32768 on a
-  discrete card - and past it the texture cannot be uploaded, which is what "the roads stop"
-  looks like. There is no option for the 22, so it is patched below; see `_set_semantic_detail`.
+  paints road surface and lane lines at `map_region_size x 22` pixels square - or x11 at 4096
+  (`constants.py:499`): 22528 at 1024, 45056 at 4096. A GL context reports its own ceiling -
+  measured 16384 on this machine's Intel iGPU and 32768 on its RTX 4050 - and past it the
+  texture cannot be uploaded, which is what "the roads stop" looks like. There is no option for
+  the 22, so it is patched below; see `_set_semantic_detail`. The ceiling itself is asked of a
+  throwaway GL context rather than assumed, because it doubles between this machine's two GPUs
+  and the whole resolution follows from it; see `_max_texture_dimension`.
+
+* **Lane-line width, which also has no config key.** `terrain.py:625` passes literal pixel
+  thicknesses to `BaseMap.get_semantic_map`, so a line is `thickness / pixels_per_meter` metres
+  wide and its real width moves with the size of the map. `--line-width-m` asks in metres
+  instead and works out the pixels; see `_set_line_width`.
 
 * **`height_scale` (50).** `use_mesh_terrain` is false by default, so the car drives on a flat
   collision plane at z=0 while the *visible* ground is a noise heightfield around it. On
@@ -52,10 +60,17 @@ import sys
 MIN_REGION_M = 512
 MAX_REGION_M = 4096
 
-# The smallest ceiling any current GL context reports, and so the one to size the semantic
-# texture against when there is no context yet to ask. Checked against the real number after
-# the window exists.
-ASSUMED_MAX_TEXTURE = 16384
+# The smallest ceiling any current GL context reports, used only when the real one cannot be
+# had: `_max_texture_dimension` fails, or nothing is being rendered. Checked against the real
+# number after the window exists either way.
+FALLBACK_MAX_TEXTURE = 16384
+
+# A real road marking is about 0.10-0.15 m wide. MetaDrive's own thicknesses are in *pixels*
+# (2 for white, 3 for yellow, `terrain.py:625`), so what they draw depends on the size of the
+# map: 2 px is 0.50 m on `mosque`'s 4096 m square at 4 px/m and 0.0625 m on `junction-1`'s
+# 1024 m square at 32 - wrong in both directions from opposite ends. Asking in metres is the
+# only form that is right on both. 0 restores MetaDrive's own pixel counts.
+LINE_WIDTH_M = 0.15
 
 # Ground either side of the flattened road, in metres. MetaDrive's 7 leaves our lanes as
 # narrow ribbons because they are single carriageways rather than Waymo's full road surfaces.
@@ -129,21 +144,93 @@ def _baked_stops(scenario) -> list[dict]:
     return list(((scenario.get("metadata") or {}).get("sdc_route") or {}).get("stops") or [])
 
 
+def _metadrive_native_texture(region_m: int) -> int:
+    """The texture MetaDrive would build for this region if nothing were patched.
+
+    `TerrainProperty.get_semantic_map_pixel_per_meter` is `22 if map_region_size != 4096 else
+    11`, so the 4096 m case is not `region * 22`. Only printed, to say what the patch below is
+    standing in for.
+    """
+    return region_m * (11 if region_m == MAX_REGION_M else 22)
+
+
+def _max_texture_dimension() -> int | None:
+    """The GL ceiling the card really reports, or None if it could not be asked.
+
+    Asked in a throwaway subprocess, and that is the whole difficulty: the ceiling is only
+    knowable once a GL context exists, and by the time `env.engine.win` does, MetaDrive has
+    already read `get_semantic_map_pixel_per_meter` and built the terrain from it. A separate
+    process has a context of its own and depends on nothing about MetaDrive's reset ordering.
+
+    It inherits this process's environment, so it sees whichever card the GLX loader was
+    pointed at - which is how `scripts/drive.sh` setting `__NV_PRIME_RENDER_OFFLOAD` reaches
+    this number. Measured on this machine: 16384 on the Intel iGPU, 32768 on the RTX 4050.
+    """
+    import subprocess
+
+    probe = (
+        "from panda3d.core import loadPrcFileData;"
+        "loadPrcFileData('', 'window-type offscreen\\naudio-library-name null');"
+        "from direct.showbase.ShowBase import ShowBase;"
+        "print(ShowBase(windowType='offscreen').win.getGsg().getMaxTextureDimension())"
+    )
+    try:
+        finished = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in reversed(finished.stdout.splitlines()):
+        if line.strip().isdigit():
+            return int(line.strip())
+    return None
+
+
 def _set_semantic_detail(pixels_per_meter: int) -> None:
     """Pin the semantic texture's resolution.
 
-    A monkeypatch, and deliberately the only one. `Terrain` reads this through
-    `TerrainProperty.get_semantic_map_pixel_per_meter()`, whose body is
-    `22 if map_region_size != 4096 else 11` - there is no config key anywhere that reaches it,
-    so a map big enough to need a 2048 m square cannot be textured without replacing the
-    method. Writing to `TerrainProperty` is MetaDrive's own mechanism for the neighbouring
-    value: `base_env.py:335` sets `TerrainProperty.map_region_size` the same way.
+    One of this script's two monkeypatches - the other is `_set_line_width` - and for the same
+    reason: `Terrain` reads this through `TerrainProperty.get_semantic_map_pixel_per_meter()`,
+    whose body is `22 if map_region_size != 4096 else 11`, and there is no config key anywhere
+    that reaches it, so a map big enough to need a 2048 m square cannot be textured without
+    replacing the method. Writing to `TerrainProperty` is MetaDrive's own mechanism for the
+    neighbouring value: `base_env.py:335` sets `TerrainProperty.map_region_size` the same way.
 
     Nothing in the MetaDrive checkout is edited; delete this call and the default returns.
     """
     from metadrive.constants import TerrainProperty
 
     TerrainProperty.get_semantic_map_pixel_per_meter = classmethod(lambda cls: pixels_per_meter)
+
+
+def _set_line_width(thickness_px: int) -> None:
+    """Pin how many pixels wide a painted lane line is.
+
+    The second monkeypatch, and it has to *override* rather than re-default: `terrain.py:625`
+    passes `white_line_thickness=2, yellow_line_thickness=3` explicitly, over
+    `BaseMap.get_semantic_map`'s own defaults of 1 and 1. So the wrapper drops whatever the
+    caller asked for. There is no config key between the two.
+
+    White and yellow are given the same number. Our data has neither type of yellow line -
+    `conversion.py` writes only `ROAD_EDGE_BOUNDARY` and `ROAD_LINE_BROKEN_SINGLE_WHITE` - so
+    the yellow value is unreachable today, and a different one would be an unexplained
+    difference on the first map that does have one.
+
+    Nothing in the MetaDrive checkout is edited; delete this call and the defaults return.
+    """
+    from metadrive.component.map.base_map import BaseMap
+
+    original = BaseMap.get_semantic_map
+
+    def with_line_width(self, *arguments, **keywords):
+        keywords["white_line_thickness"] = thickness_px
+        keywords["yellow_line_thickness"] = thickness_px
+        return original(self, *arguments, **keywords)
+
+    BaseMap.get_semantic_map = with_line_width
 
 
 def _ground_around(engine, path, radius_m=25):
@@ -221,8 +308,18 @@ def main() -> int:
         "--semantic-pixels-per-meter",
         type=int,
         default=None,
-        help="Resolution of the road-surface texture. Chosen to fit "
-        f"{ASSUMED_MAX_TEXTURE} px when not given.",
+        help="Resolution of the road-surface texture. Chosen to fit the GL ceiling the card "
+        f"reports when not given, or {FALLBACK_MAX_TEXTURE} px if it cannot be asked.",
+    )
+    parser.add_argument(
+        "--line-width-m",
+        type=float,
+        default=LINE_WIDTH_M,
+        help="How wide a painted lane line should be, in metres. MetaDrive's own thickness is "
+        "in pixels, so its real width changes with the size of the map; this asks in metres "
+        f"and works out the pixels. Default {LINE_WIDTH_M} m, about a real road marking. "
+        "1 px is the floor, so a very large map cannot go as thin as a small one. 0 uses "
+        "MetaDrive's own 2 px / 3 px.",
     )
     parser.add_argument("--height-scale", type=int, default=HEIGHT_SCALE)
     parser.add_argument("--drivable-area-extension", type=int, default=DRIVABLE_AREA_EXTENSION_M)
@@ -274,13 +371,39 @@ def main() -> int:
 
     pixels_per_meter = arguments.semantic_pixels_per_meter
     if pixels_per_meter is None:
-        pixels_per_meter = max(1, ASSUMED_MAX_TEXTURE // region)
+        # Only worth a whole process when something is going to be textured, and only when the
+        # answer has not already been given on the command line.
+        ceiling = _max_texture_dimension() if arguments.render != "none" else None
+        if ceiling is None:
+            ceiling = FALLBACK_MAX_TEXTURE
+            source = f"assuming {FALLBACK_MAX_TEXTURE} px"
+        else:
+            source = f"the card reports {ceiling} px"
+        pixels_per_meter = max(1, ceiling // region)
+    else:
+        source = "as asked"
     texture = region * pixels_per_meter
     print(
-        f"road texture {texture} px square ({pixels_per_meter} px/m). MetaDrive's own "
-        f"choice here would be {region * 22} px, which is why this is patched."
+        f"road texture {texture} px square ({pixels_per_meter} px/m, {source}). MetaDrive's "
+        f"own choice here would be {_metadrive_native_texture(region)} px, which is why this "
+        f"is patched."
     )
     _set_semantic_detail(pixels_per_meter)
+
+    # Metres in, pixels out, and the two do not meet exactly: `cv2.polylines` takes an integer
+    # and cannot go below 1, so on a big map the floor decides the width rather than the
+    # request does. Say which happened rather than rounding quietly.
+    if arguments.line_width_m > 0:
+        thickness = max(1, round(arguments.line_width_m * pixels_per_meter))
+        drawn = thickness / pixels_per_meter
+        floored = "; 1 px is the floor at this resolution" if thickness == 1 else ""
+        print(
+            f"lane lines   {thickness} px = {drawn:.3f} m "
+            f"(asked {arguments.line_width_m:.3f} m{floored})"
+        )
+        _set_line_width(thickness)
+    else:
+        print("lane lines   MetaDrive's own 2 px / 3 px, as asked")
 
     from metadrive.component.sensors.rgb_camera import RGBCamera
     from metadrive.envs.scenario_env import ScenarioEnv

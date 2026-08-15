@@ -238,23 +238,52 @@ Raising it without re-running the route sweep will produce datasets that fail.
 ### Simulate
 
 MetaDrive runs on Python 3.8 / numpy 1.24; this repo runs 3.10 / numpy 2.2. So the
-runners are invoked with MetaDrive's own interpreter:
+runners are invoked with MetaDrive's own interpreter, and `scripts/drive.sh` is that
+plus the two things a drive always needs — the workspace from `.env`, and the GPU:
+
+```bash
+./scripts/drive.sh                          # workspace from .env, 3D window
+./scripts/drive.sh junction-1               # override the workspace for this run
+./scripts/drive.sh -- --render 2D           # everything after -- goes to drive.py
+./scripts/drive.sh -- --line-width-m 0.1    # thinner lane lines, this run only
+GPU=integrated ./scripts/drive.sh           # force the built-in graphics
+```
+
+It refuses early, with the command to fix it, when the dataset is map-only — without
+a recorded car MetaDrive dies on `KeyError: None` deep inside itself, which reads
+like a broken dataset and is not one.
+
+**The discrete GPU is used automatically when there is one**, via `__NV_PRIME_RENDER_OFFLOAD`
+— nothing to install, and `image_on_cuda` from MetaDrive's install docs is unrelated
+(it is an RL image pipeline, not a renderer selector). What it buys is road-surface
+detail, because the GL texture ceiling is what caps resolution: measured 16384 px on
+this machine's Intel iGPU against 32768 on its RTX 4050, so `mosque` renders at 8 px/m
+instead of 4. `drive.py` asks the card rather than assuming, and prints which it got.
+
+**Lane lines are `--line-width-m`, in metres, default 0.15** — about a real road
+marking. MetaDrive's own thickness is in *pixels*, so its real width moves with the
+size of the map: its 2 px is 0.5 m on `mosque`'s 4096 m terrain square and 0.06 m on
+`junction-1`'s 1024 m one, wrong in both directions from opposite ends. One pixel is
+the floor, so a big map cannot go as thin as a small one — 0.125 m is `mosque`'s
+limit, and the tool says so rather than rounding quietly. `--line-width-m 0` restores
+MetaDrive's own. Set `LINE_WIDTH_M` in `.env` to stop typing it.
+
+The underlying commands, for anything the script does not cover:
 
 ```bash
 # load-and-check, no simulator needed
 /home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
   tools/check_dataset.py workspaces/junction-1/scenarionet
 
-# actually drive it
-/home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
+# drive it by hand, without the script
+__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
+  /home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
   tools/drive.py workspaces/junction-1/scenarionet --render 3D
 
-# driving it with GPU
+# adding manual line width 0.15 is the default setting
   __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
     /home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
-    tools/drive.py workspaces/mosque/scenarionet --render 3D --semantic-pixels-per-meter 8
-
-
+    tools/drive.py workspaces/mosque/scenarionet --render 3D --line-width-m 0.10
 ```
 
 Use `tools/drive.py`, not `python -m scenarionet.sim`. Both load the dataset

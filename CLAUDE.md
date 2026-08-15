@@ -500,14 +500,27 @@ road network rather than like a Waymo clip. Three separate causes, each measured
   — the road is flattened either way. **0 is not allowed**: panda3d builds a singular
   transform and dies with `Tried to invert singular LMatrix4`.
 - **The road-surface texture is often larger than the GPU accepts, and there is no
-  config key for it.** MetaDrive builds it at `map_region_size × 22` px square —
-  22528 at 1024, **45056 at 2048**. A GL context reports its own ceiling: 16384 on
-  an Intel iGPU, 32768 on a discrete card. Past it the texture cannot be uploaded,
-  and that is what "the roads stop" looks like. The 22 is hard-coded in
-  `TerrainProperty.get_semantic_map_pixel_per_meter`; `tools/drive.py` replaces that
-  classmethod at runtime — the only monkeypatch in the repo, and it rides the seam
-  `base_env.py:335` already uses for `map_region_size`. Nothing in the MetaDrive
-  checkout is edited.
+  config key for it.** MetaDrive builds it at `map_region_size × 22` px square — but
+  **×11 at 4096** (`constants.py:499`), so 22528 at 1024 and **45056 at 4096**, not
+  90112. A GL context reports its own ceiling, and **it is asked rather than assumed**,
+  because on this machine it doubles between the two GPUs and the whole resolution
+  follows from it: measured **16384** on the Intel iGPU and **32768** on the RTX 4050.
+  Past it the texture cannot be uploaded, and that is what "the roads stop" looks like.
+  `drive.py._max_texture_dimension` asks a throwaway subprocess — the ceiling is only
+  knowable once a GL context exists, and by the time `env.engine.win` does, MetaDrive
+  has already built the terrain from `get_semantic_map_pixel_per_meter`. The 22 itself
+  is hard-coded in that classmethod; `tools/drive.py` replaces it at runtime, riding
+  the seam `base_env.py:335` already uses for `map_region_size`. Nothing in the
+  MetaDrive checkout is edited.
+- **This machine is hybrid graphics, and which card renders is not a flag.** It is
+  settled by the GLX loader before python starts, so it can only be two environment
+  variables in front of the command — `__NV_PRIME_RENDER_OFFLOAD=1
+  __GLX_VENDOR_LIBRARY_NAME=nvidia`, which is what `scripts/drive.sh` sets and why
+  the switch lives in the shell rather than in `drive.py`. Nothing needs installing;
+  panda3d 1.10.16 in MetaDrive's own venv picks the RTX up as it stands. **`--cuda`
+  in MetaDrive's install docs is not this**: it toggles `image_on_cuda`, which keeps
+  camera images in GPU memory for an RL pipeline, needs `pip install -e .[cuda]` plus
+  Torch and CuPy (none installed here), and does not choose a renderer.
 - **`map_region_size` sizes the terrain square, and 2048 is the wrong blanket
   answer** — an earlier version of this file said to set it, which would demand a
   45056 px texture no GPU can hold. The square is `map_region_size` metres centred
@@ -526,12 +539,34 @@ Run `tools/drive.py --render offscreen` to check any of this without a display �
 Two things about markings are MetaDrive's and not ours, so do not go looking for them in
 `conversion.py`. **The 3D markings are a raster, not geometry**: `_construct_lane_line_segment`
 builds only a collision ghost, and what the eye sees is `BaseMap.get_semantic_map` painting
-every line with `cv2.polylines` at a hard-coded `white_line_thickness=2` **pixels**, so a line
-is `2 / pixels_per_meter` metres wide — 0.091 m at MetaDrive's own 22 px/m, 0.125 m at the 16
-`tools/drive.py` can fit on a 1024 m region. And **the white hairline round every road edge is
-drawn by nothing**: `terrain.frag.glsl` paints by value band (ground 0, lines 10, road 20) and
-`semantic_tex` is created with no filter, so the linear blend from road to grass passes through
-5–16 and the shader calls it white. Keith looked at both and chose to leave them.
+every line with `cv2.polylines` at a thickness given in **pixels** — `white_line_thickness=2`,
+`yellow_line_thickness=3`, passed as literals at `terrain.py:625` over that function's own
+defaults of 1 and 1, with no config key anywhere between. So a line is
+`thickness / pixels_per_meter` metres wide, **and its real width moves with the size of the
+map**. And **the white hairline round every road edge is drawn by nothing**:
+`terrain.frag.glsl` paints by value band (ground 0, lines 10, road 20) and `semantic_tex` is
+created with no filter, so the linear blend from road to grass passes through 5–16 and the
+shader calls it white. Keith looked at the hairline and chose to leave it.
+
+**The width is asked for in metres, and that is the point of the flag.** A fixed pixel count is
+wrong in opposite directions on the two extracts — MetaDrive's 2 px is **0.5 m** on `mosque`'s
+4096 m square at 4 px/m and **0.0625 m** on `junction-1`'s 1024 m square at 32, one far wider
+than a road marking and the other far thinner. `drive.py --line-width-m` (default **0.15**,
+about a real marking) works out the pixels from the resolution in force, and
+`drive.py._set_line_width` is the repo's **second** monkeypatch — it must *override* rather than
+re-default, because `terrain.py:625` passes both thicknesses explicitly. Three things not to
+re-derive:
+
+- **1 px is the floor**, so a big map cannot go as thin as a small one: `mosque` bottoms out at
+  **0.125 m** even on the RTX, and the tool prints which happened rather than rounding quietly.
+- **White and yellow get the same number.** `conversion.py` writes only `ROAD_EDGE_BOUNDARY` and
+  `ROAD_LINE_BROKEN_SINGLE_WHITE`, so the yellow value is unreachable on our data today; giving
+  it a different one would be an unexplained difference on the first map that has a yellow line.
+- **It is not a config field, and must not become one.** `configuration_checksum` feeds
+  `generation_fingerprint` (`generation.py:2212`), so a rendering preference in
+  `config/default.yaml` would invalidate the lane-model review — the same reason signal timing
+  is a `convert`-time file. It lives on the command line, with `LINE_WIDTH_M` in `.env` for
+  anyone who does not want to type it.
 
 ### A junction is not painted, and the lanes inside it are why
 
