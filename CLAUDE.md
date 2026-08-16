@@ -1070,7 +1070,20 @@ Six things not to re-derive, each a version that was built and measured first:
   different shifts on the halves opened a **4.03 m step inside way `859429321`**, three inside
   `756118317` and one inside `1016771782` — the v24/v25 defect returning. `_road_components` makes
   every block of one way in one direction one road **unconditionally**, then chains continuations
-  and shallow `through` connectors on top. 39 roads on mosque, 32 on junction-1.
+  and shallow `through` connectors on top.
+- **A road is a whole street, both directions of it, and getting that wrong tore 22 of mosque's
+  two-way ways open along their own centreline.** Kerbward is north for a street's eastbound half
+  and south for its westbound one, so a shift given to one and not the other parts them. The
+  same-OSM-way exclusion below cannot catch it: a street's seam is a property of the *street*, so
+  where OSM splits one into two ways the seam is read **across the boundary** — two readings of
+  **1 mm and 4 mm** moved a 26-lane road 1.001 m and a 2-lane road 1.006 m. Both directions of a
+  way are now one road (33 roads on mosque, 23 on junction-1), which makes the seam a same-road
+  pair, and `_two_way_roads` pins those roads to a budget of **zero**, because the only shift that
+  keeps a street whole is none. It costs nothing measurable: **no separation demand on either
+  extract touches a two-way street** — a street shields itself, its two halves occupying each
+  other's offside. Where one ever does, a demand whose yielding road is out of budget passes to
+  the other road; where both are streets, the warning reports it. See
+  `docs/mapping-algo-changes/2026-08-16-18:10:01-a-two-way-street-was-parted-down-its-own-middle.md`.
 - **A nearest point on the other lane's own end means they are not alongside each other.** Two lanes
   running away from a shared node meet there, and the perpendicular part of a mostly-along distance
   says nothing: junction-1's `776021086` and `1530245742` are **13.35 m apart** and read as 2.98 m
@@ -1092,11 +1105,11 @@ Six things not to re-derive, each a version that was built and measured first:
   traffic crosses. The last is the clamp, **not** a length threshold — the distinction
   `conversion._stub_lanes` draws — and alone it takes mosque's demand set from 124 pairs to 104.
 
-Blast radius **189 of 405 mosque lanes over 12 roads and 132 of 285 junction-1 lanes over 7**, worst
+Blast radius **161 of 405 mosque lanes over 10 roads and 132 of 285 junction-1 lanes over 7**, worst
 shift 4.36 m and 2.72 m, reported as `separated_lanes` / `separated_roads`. Perdana's SW carriageway
 does not move at all on mosque — the fewer-lanes rule put it on the link and the NE side. Ids,
 counts and connector statuses are unchanged, and **continuity improved**: total sideways step at a
-direct continuation 47.63 → 42.59 m on mosque and 44.13 → 40.77 m on junction-1. See
+direct continuation 47.63 → 42.40 m on mosque and 44.13 → 40.77 m on junction-1. See
 `docs/mapping-algo-changes/2026-08-16-14:32:44-a-carriageway-was-laid-over-the-traffic-coming-the-other-way.md`.
 
 ### `ego_route` still turns over the gate on two 2 m clamped lanes

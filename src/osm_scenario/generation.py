@@ -676,6 +676,12 @@ def _road_components(
     then chained across direct continuations and shallow `through` connectors on top of that.
     A merge is *not* a chain: the joining way has its own line and closing the gap is the
     taper's job.
+
+    **The two directions of one way are also one road**, and leaving them apart is what tore 22
+    of mosque's two-way streets open along their own centreline. Kerbward points opposite ways
+    for them, so a shift given to one half and not the other parts them; keeping them in one road
+    means a separation reading can never fall between them, and `_two_way_roads` pins the result
+    so nothing else can move one half either.
     """
     parent: dict[BlockKey, BlockKey] = {}
 
@@ -702,6 +708,13 @@ def _road_components(
     for blocks in carriageways.values():
         for other in blocks[1:]:
             union(blocks[0], other)
+    both_ways: dict[str, dict[str, BlockKey]] = {}
+    for lane in lanes:
+        both_ways.setdefault(lane.source_way_ids[0], {})[lane.direction] = _lane_block(lane)
+    for by_direction in both_ways.values():
+        blocks = sorted(by_direction.values())
+        for other in blocks[1:]:
+            union(blocks[0], other)
     for connector in connectors:
         if connector.status == "forbidden":
             continue
@@ -718,6 +731,26 @@ def _road_components(
         if _join_turn_degrees(source, target) <= max_turn_degrees:
             union(_lane_block(source), _lane_block(target))
     return {lane.identifier: find(_lane_block(lane)) for lane in lanes}
+
+
+def _two_way_roads(
+    lanes: Sequence[LaneFeature], roads: Mapping[str, BlockKey]
+) -> set[BlockKey]:
+    """Roads that carry both directions of a way, and therefore may not move at all.
+
+    Every separation shift is kerbward, and kerbward points opposite ways for the two halves of
+    one street: the only shift that keeps them together is zero. Pinning them is what that costs,
+    and it was measured before it was chosen — not one genuine separation demand on either
+    extract touches a two-way road, so nothing that needed to move stops moving. Where one ever
+    does, `_opposing_overlap_findings` says so, which is the right outcome: a street parting down
+    the middle is a worse answer than an overlap left standing and reported.
+    """
+    seen: dict[tuple[BlockKey, str], set[str]] = {}
+    for lane in lanes:
+        seen.setdefault((roads[lane.identifier], lane.source_way_ids[0]), set()).add(
+            lane.direction
+        )
+    return {road for (road, _way), directions in seen.items() if len(directions) > 1}
 
 
 class LateralPair(NamedTuple):
@@ -797,10 +830,15 @@ def _lateral_neighbours(
 
     Four kinds of pair are dropped, and each one abuts by design rather than by mistake:
 
-    - lanes of the same road, which is what the road unit is for;
+    - lanes of the same road, which is what the road unit is for — and since a road now holds
+      both directions of a street, that covers the seam down its middle **wherever OSM split
+      it**. Two readings of that seam across a way boundary, of 1 mm and 4 mm, are what parted
+      22 of mosque's two-way ways at v26;
     - lanes sharing an OSM way — a two-way way puts its two directions wholly on either side of
       its line, so they meet *on* it, and reading that as an overlap would demand a lane-width
-      of separation on every two-way road there is;
+      of separation on every two-way road there is. Not redundant against the road test: the
+      road unit keys on `source_way_ids[0]`, so two lanes can share a later way id without
+      sharing a road;
     - lanes a connector or a continuation joins, because two lanes that meet are meant to touch;
     - lanes cut back to `MIN_TRIMMED_LANE_M`, which are the interior of a junction box, where
       traffic crosses. The test is the clamp rather than a length, the same distinction
@@ -967,11 +1005,21 @@ def _separation_layout(
     for _pass in range(SEPARATION_MAX_PASSES):
         moved = False
         for road_a, road_b, need, _first, _second in demands:
-            short = need - (shift[road_a] + shift[road_b])
-            if short <= SEPARATION_TOLERANCE_M:
+            if need - (shift[road_a] + shift[road_b]) <= SEPARATION_TOLERANCE_M:
                 continue
-            yields = road_a if (size[road_a], road_a) <= (size[road_b], road_b) else road_b
-            moved |= raise_to(yields, shift[yields] + short)
+            # Fewer lanes yields, and the other road takes whatever is left when the first one
+            # runs out of budget. A two-way street's budget is zero, so without the second turn
+            # a demand reaching one would be dropped rather than met by the road that can move.
+            order = (
+                (road_a, road_b)
+                if (size[road_a], road_a) <= (size[road_b], road_b)
+                else (road_b, road_a)
+            )
+            for road in order:
+                short = need - (shift[road_a] + shift[road_b])
+                if short <= SEPARATION_TOLERANCE_M:
+                    break
+                moved |= raise_to(road, shift[road] + short)
         for behind, ahead, allowance in pushes:
             if shift[behind] - shift[ahead] > allowance + SEPARATION_TOLERANCE_M:
                 moved |= raise_to(ahead, shift[behind] - allowance)
@@ -1031,7 +1079,9 @@ def _separated_roads(
     **Kerbward is always the direction.** An opposing carriageway sits on a lane's offside, so
     moving each of the two roads kerbward in its own frame opens the gap between them, and every
     shift is non-negative. `_separation_layout` works out how far, from one reading of the
-    geometry.
+    geometry. The same property is why `_two_way_roads` is pinned to a budget of zero: a street
+    carrying both directions has two halves whose kerbward points opposite ways, so any shift at
+    all would part them.
 
     **One reading is not enough, and this was measured rather than assumed.** A layout solved
     once left 16 overlaps on mosque and 3 on junction-1, and made three pairs *worse* — mosque
@@ -1047,6 +1097,7 @@ def _separated_roads(
     for lane in lanes:
         members.setdefault(roads[lane.identifier], []).append(lane)
     size = {road: len(items) for road, items in members.items()}
+    pinned = _two_way_roads(lanes, roads)
     spent: dict[BlockKey, float] = dict.fromkeys(members, 0.0)
     # Every round lays each road out from where it started rather than from where the last round
     # left it. `offset_curve` is not its own inverse on a curved line, so moving a road out and
@@ -1075,7 +1126,12 @@ def _separated_roads(
             roads,
             size,
             target=target,
-            budget={road: (-spent[road], max_shift - spent[road]) for road in members},
+            budget={
+                road: (0.0, 0.0)
+                if road in pinned
+                else (-spent[road], max_shift - spent[road])
+                for road in members
+            },
         )
         if max((abs(value) for value in shift.values()), default=0.0) <= SEPARATION_SETTLED_M:
             break

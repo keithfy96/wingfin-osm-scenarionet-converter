@@ -53,6 +53,7 @@ from osm_scenario.generation import (
     _tagged_side_block,
     _tapered_line,
     _turn_permissions,
+    _two_way_roads,
     _uncrossed_lanes,
     _unproven_sharp_movement,
     generate_lane_model,
@@ -931,7 +932,7 @@ def test_no_carriageways_on_the_real_maps_are_laid_over_the_traffic_coming_the_o
     is split and moved in halves kinks by the difference, and the sideways step at a direct
     continuation is where that shows: the totals must not be worse than v25 left them.
     """
-    # Measured on the v25 models, before this pass existed. It now reads 42.59 and 40.77.
+    # Measured on the v25 models, before this pass existed. It now reads 42.40 and 40.77.
     continuity_ceiling = {"mosque": 47.63, "junction-1": 44.13}
     seen = 0
     for name, model in _generated_models():
@@ -999,6 +1000,42 @@ def test_no_carriageways_on_the_real_maps_are_laid_over_the_traffic_coming_the_o
                 "v25 left"
             )
     assert seen, "no opposing carriageway pair was found in any generated model"
+
+
+def test_no_two_way_street_on_the_real_maps_is_parted_down_its_own_middle() -> None:
+    """What Keith reported about v26, asserted where it happened.
+
+    A way carrying both directions is one carriageway: its two blocks are laid either side of
+    its own line and meet exactly on it. v26 gave 22 of mosque's 26 two-way edge pairs 1.001 m
+    of bare nothing down the middle, because the two directions were two roads and only one of
+    them was moved. This is the test that would have caught it.
+    """
+    seen = 0
+    for name, model in _generated_models():
+        blocks: dict[tuple[tuple[str, ...], str], list[LaneFeature]] = {}
+        for lane in model.lanes:
+            blocks.setdefault((tuple(lane.source_edge), lane.direction), []).append(lane)
+        for (edge, direction), lanes in sorted(blocks.items()):
+            if direction != "forward":
+                continue
+            # OSM's two directions arrive on the reversed graph edge, not the same one.
+            twin = blocks.get(((edge[1], edge[0], *edge[2:]), "backward"))
+            if twin is None:
+                continue
+            seen += 1
+            # idx0 hugs the centreline in each direction, so these two are the pair that meet.
+            near = min(lanes, key=lambda lane: lane.lane_index)
+            other = min(twin, key=lambda lane: lane.lane_index)
+            gap = LineString(
+                (point.x, point.y) for point in near.centerline
+            ).distance(
+                LineString((point.x, point.y) for point in other.centerline)
+            ) - (near.width_m + other.width_m) / 2
+            assert gap <= 1e-3, (
+                f"{name} way {near.source_way_ids[0]} carries both directions and has "
+                f"{gap:.3f} m of nothing between them along its own centreline"
+            )
+    assert seen, "no way carrying both directions was found in any generated model"
 
 
 def _straight_run(
@@ -1246,6 +1283,85 @@ def test_a_road_is_every_block_of_one_way_plus_what_carries_straight_on() -> Non
     # Both edges of way `w` share an identifier even though nothing links them, because they
     # are one way in one direction.
     assert len({roads[lane.identifier] for lane in first + second}) == 1
+
+
+def test_both_directions_of_a_street_are_one_road() -> None:
+    """The seam down the middle of a street must never fall between two roads.
+
+    A street mapped as two ways, each carrying both directions. Chaining alone would leave the
+    forward halves in one road and the backward halves in another, and the pair that reads
+    across the way boundary — `w1` forward against `w2` backward — then looks like two
+    carriageways overlapping. Two such readings, of 1 mm and 4 mm, parted 22 of mosque's
+    two-way ways at v26.
+    """
+    lanes = []
+    for way, node_from, node_to in (("w1", "a", "b"), ("w2", "b", "c")):
+        forward = _carriageway(1, way=way, node_from=node_from, node_to=node_to, centre=1.75)
+        lanes += forward
+        lanes += [
+            forward[0].model_copy(
+                update={
+                    "identifier": f"{way}-back",
+                    "direction": "backward",
+                    "source_edge": [node_to, node_from, "0"],
+                    "centerline": [Point2D(x=120.0, y=-1.75), Point2D(x=0.0, y=-1.75)],
+                }
+            )
+        ]
+
+    roads = _road_components(lanes, [], [], max_turn_degrees=ALIGNMENT_MAX_TURN_DEG)
+    assert roads["w1-0"] == roads["w1-back"], "both directions of one way are one road"
+    assert roads["w1-0"] != roads["w2-0"], "nothing yet links the two ways"
+
+    # And once they are linked, the whole street — all four lanes — is one road.
+    chained = _road_components(
+        lanes, [], [("b", "w1-0", "w2-0")], max_turn_degrees=ALIGNMENT_MAX_TURN_DEG
+    )
+    assert len({chained[lane.identifier] for lane in lanes}) == 1
+    assert _two_way_roads(lanes, chained) == {chained["w1-0"]}
+
+
+def test_a_two_way_street_is_never_parted_down_its_own_middle() -> None:
+    """Keith's report on v26: 22 of mosque's two-way ways split open along their own centreline.
+
+    Every shift is kerbward, and kerbward is north for a street's eastbound half and south for
+    its westbound one — so a shift given to a street rather than to a carriageway pulls the two
+    halves apart. Under the fewer-lanes rule the two-lane street here would be the one to yield
+    and the three-lane carriageway would not; pinning reverses that, and the street stays whole.
+    """
+    street = _carriageway(1, way="w", node_from="a", node_to="b", centre=1.75)
+    street += [
+        street[0].model_copy(
+            update={
+                "identifier": "w-back",
+                "direction": "backward",
+                "source_edge": ["b", "a", "0"],
+                # The westbound half stops at x=40, which is what exposes the eastbound half's
+                # offside to the carriageway beyond it — a two-way street otherwise shields
+                # itself, and neither extract has a demand that reaches one.
+                "centerline": [Point2D(x=40.0, y=-1.75), Point2D(x=0.0, y=-1.75)],
+            }
+        )
+    ]
+    against = _carriageway(
+        3, way="m", node_from="c", node_to="d", centre=-5.5, heading_east=False
+    )
+    for lane in against:
+        lane.centerline = [
+            Point2D(x=120.0, y=lane.centerline[0].y),
+            Point2D(x=60.0, y=lane.centerline[0].y),
+        ]
+
+    lanes = street + against
+    roads = _road_components(lanes, [], [], max_turn_degrees=ALIGNMENT_MAX_TURN_DEG)
+    # 0.25 m of clear road between the street's eastbound lane and the nearest of the three
+    # coming the other way, so 0.75 m has to be found from somewhere.
+    moved = _run_separation(lanes, roads=roads)
+    assert moved["w-0"] == moved["w-back"] == 0.0, "a street carrying both directions may not move"
+    for lane in against:
+        assert moved[lane.identifier] == pytest.approx(-0.75, abs=1e-2), (
+            "the carriageway that can move takes the whole shortfall"
+        )
 
 
 def test_alignment_will_not_follow_a_road_round_a_corner() -> None:
