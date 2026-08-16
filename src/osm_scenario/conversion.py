@@ -49,13 +49,13 @@ import tempfile
 from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import networkx as nx
 import numpy as np
 from shapely import STRtree, contains_xy, segmentize, union_all
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon
-from shapely.ops import linemerge, unary_union
+from shapely.ops import linemerge, substring, unary_union
 
 # Private helpers imported across modules on purpose, for the reason `validation` gives:
 # these are the exact routines the earlier stages use, and a Stage 6 copy would be a
@@ -290,6 +290,31 @@ _MIN_ISLAND_M = 0.3
 # a kerb turns is that 90. The same figure `ego_route.MAX_VERTEX_TURN_DEG` uses, for the same
 # reason - a line whose shape is not ours has doubled back rather than bent.
 _MAX_KERB_TURN_DEG = 150.0
+
+# How far inside another lane's surface a painted line has to lie before it is read as paint on
+# tarmac rather than paint on the edge the two share - see `_uncovered_boundaries`. It must stay
+# **above `_KERB_PAINT_ALLOWANCE_M`**, which is the whole argument for clipping before the kerb is
+# traced: a piece removed here is at least this far inside the road, so it was never covering a
+# ring within that allowance and the kerb pass cannot paint it back. And it is far below a drawn
+# marking, which is 0.125-0.156 m wide at the resolutions in force. The result is not balanced on
+# it: with the same-way exclusion in place, 0.05 / 0.10 / 0.25 remove 616 / 579 / 475 m on
+# `mosque`. What makes a small number safe is that exclusion and not this constant - on a curve a
+# mitre join puts a legitimate same-way divider up to 0.345 m inside its neighbour, so no
+# threshold alone can tell the two apart.
+_COVERED_PAINT_TOLERANCE_M = 0.05
+
+# The shortest surviving piece of a clipped line worth writing, and the shortest hole worth
+# opening in one. **It is a needle filter and nothing more** - the distinction `_MIN_KERB_M` had
+# to learn, where a length threshold was standing in for a drivable-road test it could not do,
+# and the measurement that says it must stay small is the same one: every surviving piece under
+# 2 m on either extract - 12 on `mosque`, 5 on `junction-1` - meets other paint at at least one
+# end, most at both, so a bigger filter would break a continuous road edge rather than remove a
+# speck. Both halves were measured. As a floor on a piece it costs 4.8 m more paint on `mosque`
+# and takes the lines cut into two or more from 25 to 8; as a floor on a hole it closes the one
+# break of 0.23 m, the interior holes running 0.23 m and then nothing at all until 4.78 m. The
+# closing is the only thing that leaves paint on tarmac at all, and it is bounded by this: the
+# longest run left is 0.47 m on `mosque` and 0.23 m on `junction-1`.
+_MIN_PAINT_M = 0.5
 
 # A junction turn carries no surveyed speed limit - it is not a way and has no `maxspeed` - and
 # the lanes either side of it may disagree. 30 km/h is the figure MetaDrive's own IDM would end
@@ -1200,6 +1225,146 @@ def _extended(points: np.ndarray) -> np.ndarray:
     return np.vstack([push(points[0], points[1]), points, push(points[-1], points[-2])])
 
 
+class UncoveredPaint(NamedTuple):
+    """The surviving lines, how much paint went, and how many boundaries it was taken from.
+
+    `dropped` is separate from `clipped` because it is what `merged` has to be told about: a
+    boundary that lay wholly on another lane's tarmac never reaches the file, and counting it as a
+    merged duplicate would say a line was drawn twice when it was not drawn at all.
+    """
+
+    lines: dict[str, dict[str, Any]]
+    removed_m: float
+    clipped: int
+    dropped: int
+
+
+def _uncovered_boundaries(
+    features: Mapping[str, dict[str, Any]], model: PreliminaryLaneModel
+) -> UncoveredPaint:
+    """Every lane's markings, cut back to the parts that are not lying on another lane's tarmac.
+
+    A lane's two lines are offset from that lane's own centreline and nothing ever asks what else
+    is on that ground. Two lanes of one OSM way know about each other - `generation.py` names them
+    neighbours within one edge's lane list, which is what lets `_divider_boundaries` dash the line
+    between them or drop the second copy - but a turning lane, a slip road and a merging ramp are
+    always a **different way** from the road they leave or join, so they are never neighbours and
+    every one of their lines stays a solid `_BOUNDARY_TYPE`. And at a merge or a diverge the two
+    lanes *must* share tarmac; two 3.50 m lanes need 3.50 m between their centrelines to stop
+    overlapping and at a join they run from 1.82 m apart to 4.85 m apart. So each lane's solid line
+    lands inside the other's driving surface: on `mosque` 70 lines carrying 651.1 m of paint, and
+    on `junction-1` 19 carrying 126.8 m. Keith, driving it: *"the left turn lane has its edge drawn
+    into the straight road, and the straight road has its edge boundary drawn into the turning
+    lane… it would make it seem like road boundaries."* He is right - `ScenarioBlock` gives every
+    line a ghost body and a solid one sets `on_white_continuous_line`.
+
+    The rule is the one `_junction_kerb_boundaries` already applies to a kerb, generalised to every
+    line this file writes: **a line marks the edge of the road, or the division between two lanes
+    lying side by side, and may never run through another lane.** It corrects the paint and not the
+    tarmac deliberately - at a merge the two surfaces *have* to overlap, so there is nothing wrong
+    with the geometry underneath.
+
+    Three kinds of surface never clip a line, and each abuts by design. They are the same list
+    `generation._lateral_neighbours` keeps for the same reason:
+
+    - the line's own lane;
+    - **any lane sharing an OSM way with it** - two lanes of one way are parallel offsets of one
+      base line and meet exactly *on* their shared edge. This has to be an exclusion rather than a
+      wider tolerance: on a curve a mitre join puts a legitimate same-way divider up to 0.345 m
+      inside its neighbour's polygon, which is deeper than some of the real defects;
+    - **any junction turn the lane is an end of** - a lane and its own connector are meant to touch.
+
+    Read from `features` rather than from the model so the junction turns and the bridges are
+    covered too, and called before `_sealed_surfaces` so those polygons are still the lanes' own:
+    the question is whether a line is inside a lane's tarmac, and a patch closing a wedge between
+    two surfaces is not a lane's tarmac.
+    """
+    lane_ways = {lane.identifier: set(lane.source_way_ids) for lane in model.lanes}
+    junction_ends: dict[str, set[str]] = {}
+    shapes: dict[str, Polygon] = {}
+    for identifier, feature in features.items():
+        if feature["type"] != _LANE_TYPE:
+            continue
+        shape = _surface(np.asarray(feature["polygon"], dtype=np.float64))
+        if shape is not None:
+            shapes[identifier] = shape
+        if identifier in lane_ways:
+            continue
+        for end in (*feature.get("entry_lanes", ()), *feature.get("exit_lanes", ())):
+            junction_ends.setdefault(end, set()).add(identifier)
+
+    keys = sorted(shapes)
+    tree = STRtree([shapes[key] for key in keys])
+
+    written: dict[str, dict[str, Any]] = {}
+    removed = 0.0
+    clipped = 0
+    dropped = 0
+    for identifier, feature in features.items():
+        lane_id = feature.get("lane_id")
+        if feature["type"] not in (_BOUNDARY_TYPE, _DIVIDER_TYPE) or lane_id is None:
+            continue
+        line = LineString(feature["polyline"])
+        covers = [
+            shapes[key]
+            for key in (keys[index] for index in tree.query(line))
+            if key != lane_id
+            and key not in junction_ends.get(lane_id, ())
+            and not (lane_ways.get(key, frozenset()) & lane_ways.get(lane_id, frozenset()))
+        ]
+        kept: Any = line
+        if covers:
+            kept = line.difference(
+                unary_union([shape.buffer(-_COVERED_PAINT_TOLERANCE_M) for shape in covers])
+            )
+        # Worked out as distances along the original line rather than as loose pieces, so the
+        # order is the line's own and a hole can be measured before it is opened.
+        spans = sorted(
+            (
+                min(line.project(Point(part.coords[0])), line.project(Point(part.coords[-1]))),
+                max(line.project(Point(part.coords[0])), line.project(Point(part.coords[-1]))),
+            )
+            for part in (kept.geoms if hasattr(kept, "geoms") else [kept])
+            if isinstance(part, LineString) and not part.is_empty
+        )
+        merged: list[list[float]] = []
+        for start, end in spans:
+            # A hole shorter than the shortest piece worth writing is not worth opening either:
+            # it reads as a break in a line rather than as a gap in one, which is the complaint
+            # Keith made of the first kerb attempt. The histogram picks it - the interior holes
+            # this cuts measure 0.23 m and then nothing at all until 4.78 m.
+            if merged and start - merged[-1][1] < _MIN_PAINT_M:
+                merged[-1][1] = end
+            else:
+                merged.append([start, end])
+        parts = [
+            substring(line, start, end)
+            for start, end in merged
+            if end - start >= _MIN_PAINT_M
+        ]
+        if len(parts) == 1 and parts[0].length >= line.length - COINCIDENT_M:
+            written[identifier] = feature
+            continue
+        clipped += 1
+        dropped += not parts
+        removed += line.length - sum(part.length for part in parts)
+        for index, part in enumerate(parts):
+            # One surviving piece keeps the original id: shortened or not, it still means "this
+            # lane's left edge". A line cut in two cannot, because one id cannot name two lines.
+            piece = (
+                identifier
+                if len(parts) == 1
+                else deterministic_id("boundary_clipped", identifier, str(index))
+            )
+            written[piece] = {
+                **feature,
+                "polyline": np.asarray(part.coords, dtype=np.float64),
+            }
+    return UncoveredPaint(
+        lines=written, removed_m=removed, clipped=clipped, dropped=dropped
+    )
+
+
 def _junction_kerb_boundaries(
     features: Mapping[str, dict[str, Any]],
 ) -> tuple[dict[str, dict[str, Any]], int]:
@@ -1317,23 +1482,40 @@ def _junction_kerb_boundaries(
     return kerbs, road_ends
 
 
+class MapFeatures(NamedTuple):
+    """What `_map_features` built, and everything `metadata.lane_markings` needs to count it.
+
+    `kerbs` is not a nicety. `lane_markings` counts edges and merged copies **by feature type**, so
+    a kerb line - a `ROAD_EDGE_BOUNDARY` belonging to no lane - would inflate one count and drive
+    the other negative if the caller could not tell the two apart.
+
+    `road_ends` is reported for the opposite reason: a bar of bare edge across the end of a road is
+    a deliberate blank, and a blank nothing counts reads as a gap in the numbers.
+
+    `sealed` is the blast radius of `_sealed_surfaces` - the only step in this file that changes a
+    feature rather than adding one, so the number a reader needs is how many it changed.
+
+    `boundaries_written` counts the model boundaries that reached the file, not the line features
+    they became, and that difference is the whole reason it is carried out rather than counted
+    back: `_uncovered_boundaries` may cut one boundary into two lines, which would drive `merged`
+    - a difference against what the model holds - negative.
+    """
+
+    features: dict[str, dict[str, Any]]
+    kerbs: set[str]
+    road_ends: int
+    sealed: int
+    covered_paint: int
+    covered_paint_m: float
+    boundaries_written: int
+
+
 def _map_features(
     model: PreliminaryLaneModel,
     neighbours: Mapping[str, tuple[list[str], list[str]]],
     moves: Mapping[str, list[str]],
-) -> tuple[dict[str, dict[str, Any]], set[str], int, int]:
-    """The map features, which are kerbs, how many road ends are bare, how many surfaces grew.
-
-    The second element is not a nicety. `metadata.lane_markings` counts edges and merged copies
-    **by feature type**, so a kerb line - a `ROAD_EDGE_BOUNDARY` belonging to no lane - would
-    inflate one count and drive the other negative if the caller could not tell the two apart.
-
-    The third is reported for the opposite reason: a bar of bare edge across the end of a road is
-    a deliberate blank, and a blank nothing counts reads as a gap in the numbers.
-
-    The fourth is the blast radius of `_sealed_surfaces` - the only step in this file that changes
-    a feature rather than adding one, so the number a reader needs is how many it changed.
-    """
+) -> MapFeatures:
+    """The map features, and the counts `metadata.lane_markings` reports them by."""
     features: dict[str, dict[str, Any]] = {}
     # `neighbours` is still accepted, and still what the rest of Stage 6 reasons about, but the
     # file is written from `_exported_links` so the junction turns survive into it.
@@ -1385,6 +1567,24 @@ def _map_features(
                 "lane_id": lane.identifier,
             }
 
+    # Before the surfaces are sealed, so what a line is judged against is the lanes' own tarmac
+    # rather than a patch closing a wedge between two of them; and before the kerb is traced, so
+    # that pass sees the truth about what is painted. It cannot paint a removed piece back: every
+    # one of them is at least `_COVERED_PAINT_TOLERANCE_M` inside a surface, which is deeper than
+    # `_KERB_PAINT_ALLOWANCE_M`, so none of them was covering a ring.
+    uncovered = _uncovered_boundaries(features, model)
+    boundaries_written = (
+        sum(1 for feature in features.values() if feature.get("lane_id") is not None)
+        - uncovered.dropped
+    )
+    for identifier in [
+        identifier
+        for identifier, feature in features.items()
+        if feature.get("lane_id") is not None
+    ]:
+        del features[identifier]
+    features.update(uncovered.lines)
+
     # The holes between surfaces are closed before the kerb is traced, and it matters that it is
     # this way round: the kerb runs along the road's edge, and until the tarmac is whole the
     # road's edge includes the walls of every gap in it.
@@ -1400,7 +1600,15 @@ def _map_features(
                 f"junction kerb {kerb_id} shares an id with another map feature"
             )
         features[kerb_id] = feature
-    return features, set(kerbs), road_ends, sealed
+    return MapFeatures(
+        features=features,
+        kerbs=set(kerbs),
+        road_ends=road_ends,
+        sealed=sealed,
+        covered_paint=uncovered.clipped,
+        covered_paint_m=uncovered.removed_m,
+        boundaries_written=boundaries_written,
+    )
 
 
 def _scenario(
@@ -1424,7 +1632,8 @@ def _scenario(
     """
     neighbours = _lane_neighbours(model)
     moves = _lane_change_moves(model)
-    features, kerbs, road_ends, sealed = _map_features(model, neighbours, moves)
+    built = _map_features(model, neighbours, moves)
+    features, kerbs = built.features, built.kerbs
     # Counted here, not inferred from the gap between what the model holds and what was
     # written: `merged` is that gap, and letting the two reasons for a missing boundary share
     # one number would report suppression as deduplication.
@@ -1530,17 +1739,14 @@ def _scenario(
                     if item["type"] == _BOUNDARY_TYPE and identifier not in kerbs
                 ),
                 # Boundaries the model holds, less the boundaries actually written, less the
-                # ones `junction_stubs` accounts for. Counted by type rather than as
-                # `len(features) - len(lanes)`, which quietly stopped meaning "boundaries" once
-                # the junction turns became features too.
+                # ones `junction_stubs` accounts for. Counted against
+                # `MapFeatures.boundaries_written` - how many of the model's boundaries reached
+                # the file - rather than against the line features, because
+                # `_uncovered_boundaries` may cut one boundary into two lines and counting those
+                # would drive this negative.
                 "merged": sum(len(lane.boundaries) for lane in model.lanes)
                 - stub_boundaries
-                - sum(
-                    1
-                    for identifier, item in features.items()
-                    if item["type"] in (_BOUNDARY_TYPE, _DIVIDER_TYPE)
-                    and identifier not in kerbs
-                ),
+                - built.boundaries_written,
                 # Markings left unpainted because their lane is a clamped trim sitting inside a
                 # junction - see `_stub_lanes`. Reported rather than folded into `merged`: a
                 # dropped duplicate and a deliberately blank junction are different facts, and
@@ -1555,12 +1761,20 @@ def _scenario(
                 # leaving a bar of bare edge straight across the carriageway. Deliberately not
                 # painted, because a line there draws as a stop line where there is none. Counted
                 # so the blank is a stated fact rather than a hole in the numbers.
-                "road_ends_unpainted": road_ends,
+                "road_ends_unpainted": built.road_ends,
+                # Lane markings cut back because they were lying inside another lane's driving
+                # surface - see `_uncovered_boundaries`. Its own pair of counts for the reason
+                # `junction_stubs` has one: a line removed for being on tarmac and a duplicate
+                # merged out are different facts. The metres are carried beside the count because
+                # a boundary may lose a metre of an eighty-metre line or the whole of a five-metre
+                # one, and the count alone cannot tell a reader which.
+                "covered_paint": built.covered_paint,
+                "covered_paint_m": round(built.covered_paint_m, 2),
                 # Lane surfaces grown to swallow a hole in the tarmac beside them - see
                 # `_sealed_surfaces`. Not a marking, but it belongs beside these: every other
                 # number here counts a line that was or was not drawn, and this counts the road
                 # those lines are drawn on being made whole first.
-                "surfaces_sealed": sealed,
+                "surfaces_sealed": built.sealed,
             },
             # Present only when `--signals` was given, and always marked `synthesised`.
             # OSM records that a signal exists and carries no cycle, split or offset, so a

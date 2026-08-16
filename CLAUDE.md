@@ -744,6 +744,54 @@ prints it beside `junction_kerbs`. **The stubs' outward-facing edges do come bac
 they are in the unpainted union above — while their interior marks stay dropped, which is the
 distinction the whole of this section turns on.
 
+### And a line may not lie on tarmac either, not only a kerb (2026-08-16)
+
+The rule above — *nothing here may land on drivable road* — was stated about **kerbs only**,
+because a kerb was the last kind of line this converter learned to draw. Every other line is still
+offset from its own lane's centreline with no idea what else is on that ground, and two facts meet
+there: lanes of one OSM way know about each other (`generation.py` names neighbours within one
+edge's lane list, which is what lets `_divider_boundaries` dash the line or drop the second copy)
+while **a turning lane, a slip road and a merging ramp are always a different way**, so they are
+never neighbours and every one of their lines stays a solid `ROAD_EDGE_BOUNDARY`; and **at a merge
+or a diverge the two lanes must share tarmac**, because two 3.50 m lanes need 3.50 m between their
+centrelines to stop overlapping. So each one's solid line lands inside the other's driving surface,
+with a ghost body that sets `on_white_continuous_line`. Keith: *"the left turn lane has its edge
+drawn into the straight road, and the straight road has its edge boundary drawn into the turning
+lane… it would make it seem like road boundaries."* 70 lines / **651.1 m** on `mosque`, 19 /
+**126.8 m** on `junction-1`; on way 1351503429 the branch's edge reached 1.38 m into the through
+lane, 0.37 m **past** that lane's own centreline.
+
+`conversion._uncovered_boundaries` cuts every lane boundary back to what is not inside another
+drivable surface. Export-time, so no fingerprint moves. Five things not to re-derive:
+
+- **The same-way exclusion is not optional and cannot be replaced by a threshold.** Two lanes of
+  one way meet exactly on their shared edge, but a mitre join on a curve puts a legitimate divider
+  up to **0.345 m** inside its neighbour — deeper than some real defects. Three surfaces never
+  clip: the line's own lane, any lane sharing an OSM way with it, any junction turn it is an end
+  of. The same list `generation._lateral_neighbours` keeps, for the same reason.
+- **`_COVERED_PAINT_TOLERANCE_M` (0.05 m) must stay above `_KERB_PAINT_ALLOWANCE_M` (0.02 m)**,
+  and that is the whole argument for clipping *before* the kerb is traced: a removed piece is at
+  least that far inside the road, so it was never covering a ring and the kerb pass cannot paint
+  it back. Verified — `junction_kerbs`, `road_ends_unpainted` and `surfaces_sealed` are unchanged.
+- **Judged against the lanes' own polygons, not the sealed ones.** A patch closing a wedge between
+  two surfaces is not a lane's tarmac. Hence before `_sealed_surfaces`.
+- **`_MIN_PAINT_M` (0.5 m) is a needle filter and nothing more**, the lesson `_MIN_KERB_M` taught:
+  *every* surviving piece under 2 m on either extract meets other paint at at least one end, so a
+  bigger filter breaks a continuous road edge rather than removing a speck. Used twice — a piece
+  shorter than it is not written, and **a hole shorter than it is not opened**, because a break of
+  a few centimetres reads as a broken line. The interior holes measure 0.23 m and then nothing
+  until 4.78 m. That closing is the only thing leaving paint on tarmac at all, and bounds it: the
+  longest run left is **0.47 m** on `mosque` and **0.23 m** on `junction-1`, from 651 m and 127 m.
+- **A line surviving in one piece keeps its id**; one cut in two gets `boundary_clipped` ids,
+  because one id cannot name two lines. **`merged` had to stop counting line features** — a
+  boundary cut in two adds one — and now counts `MapFeatures.boundaries_written`.
+
+Not one divider was clipped on either map, which is the same-way exclusion working: a divider is
+by definition the line between two lanes of one way. `tools/check_dataset.py` reports
+`covered_paint` and **fails** when a line runs `_MIN_PAINT_M` or further inside a lane that is not
+its own. See
+`docs/mapping-algo-changes/2026-08-16-20:01:55-a-turning-lanes-edge-was-painted-through-the-road-beside-it.md`.
+
 ### Conventions that bite
 
 - **OSM connectivity is via shared nodes.** Relations only carry turn restrictions.

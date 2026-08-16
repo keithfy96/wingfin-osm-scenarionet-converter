@@ -34,6 +34,56 @@ def _polyline_length(polyline) -> float:
     return total
 
 
+def _paint_on_tarmac(map_features) -> tuple[float, str]:
+    """The longest run of a painted line lying inside a lane surface it does not belong to.
+
+    A line MetaDrive draws also gets a ghost body, and a solid one sets
+    `on_white_continuous_line`, so paint on drivable road reads to an agent as a road boundary.
+    `conversion._uncovered_boundaries` cuts those back; this is the check that it did.
+
+    Three things are meant to be touched and are excluded, and all three can be read off the
+    dataset without the lane model: the line's own lane, the lanes it names as neighbours - which
+    is how two lanes of one road meet exactly on the edge they share - and the junction turns the
+    lane is an end of. Leans on shapely, which MetaDrive itself requires; without it there is
+    nothing to report rather than a failure.
+    """
+    try:
+        from shapely.geometry import LineString, Polygon
+    except ImportError:  # pragma: no cover - MetaDrive pulls shapely in
+        return 0.0, ""
+
+    surfaces = {}
+    junction_ends = {}
+    neighbours = {}
+    for identifier, feature in map_features.items():
+        if feature.get("type") != "LANE_SURFACE_STREET" or len(feature.get("polygon", [])) < 4:
+            continue
+        surfaces[identifier] = Polygon(feature["polygon"][:, :2]).buffer(0)
+        neighbours[identifier] = set(feature.get("left_neighbor") or ()) | set(
+            feature.get("right_neighbor") or ()
+        )
+        for end in (*feature.get("entry_lanes", ()), *feature.get("exit_lanes", ())):
+            junction_ends.setdefault(end, set()).add(identifier)
+
+    worst, culprit = 0.0, ""
+    for identifier, feature in map_features.items():
+        owner = feature.get("lane_id")
+        if owner is None or len(feature.get("polyline", [])) < 2:
+            continue
+        line = LineString(feature["polyline"][:, :2])
+        for other, shape in surfaces.items():
+            if other == owner or other in neighbours.get(owner, ()):
+                continue
+            # A junction turn leaving this lane, or the lane the turn leaves - both meet it.
+            if other in junction_ends.get(owner, ()) or owner in junction_ends.get(other, ()):
+                continue
+            inside = line.intersection(shape.buffer(-0.05))
+            for part in getattr(inside, "geoms", [inside]):
+                if part.length > worst:
+                    worst, culprit = part.length, identifier
+    return worst, culprit
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("dataset", help="Directory holding dataset_summary.pkl")
@@ -119,8 +169,10 @@ def main() -> int:
         kerbs = (markings or {}).get("junction_kerbs", 0)
         ends = (markings or {}).get("road_ends_unpainted", 0)
         sealed = (markings or {}).get("surfaces_sealed", 0)
+        covered = (markings or {}).get("covered_paint", 0)
+        covered_m = (markings or {}).get("covered_paint_m", 0)
         print(
-            "markings     {}{}{}{}{}{}{}".format(
+            "markings     {}{}{}{}{}{}{}{}".format(
                 ", ".join(f"{count} {name}" for name, count in sorted(styles.items()))
                 or "no boundaries",
                 f" · source {markings['source']}, {markings['merged']} second copies merged"
@@ -142,9 +194,31 @@ def main() -> int:
                 # swallow a hole in the tarmac beside them, which would otherwise render as a
                 # white line nothing drew. See `conversion._sealed_surfaces`.
                 f" · {sealed} surface(s) sealed" if sealed else "",
+                # Lines cut back where a merging or turning lane's edge lay inside the lane
+                # beside it. Solid paint on drivable road is a ghost body an agent reads as a
+                # boundary, which is exactly why this one is worth naming in the report.
+                f" · {covered} line(s) cut back off {covered_m:.1f} m of tarmac"
+                if covered
+                else "",
                 f" · {short} divider(s) under 4 m, too short to dash" if short else "",
             )
         )
+
+        # And the check that says the cutting back actually worked. A line drawn through a lane
+        # is a ghost body sitting on road a car drives along, so an agent reads a boundary where
+        # there is none - the defect `conversion._uncovered_boundaries` exists to remove. Judged
+        # from the dataset alone: a lane's own surface, the lanes it names as neighbours (which
+        # is how two lanes of one road meet exactly on their shared edge) and the junction turns
+        # it is an end of are all meant to be touched.
+        worst_run, worst_line = _paint_on_tarmac(scenario["map_features"])
+        if worst_run >= 0.5:
+            print(
+                f"             FAILED: {worst_run:.2f} m of line {worst_line} runs through "
+                "another lane's driving surface"
+            )
+            failures += 1
+        else:
+            print(f"             longest line inside another lane {worst_run:.2f} m")
 
         # What 3D needs, and nothing else reports. MetaDrive builds one terrain square of
         # `map_region_size` metres centred on the ego's start - `base_engine` hard-codes the

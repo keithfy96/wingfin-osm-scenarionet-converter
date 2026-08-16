@@ -27,9 +27,12 @@ from osm_scenario.apply_review import _sha256
 from osm_scenario.config import ConverterConfig
 from osm_scenario.conversion import (
     _BOUNDARY_TYPE,
+    _COVERED_PAINT_TOLERANCE_M,
+    _DIVIDER_TYPE,
     _KERB_GAP_CLOSE_M,
     _LANE_TYPE,
     _MAX_KERB_TURN_DEG,
+    _MIN_PAINT_M,
     ConversionError,
     _closed,
     _kerb_rings,
@@ -630,10 +633,8 @@ def _real_models() -> list[tuple[str, PreliminaryLaneModel]]:
 
 
 def _kerbs(model: PreliminaryLaneModel) -> tuple[dict[str, Any], set[str]]:
-    features, kerbs, _, _ = _map_features(
-        model, _lane_neighbours(model), _lane_change_moves(model)
-    )
-    return features, kerbs
+    built = _map_features(model, _lane_neighbours(model), _lane_change_moves(model))
+    return built.features, built.kerbs
 
 
 def _road_edge(features: dict[str, Any]) -> tuple[Any, list[LineString]]:
@@ -836,12 +837,11 @@ def test_sealing_a_surface_only_ever_adds_to_it(monkeypatch: pytest.MonkeyPatch)
     for name, model in models:
         with monkeypatch.context() as patched:
             patched.setattr(conversion, "_sealed_surfaces", lambda features: 0)
-            plain, _, _, _ = _map_features(
+            plain = _map_features(
                 model, _lane_neighbours(model), _lane_change_moves(model)
-            )
-        sealed, _, _, grown = _map_features(
-            model, _lane_neighbours(model), _lane_change_moves(model)
-        )
+            ).features
+        built = _map_features(model, _lane_neighbours(model), _lane_change_moves(model))
+        sealed, grown = built.features, built.sealed
         before, after = _surfaces(plain), _surfaces(sealed)
         assert set(before) == set(after), f"{name}: sealing added or removed a surface"
         assert grown, f"{name}: nothing was sealed, so the check proved nothing"
@@ -1080,6 +1080,220 @@ def test_the_kerb_is_counted_apart_from_the_markings_that_belong_to_lanes() -> N
     assert markings["edges"] == sum(
         1 for lane in model.lanes for boundary in lane.boundaries
     ) - markings["merged"] - markings["dividers"]
+
+
+# --- paint that lies on tarmac a car drives on ----------------------------------------------
+
+
+def _band(x0: float, x1: float, y: float, width: float = WIDTH) -> list[Point2D]:
+    """A lane surface centred on `y` rather than on zero."""
+    half = width / 2
+    return [
+        Point2D(x=x0, y=y - half),
+        Point2D(x=x1, y=y - half),
+        Point2D(x=x1, y=y + half),
+        Point2D(x=x0, y=y + half),
+        Point2D(x=x0, y=y - half),
+    ]
+
+
+def _alongside(
+    *, x0: float, x1: float, y: float, way: str = "300", extra: list[LaneFeature] | None = None
+) -> PreliminaryLaneModel:
+    """One straight lane, with one or more lanes of another way laid over its left half.
+
+    `main` runs along y=0 with its two edges at y=-2 and y=+2. A lane centred on y=+3 covers
+    y=+1..+5, so `main`'s left edge is a metre inside it and its own right edge is a metre inside
+    `main` - the merge, in the smallest arrangement that has one.
+    """
+    main = _lane(
+        "main",
+        boundaries=[
+            LaneBoundary(identifier="main-left", side="left", points=_line(2.0)),
+            LaneBoundary(identifier="main-right", side="right", points=_line(-2.0)),
+        ],
+    )
+    joining = [
+        _lane(
+            "ramp",
+            source_way_ids=[way],
+            source_edge=["7", "8", "0"],
+            centerline=_line(y, x0, x1),
+            polygon=_band(x0, x1, y),
+            boundaries=[
+                LaneBoundary(
+                    identifier="ramp-left", side="left", points=_line(y + 2.0, x0, x1)
+                ),
+                LaneBoundary(
+                    identifier="ramp-right", side="right", points=_line(y - 2.0, x0, x1)
+                ),
+            ],
+        ),
+        *(extra or []),
+    ]
+    return PreliminaryLaneModel.model_validate(
+        {
+            "metadata": _METADATA,
+            "lanes": [lane.model_dump() for lane in (main, *joining)],
+            "connectors": [],
+        }
+    )
+
+
+def _painted(model: PreliminaryLaneModel) -> dict[str, float]:
+    """Every painted line that belongs to a lane, by id, with the length it was drawn at."""
+    built = _map_features(model, _lane_neighbours(model), _lane_change_moves(model))
+    return {
+        identifier: LineString(feature["polyline"]).length
+        for identifier, feature in built.features.items()
+        if feature["type"] in (_BOUNDARY_TYPE, _DIVIDER_TYPE)
+        and feature.get("lane_id") is not None
+    }
+
+
+def test_a_line_is_cut_where_it_lies_on_the_lane_it_merges_with() -> None:
+    """The defect Keith reported, in both directions at once.
+
+    A merging lane and the road it joins are always different OSM ways, so neither knows the
+    other is there and both draw a solid edge through it. Here the ramp covers the last 20 m of
+    `main`, so `main`'s left edge is cut back to the 30 m that is still open ground and the
+    ramp's own right edge, which lies inside `main` for its whole length, is not drawn at all.
+    """
+    painted = _painted(_alongside(x0=30.0, x1=50.0, y=3.0))
+    # The cut starts one tolerance late at the covering surface's own end, which is what that
+    # tolerance is: the line is left alone until it is unmistakably inside.
+    assert painted["main-left"] == pytest.approx(30.0 + _COVERED_PAINT_TOLERANCE_M)
+    assert painted["main-right"] == pytest.approx(50.0)
+    assert painted["ramp-left"] == pytest.approx(20.0)
+    assert "ramp-right" not in painted
+
+
+def test_a_line_cut_in_two_gives_up_the_id_that_named_one_line() -> None:
+    """One surviving piece keeps its id; two cannot both be "this lane's left edge"."""
+    over = _lane(
+        "second",
+        source_way_ids=["400"],
+        source_edge=["9", "10", "0"],
+        centerline=_line(3.0, 0.0, 10.0),
+        polygon=_band(0.0, 10.0, 3.0),
+    )
+    # Covered over x=0..10 and again over x=20..30, so what is left of `main`'s left edge is two
+    # separate lines rather than one shortened one.
+    painted = _painted(_alongside(x0=20.0, x1=30.0, y=3.0, extra=[over]))
+    assert "main-left" not in painted
+    edge = _COVERED_PAINT_TOLERANCE_M
+    assert sorted(
+        length
+        for name, length in painted.items()
+        if name not in {"main-right", "ramp-left", "ramp-right"}
+    ) == pytest.approx([10.0 + 2 * edge, 20.0 + edge])
+
+
+def test_two_lanes_of_one_way_keep_the_line_between_them() -> None:
+    """The exclusion that stops this deleting every lane divider on the map.
+
+    Two lanes of one way are offsets of one base line and meet exactly on their shared edge, but
+    a mitre join on a curve puts a real divider up to 0.345 m inside its neighbour on `mosque`.
+    So the line here is laid deeper inside than the tolerance would forgive, and survives anyway
+    because the two lanes are on the same way.
+    """
+    model = _alongside(x0=0.0, x1=50.0, y=3.0 - 2 * _COVERED_PAINT_TOLERANCE_M, way="200")
+    painted = _painted(model)
+    assert painted["main-left"] == pytest.approx(50.0)
+    assert painted["ramp-right"] == pytest.approx(50.0)
+
+
+def test_a_lane_is_not_nibbled_by_its_own_junction_turn() -> None:
+    """A lane and the turn leaving it are meant to touch, so the turn never clips its edges."""
+    lane = _lane(
+        "a",
+        exit_lanes=["c"],
+        boundaries=[
+            LaneBoundary(identifier="a-left", side="left", points=_line(2.0)),
+            LaneBoundary(identifier="a-right", side="right", points=_line(-2.0)),
+        ],
+    )
+    model = _model(lanes=[lane, *(x for x in _model().lanes if x.identifier != "a")])
+    # The turn laps 5 m back over the lane it leaves, which without the exclusion would take
+    # 5 m off both of that lane's edges.
+    lapped = model.connectors[0].model_copy(
+        update={"centerline": _straight(45.0, 60.0), "polygon": _surface(45.0, 60.0)}
+    )
+    painted = _painted(model.model_copy(update={"connectors": [lapped]}))
+    assert painted["a-left"] == pytest.approx(50.0)
+    assert painted["a-right"] == pytest.approx(50.0)
+
+
+def test_a_surviving_piece_shorter_than_the_needle_filter_is_not_drawn() -> None:
+    over = _lane(
+        "second",
+        source_way_ids=["400"],
+        source_edge=["9", "10", "0"],
+        centerline=_line(3.0, 0.0, 50.0 - _MIN_PAINT_M / 2),
+        polygon=_band(0.0, 50.0 - _MIN_PAINT_M / 2, 3.0),
+    )
+    painted = _painted(_alongside(x0=30.0, x1=50.0, y=3.0, extra=[over]))
+    assert "main-left" not in painted
+
+
+def test_a_hole_shorter_than_the_needle_filter_is_not_opened() -> None:
+    """A break of a few centimetres reads as a broken line, not as a gap - so it is not made.
+
+    The same judgement `_KERB_GAP_CLOSE_M` makes about a seam, and the histogram picks the
+    number: the interior holes this cuts on the real maps measure 0.23 m and then nothing at all
+    until 4.78 m.
+    """
+    gap = _MIN_PAINT_M / 2
+    over = _lane(
+        "second",
+        source_way_ids=["400"],
+        source_edge=["9", "10", "0"],
+        centerline=_line(3.0, 0.0, 30.0 - gap),
+        polygon=_band(0.0, 30.0 - gap, 3.0),
+    )
+    painted = _painted(_alongside(x0=30.0, x1=50.0, y=3.0, extra=[over]))
+    assert "main-left" not in painted  # every part of it is covered but the bridged gap
+    assert not [name for name in painted if name.startswith("main-left")]
+
+
+def test_no_painted_line_on_the_real_maps_runs_through_a_lane() -> None:
+    """The test that would have caught this.
+
+    A residual run can survive where a hole under `_MIN_PAINT_M` was bridged rather than opened,
+    and that is bounded by the bridging: nothing may lie on tarmac for as far as the shortest
+    piece of line worth drawing.
+    """
+    models = _real_models()
+    if not models:
+        pytest.skip("workspaces/ is gitignored and not present")
+    for name, model in models:
+        built = _map_features(model, _lane_neighbours(model), _lane_change_moves(model))
+        lanes = {lane.identifier: set(lane.source_way_ids) for lane in model.lanes}
+        junction_ends: dict[str, set[str]] = {}
+        shapes: dict[str, Polygon] = {}
+        for identifier, feature in built.features.items():
+            if feature["type"] != _LANE_TYPE:
+                continue
+            shapes[identifier] = Polygon(feature["polygon"]).buffer(0)
+            if identifier in lanes:
+                continue
+            for end in (*feature["entry_lanes"], *feature["exit_lanes"]):
+                junction_ends.setdefault(end, set()).add(identifier)
+        worst = 0.0
+        for feature in built.features.values():
+            owner = feature.get("lane_id")
+            if feature["type"] not in (_BOUNDARY_TYPE, _DIVIDER_TYPE) or owner is None:
+                continue
+            line = LineString(feature["polyline"])
+            for identifier, shape in shapes.items():
+                if identifier == owner or identifier in junction_ends.get(owner, ()):
+                    continue
+                if lanes.get(identifier, frozenset()) & lanes[owner]:
+                    continue
+                inside = line.intersection(shape.buffer(-_COVERED_PAINT_TOLERANCE_M))
+                for part in getattr(inside, "geoms", [inside]):
+                    worst = max(worst, part.length)
+        assert worst < _MIN_PAINT_M, f"{name}: {worst:.3f} m of paint runs through a lane"
 
 
 def test_a_boundary_sharing_a_lane_id_is_refused() -> None:
