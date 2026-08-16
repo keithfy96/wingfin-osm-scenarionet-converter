@@ -101,6 +101,13 @@ DRIVABLE_AREA_EXTENSION_M = 10
 # about a metre of the plane the car actually drives on.
 HEIGHT_SCALE = 1
 
+# MetaDrive's own value (`scenario_env.py:84`), repeated here so the flag that exposes it has a
+# default that changes nothing. It is the width of the corridor the ego may drive in either side
+# of its recorded route, and beyond it the episode ends as `out_of_road`. That is right for a
+# replayed car, which is on the route by construction, and a real limit for anything that steers
+# itself: the IDM ego reaches a measured 4.26 m, and a human takes a different turn on purpose.
+MAX_LATERAL_DIST_M = 4.0
+
 
 def _next_power_of_two(value: float) -> int:
     size = MIN_REGION_M
@@ -404,11 +411,25 @@ def main() -> int:
     parser.add_argument(
         "--agent-policy",
         default="replay",
-        choices=["replay", "idm"],
+        choices=["replay", "idm", "manual"],
         help="`replay` teleports the ego onto its recorded positions, so it passes through "
         "red lights - it has no dynamics to interrupt. `idm` follows the same recorded route "
         "as a reference line while braking for obstacles and for the wall a red light puts "
-        "across the lane, so route completion stops being exact by construction.",
+        "across the lane, so route completion stops being exact by construction. `manual` "
+        "hands the wheel to the keyboard - WASD, and the arrow keys are not bound "
+        "(`manual_controller.py:50-55`) - and requires --render 3D; the recorded route becomes "
+        "the goal rather than the drive, and the run is not bounded by the recording's length.",
+    )
+    parser.add_argument(
+        "--max-lateral-dist",
+        type=float,
+        default=MAX_LATERAL_DIST_M,
+        help="How far sideways of the recorded route the ego may get before MetaDrive ends the "
+        f"episode as `out_of_road`. MetaDrive's own value is {MAX_LATERAL_DIST_M} m "
+        "(`scenario_env.py:84`) and is the default here, so nothing changes unless it is asked "
+        "for. It is on the command line because the recorded route is a *reference line* rather "
+        "than a set of walls: under --agent-policy manual a deliberate wrong turn ends the run "
+        "within a second, and the same gate cuts off the idm ego at a measured 4.26 m.",
     )
     parser.add_argument(
         "--lights",
@@ -425,6 +446,19 @@ def main() -> int:
         help="Seed for --lights live, so a run can be repeated.",
     )
     arguments = parser.parse_args()
+
+    # Refused rather than worked around. `ManualControlPolicy.__init__` reads the keyboard
+    # through panda3d only when `use_render` is on; without it, it falls back to opening a
+    # *pygame* window purely to collect key strikes (`manual_control_policy.py:50-56`), so the
+    # car would be driven from a blank window with no view of the map. The failure without this
+    # check is a window that never appears, which says nothing about the cause.
+    if arguments.agent_policy == "manual" and arguments.render != "3D":
+        print(
+            f"result       FAILED: --agent-policy manual needs --render 3D, not "
+            f"--render {arguments.render}. Without a rendered window MetaDrive reads the "
+            f"keyboard through a blank pygame window instead."
+        )
+        return 1
 
     import numpy
 
@@ -486,6 +520,7 @@ def main() -> int:
 
     from metadrive.component.sensors.rgb_camera import RGBCamera
     from metadrive.envs.scenario_env import ScenarioEnv
+    from metadrive.policy.env_input_policy import EnvInputPolicy
     from metadrive.policy.idm_policy import TrajectoryIDMPolicy
     from metadrive.policy.replay_policy import ReplayEgoCarPolicy
     from metadrive.scenario.utils import get_number_of_scenarios
@@ -496,13 +531,36 @@ def main() -> int:
     # would drive through a wall of any kind; it stops at a red only because the converter
     # wrote the stop into the positions, which is why the two lines below differ in where the
     # stopping comes from rather than in whether it happens.
-    policy = ReplayEgoCarPolicy if arguments.agent_policy == "replay" else TrajectoryIDMPolicy
+    #
+    # `manual` is not a third class here. `agent_manager.agent_policy` (`agent_manager.py:64-75`)
+    # resolves in a fixed order - `TakeoverPolicy` first, then `manual_control`, then this value
+    # - so setting `manual_control` below is what selects `ManualControlPolicy`, and the class
+    # named here is not consulted for the ego at all. It is `EnvInputPolicy` rather than a
+    # placeholder because that is the class `ManualControlPolicy` subclasses
+    # (`manual_control_policy.py:37`): the two differ only in where `[steering, throttle]` comes
+    # from, so the pair says what is really happening. And the value is not entirely dead -
+    # `scenario_traffic_manager.py:65` reads it again to decide whether the ego is a replayed
+    # car, which is what stops traffic spawning on top of a car that is driving itself. That
+    # matters only once a scenario holds traffic, but naming `ReplayEgoCarPolicy` here would be
+    # a wrong answer waiting for one.
+    policy = {
+        "replay": ReplayEgoCarPolicy,
+        "idm": TrajectoryIDMPolicy,
+        "manual": EnvInputPolicy,
+    }[arguments.agent_policy]
     print(
         "ego policy   {} - {}".format(
             arguments.agent_policy,
-            "replayed positions; it stops only where the recording stops"
-            if arguments.agent_policy == "replay"
-            else "driven along the recorded route; it brakes for red lights itself",
+            {
+                "replay": "replayed positions; it stops only where the recording stops",
+                "idm": "driven along the recorded route; it brakes for red lights itself",
+                # `h` rather than a paraphrase: MetaDrive keeps the real list in
+                # `constants.py:37` and shows it in the window. Naming `q` here anyway because
+                # `b` is the one key that makes the car stop responding - the keyboard does not
+                # steer in top-down view - and `b` does not toggle back out of it.
+                "manual": "driven from the keyboard: WASD, `h` for MetaDrive's own key list, "
+                "`q` back to the driving view from `b`'s top-down one",
+            }[arguments.agent_policy],
         )
     )
 
@@ -533,10 +591,12 @@ def main() -> int:
             "use_render": arguments.render == "3D",
             "agent_policy": policy,
             **offscreen,
-            "manual_control": False,
+            # The one key that selects `ManualControlPolicy`; see the comment on `policy` above.
+            "manual_control": arguments.agent_policy == "manual",
             "reactive_traffic": arguments.reactive,
             "map_region_size": region,
             "height_scale": arguments.height_scale,
+            "max_lateral_dist": arguments.max_lateral_dist,
             "drivable_area_extension": arguments.drivable_area_extension,
             # Longer than any generated route; the loop below ends on the scenario's own
             # length rather than on a step budget.
@@ -587,8 +647,16 @@ def main() -> int:
             # has, and cutting it off there reports `did not arrive` for a car that was still
             # driving. MetaDrive itself does not impose this: `horizon` is 100000 above and
             # `ScenarioEnv`'s `allowed_more_steps` defaults to None.
-            allowance = 0 if arguments.agent_policy == "replay" else _longest_red(scenario)
-            budget = length + allowance
+            #
+            # A human is bounded by neither. He may sit at the kerb before pulling away, take a
+            # wrong turn and come back, or drive the route twice, and none of that is a fault to
+            # be cut off after a fixed number of steps. So `manual` has no budget at all -
+            # `None` - and the loop ends only when the episode terminates or the window closes.
+            if arguments.agent_policy == "manual":
+                allowance, budget = None, None
+            else:
+                allowance = 0 if arguments.agent_policy == "replay" else _longest_red(scenario)
+                budget = length + allowance
 
             # A baked stop is computed against the plan's written offsets, so it is right
             # under `--lights tape` and wrong under `--lights live`, which draws a fresh
@@ -612,7 +680,7 @@ def main() -> int:
             path = []
             info = {}
             steps = 0
-            while steps < budget:
+            while budget is None or steps < budget:
                 _, _, terminated, truncated, info = env.step([0, 0])
                 heights.append(float(env.agent.origin.getZ()))
                 speeds.append(float(env.agent.speed))
@@ -668,16 +736,25 @@ def main() -> int:
                 # the data. Naming the reason is the difference between the two.
                 named = ("out_of_road", "crash", "crash_object", "crash_vehicle", "max_step")
                 reasons = [name for name in named if info.get(name)]
-                ran_out = (
-                    "ran out of recorded steps"
-                    if allowance == 0
-                    else f"ran out of steps ({budget}: the recording plus {allowance} for a red)"
-                )
+                if allowance is None:
+                    # There is no budget under `manual`, so the loop can only have been left by
+                    # the episode ending. If none of the named reasons is set, MetaDrive ended
+                    # it for one this script does not name rather than the steps running out.
+                    ran_out = "the episode ended without arriving"
+                elif allowance == 0:
+                    ran_out = "ran out of recorded steps"
+                else:
+                    ran_out = (
+                        f"ran out of steps ({budget}: the recording plus {allowance} for a red)"
+                    )
                 print(
                     "             did not arrive: {}{}".format(
                         ", ".join(reasons) or ran_out,
                         (
-                            "; lateral {:.2f} m against a {} m limit".format(
+                            # `{:g}` so an untouched limit still prints as `4` rather than `4.0`:
+                            # the value now arrives as a float from `--max-lateral-dist`, and a
+                            # flag whose default changes nothing should change nothing here either.
+                            "; lateral {:.2f} m against a {:g} m limit".format(
                                 info["lateral_dist"], env.config["max_lateral_dist"]
                             )
                             if info.get("out_of_road") and "lateral_dist" in info
@@ -685,7 +762,13 @@ def main() -> int:
                         ),
                     )
                 )
-                failures += 1
+                # Under `manual` the driver is the variable, so not arriving says nothing about
+                # the dataset - a wrong turn or a kerb is the human's, and reporting `FAILED`
+                # for it would make the exit status mean something different in this mode than
+                # in the other two. Printed either way; only counted for a policy that drives
+                # the route the same way every time.
+                if arguments.agent_policy != "manual":
+                    failures += 1
 
             if lights is not None and lights.spawned_objects:
                 offset = getattr(lights, "episode_offset_seconds", None)

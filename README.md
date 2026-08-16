@@ -293,6 +293,38 @@ fix it are reachable from that entry point. `drive.py` measures each scenario an
 picks a terrain size and texture resolution that fit. `--render` also accepts
 `none`, `offscreen`, `2D` and `semantic`.
 
+### Drive it yourself
+
+`--agent-policy manual` hands the wheel to the keyboard instead of to the tape. From
+inside `scripts/`:
+
+```bash
+./drive.sh junction-1 -- --render 3D --agent-policy manual --max-lateral-dist 30
+```
+
+`--render 3D` is required and anything else is refused early. Without a window
+MetaDrive falls back to reading the keyboard through a blank pygame window, and the
+failure would otherwise be a window that never appears.
+
+**Press `h` in the window for MetaDrive's own key list.** `w` `s` `a` `d` drive —
+**the arrow keys are not bound** — `q` is the driving view and `b` the top-down one,
+and the keyboard stops steering while the camera is top-down, which is MetaDrive's
+behaviour and not a fault. `r` resets the episode, `p` pauses, `f` switches between
+real-time and unlimited FPS, `t` hands over to MetaDrive's built-in expert, and `esc`
+quits — skipping the end-of-run report, so let the episode finish if you want it.
+
+**`--max-lateral-dist` is what makes the mode usable.** MetaDrive ends the episode
+4 m sideways of the *recorded* route, so a deliberate wrong turn ends the run in about
+a second. Measured on `junction-1` with nobody steering at all: the coasting car
+crossed it at 4.28 m after 189 of 370 steps. It defaults to MetaDrive's own 4 m, so
+nothing changes unless you pass it.
+
+The route is still the one in `routes.json`. A recorded track is the navigation
+reference line and the destination whatever drives the car, and the lateral limit
+above is measured from it — so `convert --routes` is as necessary here as for a
+replay. Not arriving does not set the exit status in this mode: the driver is the
+variable, so a kerb or a wrong turn is printed but does not make the run `FAILED`.
+
 ---
 
 ## How it works

@@ -2,9 +2,10 @@
 
 ## Status
 
-**Nothing in this document is built.** Every checkbox is unchecked and every
-`Verify` block is written as "after implementation". It is a plan, recorded so
-that the reading behind it does not have to be done twice.
+**Stage 7a is built** (2026-08-17). `tools/drive.py --agent-policy manual` drives
+the ego from the keyboard, and the figures under its `Verify` block below are
+measured rather than read. **Stage 7b is not built** - its checkboxes are
+unchecked and its `Verify` block is still written as "after implementation".
 
 Stage 8, live traffic, is a separate document -
 `stage-8-live-traffic.md`. The two do not depend on each other and can be
@@ -46,7 +47,7 @@ Two decisions frame everything below, both Keith's:
 | `src/osm_scenario/conversion.py` | none |
 | `workspaces/*/scenarionet` | none - byte-identical, checked by hash |
 | `generation_fingerprint`, Stage 3 reviews | none; nothing here is a config field |
-| `tools/drive.py` | **one value added to an existing enum in 7a**; untouched in 7b |
+| `tools/drive.py` | **one value on an existing enum, plus `--max-lateral-dist`, in 7a**; untouched in 7b |
 | existing tests | none - new tests only |
 
 The one modified file is deliberate and was Keith's choice. `--agent-policy`
@@ -74,6 +75,7 @@ plan.
 | `EnvInputPolicy` is `BaseEnv`'s default, so passing an action *is* driving the ego | `base_env.py:55` |
 | The action is `[steering, throttle_brake]`, both in [-1, 1]: `[0] x max_steering` degrees at the wheels, `[1] >= 0` engine force and `< 0` brakes | `base_vehicle.py:472-520` |
 | `manual_control=True` replaces `agent_policy` outright - the configured value is not consulted at all in that branch | `agent_manager.py:68-74` |
+| ...but `agent_policy` is read a second time, to decide whether the ego is a replayed car and so whether traffic may spawn on top of it | `scenario_traffic_manager.py:65`, `:195` |
 | `ManualControlPolicy` **subclasses `EnvInputPolicy`**, so manual and model control are one code path differing only in where the two numbers come from | `manual_control_policy.py:37` |
 | The keyboard silently stops steering when the ego is not `current_track_agent`, or the camera is in bird view (`b`) - control falls back to whatever `env.step` passed | `manual_control_policy.py:80-84` |
 | Without `use_render`, manual control opens a **pygame** window to read keys instead | `manual_control_policy.py:52-56` |
@@ -137,52 +139,95 @@ order, and it matters because 7a sets one key while another still holds a class:
 3. Otherwise, `agent_policy`.
 
 So `--agent-policy manual` works by setting `manual_control=True`, and whatever
-class sits in `agent_policy` beside it is simply dead. The code must say that
-where it happens rather than leaving a reader to work out which of two settings
-is in charge.
+class sits in `agent_policy` beside it is dead **for choosing the ego's policy**.
+The code says that where it happens rather than leaving a reader to work out
+which of two settings is in charge.
+
+**But it is not dead everywhere, which the plan had wrong.**
+`scenario_traffic_manager.py:65` reads the same key a second time -
+`is_ego_vehicle_replay = global_config["agent_policy"] == ReplayEgoCarPolicy` -
+and uses it to decide whether traffic may be spawned on top of the ego
+(`:195`). A car that is being driven, by a keyboard or by a model, is not a
+replayed car, so leaving `ReplayEgoCarPolicy` in that slot would be a wrong
+answer sitting there waiting for stage 8 to ask the question. `drive.py`
+therefore pairs `manual_control=True` with `agent_policy=EnvInputPolicy`, which
+is also the honest description: `ManualControlPolicy` subclasses it. **No
+scenario in either extract holds traffic today, so nothing observable changes
+now** - this costs nothing and removes a trap.
 
 ---
 
 ## Progress, outputs, and verification
 
-- [ ] **Stage 7a - Keith at the wheel**
-  - [ ] `tools/drive.py` gains `manual` on the existing `--agent-policy` enum.
-  - Outputs:
-    - `--agent-policy replay|idm|manual` (`drive.py:405`). `manual` sets
-      `"manual_control": True` in the config dict at `drive.py:534`, with a
-      comment recording that `agent_policy` beside it is then dead
-      (`agent_manager.py:68-74`).
-    - **The step budget is lifted.** `drive.py:590` computes
-      `budget = length + allowance` - the recording's length for a replayed car,
-      and the recording plus the longest red for IDM. A human is bounded by
-      neither, so `manual` runs until the episode terminates or the window
-      closes. This is the one piece of real logic in 7a, and the reason it is
-      not a one-line change.
-    - **`--render 3D` is required**, with a clear refusal otherwise. Without it
-      MetaDrive falls back to a pygame key-reader
-      (`manual_control_policy.py:52-56`), which is not what anyone means by
-      driving it, and the failure would otherwise be a window that never
-      appears.
+- [x] **Stage 7a - Keith at the wheel** (built 2026-08-17)
+  - [x] `tools/drive.py` gains `manual` on the existing `--agent-policy` enum.
+  - Outputs, as built:
+    - `--agent-policy replay|idm|manual`. `manual` sets
+      `"manual_control": True` in the config dict, with a comment recording that
+      `agent_policy` beside it does not choose the ego's policy
+      (`agent_manager.py:68-74`) - and that it is still read by
+      `scenario_traffic_manager.py:65`, which is why the value beside it is
+      `EnvInputPolicy` rather than a placeholder. See the section above.
+    - **The step budget is lifted.** `budget` is `None` under `manual` and the
+      loop reads `while budget is None or steps < budget`, so the run ends only
+      when the episode terminates or the window closes. For `replay` and `idm`
+      the arithmetic is untouched.
+    - **`--render 3D` is required**, refused before anything is built, in the
+      same `result       FAILED:` form the tool already uses for a bad
+      `--scenario-index`. Without a rendered window MetaDrive falls back to a
+      pygame key-reader (`manual_control_policy.py:50-56`).
+    - **Not arriving is not counted as a failure under `manual`.** The driver is
+      the variable, so a kerb or a wrong turn is the human's, and letting it set
+      the exit status would make `result FAILED` mean something different in
+      this mode than in the other two. It is still printed.
+    - **`--max-lateral-dist` was added, and was not in the plan.** The first
+      manual drive ended itself: MetaDrive stops the episode 4 m sideways of the
+      recorded route, and with nobody steering the coasting ego crossed that at
+      **4.28 m after 189 of 370 steps**. A deliberate wrong turn crosses it in
+      about a second, so with the gate closed the mode cannot be used for what
+      it exists for. The flag defaults to MetaDrive's own 4.0
+      (`scenario_env.py:84`), so nothing changes unless it is asked for.
     - The existing report - `arrive_dest`, route completion, vehicle z, light
-      transitions - is printed unchanged at the end of a manual drive, so the
-      same run that lets him feel the map also checks it.
-  - Verify after implementation:
-    1. `./scripts/drive.sh junction-1 -- --agent-policy manual` opens a window,
-       and WASD steers, accelerates and brakes the car.
+      transitions - is printed unchanged at the end of a manual drive.
+  - Verified (measured 2026-08-17 unless marked):
+    1. `./scripts/drive.sh junction-1 -- --render 3D --agent-policy manual`
+       builds the window on the RTX 4050, reports
+       `ego policy   manual`, and drives. **Whether WASD steers is Keith's
+       check** - it needs someone at the keyboard, and it is the only item here
+       that cannot be measured from a script.
     2. `--agent-policy replay` and `--agent-policy idm` print **byte-identical**
-       output to today on both extracts. That is the additive-change test, and
-       it is the whole reason this was allowed to touch a working file.
-    3. Pressing `b` into bird view stops the keyboard steering and pressing it
-       back restores it - MetaDrive's own behaviour
-       (`manual_control_policy.py:80-84`), documented rather than fixed.
-    4. Pressing `t` either hands over to MetaDrive's built-in expert or prints
-       its observation-mismatch message. **Which of the two happens on our data
-       is measured, not assumed** - the expert was trained on MetaDrive's own
-       observation, and ours may or may not match it.
-    5. `git diff --stat` shows `tools/drive.py` and nothing else, and
-       `sha256sum` over `workspaces/*/scenarionet/*` matches the pre-change
-       values on both extracts.
-    6. `uv run pytest` and `uv run ruff check` unchanged.
+       output to the committed version on both extracts, compared against
+       `git show HEAD:tools/drive.py` run through the same interpreter - four
+       runs, four identical. The `{:g}` on the lateral limit is there for this
+       reason: `--max-lateral-dist` makes the value a float, and `4.0` where it
+       used to say `4` would have broken it.
+    3. The budget really is lifted: under `manual` with the lateral gate opened
+       the loop was **still running after 75 s of rendered stepping**, against a
+       370-step recording that reaches its bound in about 37 s. Every bounded
+       policy prints its report; this one never did.
+    4. `--render none` and `--render offscreen` are both refused with exit 1 and
+       the reason named.
+    5. `--max-lateral-dist` reaches the config, checked where the effect is
+       visible: `--agent-policy idm --max-lateral-dist 30` on `junction-1` turns
+       `out_of_road at -5.44 m after 291 of 370 steps, completion 0.774` into
+       **370 of 370 steps and completion 0.891**, the run ending on the
+       recording's length instead of on the gate.
+    6. `uv run pytest` - 408 passed, 1 failed, the known
+       `test_no_route_on_the_real_map_turns_more_than_the_gate_allows`, which
+       `CLAUDE.md` already records as failing at **3 of 396**. Unchanged.
+       `uv run ruff check` passes.
+    7. `sha256sum` over `workspaces/*/scenarionet/*` unchanged on both extracts;
+       `git status` shows `tools/drive.py` and this document.
+  - Left for Keith, because they need someone at the keyboard:
+    - Pressing `b` into top-down view should stop the keyboard steering, and
+      **`q`** should restore it - MetaDrive's own behaviour
+      (`manual_control_policy.py:80-84`, `base_env.py:777-778`), documented
+      rather than fixed. `b` does not toggle back out; an earlier version of
+      this line said it did.
+    - Pressing `t` either hands over to MetaDrive's built-in expert or prints
+      its observation-mismatch message. **Which of the two happens on our data
+      is still unmeasured** - the expert was trained on MetaDrive's own
+      observation, and ours may or may not match it.
 
 - [ ] **Stage 7b - A model's numbers reaching the car**
   - [ ] `tools/agent_env.py` - the env builder.
@@ -257,8 +302,15 @@ recorded route - `max_lateral_dist`, `scenario_env.py:84`, MetaDrive's rule and
 not ours. Already **measured** and recorded in `CLAUDE.md`: MetaDrive's own IDM
 policy driving our ego reaches 4.26 m and is cut off. A model that has not
 learned to steer will cross 4 m within a second or two. This is written down so
-it is not chased as a fault in the map or the dataset, and the limit is exposed
-as an argument rather than quietly retuned.
+it is not chased as a fault in the map or the dataset.
+
+**7a exposed it rather than retuning it**: `drive.py --max-lateral-dist`,
+defaulting to MetaDrive's own 4.0, and reachable from 7b through `**overrides`
+as an ordinary config key. It had to exist for manual driving to mean anything -
+the gate is measured from the *recorded* route, so taking a different turn on
+purpose ends the episode - and the same measurement is what shows the gate is
+the only thing stopping the idm ego on `junction-1`: opened to 30 m, it drives
+to 0.891 completion instead of being cut off at 0.774.
 
 **A wrong action range fails silently, and not in the direction you would
 guess.** `action_check` is off by default (`base_env.py:69`), so nothing
