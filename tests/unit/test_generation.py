@@ -15,6 +15,13 @@ from osm_scenario.acquisition import acquire_osm
 from osm_scenario.config import ConverterConfig
 from osm_scenario.generation import (
     ALIGNMENT_MAX_TURN_DEG,
+    MAX_ROAD_SHIFT_M,
+    MIN_TRIMMED_LANE_M,
+    SEPARATION_PARALLEL_MAX_DEG,
+    SEPARATION_ROUNDS,
+    SEPARATION_SAMPLE_M,
+    SEPARATION_SEARCH_M,
+    SEPARATION_TARGET_M,
     GenerationError,
     TaperTarget,
     _aligned_blocks,
@@ -29,6 +36,7 @@ from osm_scenario.generation import (
     _is_decision_node,
     _lane_collapse_findings,
     _lane_offset,
+    _lateral_neighbours,
     _link_bypass_ends,
     _link_bypass_way,
     _links_by_node,
@@ -36,6 +44,8 @@ from osm_scenario.generation import (
     _merge_side,
     _merge_taper_plan,
     _movement_roles,
+    _road_components,
+    _separated_roads,
     _side_filtered_candidates,
     _signal_association,
     _speed_kph,
@@ -908,6 +918,89 @@ def test_untagged_roads_carrying_on_across_the_real_maps_run_straight_through() 
     assert seen, "none of the joins this test exists for were in any generated model"
 
 
+def test_no_carriageways_on_the_real_maps_are_laid_over_the_traffic_coming_the_other_way() -> None:
+    """The rule this pass exists for, re-derived from whatever the workspaces hold.
+
+    Keith reported mosque's median right-turn link `859429322` / `859429321` laid 3.03 m inside
+    Persiaran Perdana's south-west carriageway. The claim is general: no two carriageways
+    running opposite ways come closer than `SEPARATION_TARGET_M`, apart from the four things
+    that abut by design — lanes of one road, lanes of one way, lanes a connector joins, and
+    lanes cut back to `MIN_TRIMMED_LANE_M` inside a junction box.
+
+    The second assertion is the guard that says the fix stayed a rigid translation. A road that
+    is split and moved in halves kinks by the difference, and the sideways step at a direct
+    continuation is where that shows: the totals must not be worse than v25 left them.
+    """
+    # Measured on the v25 models, before this pass existed. It now reads 42.59 and 40.77.
+    continuity_ceiling = {"mosque": 47.63, "junction-1": 44.13}
+    seen = 0
+    for name, model in _generated_models():
+        lanes = {lane.identifier: lane for lane in model.lanes}
+        continuations = [
+            (lane.identifier, exit_id)
+            for lane in model.lanes
+            for exit_id in lane.exit_lanes
+            if exit_id in lanes
+        ]
+        roads = _road_components(
+            model.lanes,
+            model.connectors,
+            [("", source, target) for source, target in continuations],
+            max_turn_degrees=ALIGNMENT_MAX_TURN_DEG,
+        )
+        connected = {frozenset(pair) for pair in continuations}
+        connected |= {
+            frozenset((connector.from_lane_id, connector.to_lane_id))
+            for connector in model.connectors
+        }
+        clamped = {
+            lane.identifier
+            for lane in model.lanes
+            if abs(
+                LineString((point.x, point.y) for point in lane.centerline).length
+                - MIN_TRIMMED_LANE_M
+            )
+            < 0.05
+        }
+        for (first, second), pair in _lateral_neighbours(
+            model.lanes,
+            roads,
+            clamped,
+            connected,
+            side_sign=1.0,
+            search=SEPARATION_SEARCH_M,
+            parallel_max_degrees=SEPARATION_PARALLEL_MAX_DEG,
+            sample=SEPARATION_SAMPLE_M,
+        ).items():
+            if not pair.opposing or pair.kerbward:
+                continue
+            seen += 1
+            assert pair.clearance >= SEPARATION_TARGET_M - 1e-3, (
+                f"{name} lane {first} (way {lanes[first].source_way_ids[0]}) and {second} "
+                f"(way {lanes[second].source_way_ids[0]}) carry traffic in opposite directions "
+                f"with {pair.clearance:.3f} m between them"
+            )
+
+        def sideways(source: LaneFeature, target: LaneFeature) -> float:
+            end, before = target.centerline[0], source.centerline[-2]
+            tip = source.centerline[-1]
+            run = math.hypot(tip.x - before.x, tip.y - before.y)
+            if run <= 0.0:
+                return 0.0
+            unit = ((tip.x - before.x) / run, (tip.y - before.y) / run)
+            return abs(-unit[1] * (end.x - tip.x) + unit[0] * (end.y - tip.y))
+
+        ceiling = continuity_ceiling.get(name)
+        if ceiling is not None:
+            total = sum(sideways(lanes[a], lanes[b]) for a, b in continuations)
+            assert total <= ceiling, (
+                f"{name} roads step sideways by {total:.2f} m in total across "
+                f"{len(continuations)} direct continuations, worse than the {ceiling:.2f} m "
+                "v25 left"
+            )
+    assert seen, "no opposing carriageway pair was found in any generated model"
+
+
 def _straight_run(
     lane_count: int, *, way: str, node_from: str, node_to: str, start: float
 ) -> list[LaneFeature]:
@@ -1006,10 +1099,153 @@ def test_alignment_stands_aside_where_the_step_is_not_a_defect() -> None:
     # Lane pairs that disagree are a road genuinely widening, not a block in the wrong place:
     # mosque `777816410` into `777816409` pairs idx0 to idx0 and idx1 to idx2.
     widening = _straight_run(2, way="v", node_from="z", node_to="a", start=-40.0)
-    disagreeing = _run_alignment(
-        widening + wide, [("a", "v-0", "w-0"), ("a", "v-1", "w-2")]
-    )
+    disagreeing = _run_alignment(widening + wide, [("a", "v-0", "w-0"), ("a", "v-1", "w-2")])
     assert set(disagreeing.values()) == {0.0}
+
+
+def _carriageway(
+    lane_count: int,
+    *,
+    way: str,
+    node_from: str,
+    node_to: str,
+    centre: float,
+    heading_east: bool = True,
+) -> list[LaneFeature]:
+    """A block of `lane_count` lanes running due east or west, centred on `y = centre`.
+
+    Left-hand traffic, so kerbward is the left of travel: north for an eastbound block and
+    south for a westbound one. Index 0 is offside, so it is laid on the right of travel.
+    """
+    lanes = []
+    for index in range(lane_count):
+        across = (index + 0.5 - 0.5 * lane_count) * 3.5
+        y = centre + (across if heading_east else -across)
+        lanes.append(
+            LaneFeature(
+                identifier=f"{way}-{index}",
+                source_way_ids=[way],
+                source_edge=[node_from, node_to, "0"],
+                lane_index=index,
+                lane_count=lane_count,
+                direction="forward",
+                road_class="secondary",
+                width_m=3.5,
+                speed_limit_kph=50.0,
+                centerline=[
+                    Point2D(x=0.0 if heading_east else 120.0, y=y),
+                    Point2D(x=120.0 if heading_east else 0.0, y=y),
+                ],
+                polygon=[Point2D(x=0.0, y=0.0), Point2D(x=1.0, y=0.0), Point2D(x=0.0, y=0.0)],
+                boundaries=[],
+                turn_permissions=[],
+            )
+        )
+    return lanes
+
+
+def _run_separation(
+    lanes: list[LaneFeature],
+    *,
+    excluded: set[str] | None = None,
+    connected: set[frozenset[str]] | None = None,
+    roads: dict[str, tuple] | None = None,
+) -> dict[str, float]:
+    """`_separated_roads` over hand-built lanes; returns how far north each lane ended up."""
+    before = {lane.identifier: lane.centerline[0].y for lane in lanes}
+    _separated_roads(
+        lanes,
+        roads or {lane.identifier: (tuple(lane.source_edge), lane.direction) for lane in lanes},
+        excluded or set(),
+        connected or set(),
+        side_sign=1.0,
+        target=SEPARATION_TARGET_M,
+        max_shift=MAX_ROAD_SHIFT_M,
+        search=SEPARATION_SEARCH_M,
+        parallel_max_degrees=SEPARATION_PARALLEL_MAX_DEG,
+        sample=SEPARATION_SAMPLE_M,
+        rounds=SEPARATION_ROUNDS,
+    )
+    return {
+        lane.identifier: round(lane.centerline[0].y - before[lane.identifier], 3) for lane in lanes
+    }
+
+
+def test_two_carriageways_going_opposite_ways_are_parted_by_a_median() -> None:
+    """A one-lane link laid on top of the carriageway coming the other way.
+
+    The link runs east and the carriageway west, 1.0 m apart centre to centre, so 2.5 m of the
+    link is under the other road. Each moves kerbward — north for the eastbound one, south for
+    the westbound — and the fewer-lane road yields first, so the link takes the whole of it.
+    """
+    link = _carriageway(1, way="link", node_from="a", node_to="b", centre=0.0)
+    against = _carriageway(
+        2, way="main", node_from="c", node_to="d", centre=-2.75, heading_east=False
+    )
+
+    moved = _run_separation(link + against)
+    assert moved["link-0"] == pytest.approx(2.5 + SEPARATION_TARGET_M, abs=1e-2)
+    assert moved["main-0"] == moved["main-1"] == 0.0, "the wider road must not be the one to yield"
+
+
+def test_separation_leaves_alone_what_abuts_by_design() -> None:
+    """Each exclusion, on the shape that made it necessary."""
+    # The two directions of one two-way way meet *on* its line, so their blocks abut there by
+    # construction. Reading that as an overlap would demand a lane-width on every two-way road.
+    two_way = _carriageway(1, way="w", node_from="a", node_to="b", centre=1.75)
+    two_way += [
+        lane.model_copy(update={"identifier": "w-back", "direction": "backward"})
+        for lane in _carriageway(
+            1, way="w", node_from="a", node_to="b", centre=-1.75, heading_east=False
+        )
+    ]
+    assert set(_run_separation(two_way).values()) == {0.0}
+
+    # Two lanes a connector joins are meant to touch.
+    link = _carriageway(1, way="link", node_from="a", node_to="b", centre=0.0)
+    against = _carriageway(
+        1, way="main", node_from="c", node_to="d", centre=-1.0, heading_east=False
+    )
+    joined = _run_separation(link + against, connected={frozenset(("link-0", "main-0"))})
+    assert set(joined.values()) == {0.0}
+
+    # A lane cut back to `MIN_TRIMMED_LANE_M` is the interior of a junction, where traffic
+    # crosses on purpose.
+    stub = _run_separation(link + against, excluded={"link-0"})
+    assert set(stub.values()) == {0.0}
+
+    # And two lanes of one road are not laid out against each other at all.
+    one_road = _run_separation(
+        link + against, roads=dict.fromkeys(("link-0", "main-0"), ("shared", "forward"))
+    )
+    assert set(one_road.values()) == {0.0}
+
+
+def test_a_road_is_every_block_of_one_way_plus_what_carries_straight_on() -> None:
+    """The unit that moves has to be coarser than an alignment component.
+
+    Two edges of one OSM way must land in one road however they are joined, or a shift splits
+    the way in half and kinks it by the difference — the defect v24 and v25 exist to remove.
+    """
+    first = _carriageway(1, way="w", node_from="a", node_to="b", centre=0.0)
+    second = [
+        lane.model_copy(update={"identifier": "w-second"})
+        for lane in _carriageway(1, way="w", node_from="b", node_to="c", centre=0.0)
+    ]
+    onward = _carriageway(1, way="n", node_from="c", node_to="d", centre=0.0)
+    apart = _carriageway(1, way="far", node_from="e", node_to="f", centre=0.0)
+
+    roads = _road_components(
+        first + second + onward + apart,
+        [],
+        [("c", "w-0", "n-0")],
+        max_turn_degrees=ALIGNMENT_MAX_TURN_DEG,
+    )
+    assert roads["w-0"] == roads["n-0"], "a straight continuation carries the road on"
+    assert roads["far-0"] != roads["w-0"], "an unconnected way is its own road"
+    # Both edges of way `w` share an identifier even though nothing links them, because they
+    # are one way in one direction.
+    assert len({roads[lane.identifier] for lane in first + second}) == 1
 
 
 def test_alignment_will_not_follow_a_road_round_a_corner() -> None:

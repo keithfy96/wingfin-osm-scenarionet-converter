@@ -1044,6 +1044,61 @@ continuation is 0.213 m, median bend 4.92°). And the remaining steps are all at
 taper is correct. See
 `docs/mapping-algo-changes/2026-08-16-01:58:09-a-road-that-carries-on-re-centred-on-its-own-line.md`.
 
+### Two carriageways going opposite ways get a median, and roads shove each other over (v26)
+
+`_lane_offset` decides where a block sits across its way from **that way's own tags alone**, with no
+knowledge of what else is already in the corridor, and nothing downstream ever asks. v24 read
+`placement`, v25 read the road behind — both about one road against its own line. Neither can see
+the road on the other side of the median, so mosque's median right-turn link `859429322` /
+`859429321` was laid **3.03 m inside** Persiaran Perdana's SW carriageway. Keith: *"these lanes eat
+into the south-west bound lanes going in the opposite direction… they don't have to be touching."*
+35 opposing pairs overlapped on mosque and 19 on junction-1; all of them clear **1.00 m** now.
+
+`_separated_roads` runs between `_aligned_blocks` and `_merge_taper_plan` and moves a **whole road
+bodily kerbward** — centrelines only, so nothing bends. Kerbward is always the direction: an
+opposing carriageway is on a lane's offside, so both roads moving kerbward always opens the gap,
+every shift is ≥ 0, and an opposing pair with room needs no constraint at all. Demands (opposing,
+offside) must reach `SEPARATION_TARGET_M`; pushes (same direction, kerbward) bound the difference by
+`max(clearance, 0)` so a slip already landing on the lane it joins is only stopped from getting
+worse; squeezes (opposing, kerbside) bound the sum. A shortfall goes to the road with **fewer
+lanes**, the rule `_merge_taper_plan` and `_aligned_blocks` already apply.
+
+Six things not to re-derive, each a version that was built and measured first:
+
+- **The unit that moves is coarser than an `_aligned_blocks` component.** Those chain across
+  straight *single-feeder* joins, so a way splits wherever something merges into it partway along;
+  different shifts on the halves opened a **4.03 m step inside way `859429321`**, three inside
+  `756118317` and one inside `1016771782` — the v24/v25 defect returning. `_road_components` makes
+  every block of one way in one direction one road **unconditionally**, then chains continuations
+  and shallow `through` connectors on top. 39 roads on mosque, 32 on junction-1.
+- **A nearest point on the other lane's own end means they are not alongside each other.** Two lanes
+  running away from a shared node meet there, and the perpendicular part of a mostly-along distance
+  says nothing: junction-1's `776021086` and `1530245742` are **13.35 m apart** and read as 2.98 m
+  of overlap without the guard. `tiny.osm`'s ways 10 and 11 are the same shape, and the fixture test
+  is what caught it.
+- **One reading of the geometry is not enough** — solved once it left 16 overlaps on mosque and 3 on
+  junction-1 and made three pairs *worse* (`182502377` × `191861354`, clear → 2.51 m of overlap).
+  Roads meeting at an angle lose part of each shift to it, and moving a road changes *where* two
+  roads come closest, so it re-reads and re-solves up to `SEPARATION_ROUNDS`.
+- **A shift may be negative, or a road drifts.** Add-only rounds left the link **4.68 m** clear of a
+  carriageway it was asked to clear by 1.00 and squeezed the other side by 0.98 m. Each round now
+  has a floor (how far the road has already moved) as well as a ceiling, and *every* opposing pair
+  carries a demand — negative where there is slack — so the layout knows what may be given back.
+- **Each round lays every road out from where it started.** `offset_curve` is not its own inverse on
+  a curved line.
+- **Four kinds of pair abut by design and are excluded**: same road; **same OSM way**, because a
+  two-way way puts its two directions either side of its line and they meet *on* it; joined by a
+  connector or continuation; and cut back to `MIN_TRIMMED_LANE_M`, the interior of a junction where
+  traffic crosses. The last is the clamp, **not** a length threshold — the distinction
+  `conversion._stub_lanes` draws — and alone it takes mosque's demand set from 124 pairs to 104.
+
+Blast radius **189 of 405 mosque lanes over 12 roads and 132 of 285 junction-1 lanes over 7**, worst
+shift 4.36 m and 2.72 m, reported as `separated_lanes` / `separated_roads`. Perdana's SW carriageway
+does not move at all on mosque — the fewer-lanes rule put it on the link and the NE side. Ids,
+counts and connector statuses are unchanged, and **continuity improved**: total sideways step at a
+direct continuation 47.63 → 42.59 m on mosque and 44.13 → 40.77 m on junction-1. See
+`docs/mapping-algo-changes/2026-08-16-14:32:44-a-carriageway-was-laid-over-the-traffic-coming-the-other-way.md`.
+
 ### `ego_route` still turns over the gate on two 2 m clamped lanes
 
 `test_no_route_on_the_real_map_turns_more_than_the_gate_allows` fails: **3 of 396 swept routes

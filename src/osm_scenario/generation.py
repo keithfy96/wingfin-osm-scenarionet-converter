@@ -64,7 +64,7 @@ from osm_scenario.topology import (
     way_adjacency,
 )
 
-GENERATOR_VERSION = "direct-osm-stage2-v25"
+GENERATOR_VERSION = "direct-osm-stage2-v26"
 LANE_MODEL_SCHEMA_VERSION = 3
 
 # How much clear road to leave beyond the crossing carriageway when a lane is cut back at a
@@ -99,6 +99,31 @@ BEND_FILLET_MAX_SETBACK_M = 8.0
 # question is *which side* a road joins from, which has an answer at any angle. Here it is "is
 # this a turn?", and the two must stay free to move apart.
 ALIGNMENT_MAX_TURN_DEG = 10.0
+
+# Two carriageways carrying traffic in opposite directions must keep this much clear road
+# between them. `_lane_offset` decides where a block sits from that way's own tags alone, with
+# no knowledge of what else is already in the corridor, so a median link can be laid straight on
+# top of the carriageway coming the other way - 3.03 m of one lane inside another on mosque.
+# Keith's figure; a median is the normal case on both extracts, where the median gap between two
+# facing lanes measures 6.33 m and 6.43 m.
+SEPARATION_TARGET_M = 1.0
+# How far apart two lanes can be and still be laid out against each other, and how near-parallel
+# they have to be for "alongside" to mean anything. Past 25 degrees two lanes are crossing rather
+# than running together, and the perpendicular offset stops describing the gap between them.
+SEPARATION_SEARCH_M = 14.0
+SEPARATION_PARALLEL_MAX_DEG = 25.0
+# Step along a centreline when looking for the closest approach to another lane. Fine enough to
+# find the pinch on a 2 m junction stub, coarse enough that the sweep stays quadratic in lanes
+# rather than in vertices.
+SEPARATION_SAMPLE_M = 2.0
+# A segment shorter than this is numerical dust rather than a piece of road, and a bearing
+# taken over it is noise. `ego_route.COINCIDENT_M` is the same number for the same reason;
+# it is written again here rather than imported, because `ego_route` reads the lane model this
+# module writes and the dependency must not run the other way.
+SEPARATION_COINCIDENT_M = 1e-3
+# Backstop. A road needing more than this is not being nudged out of an overlap, it is being
+# thrown across the map, so the overlap is reported as a finding instead.
+MAX_ROAD_SHIFT_M = 5.0
 
 # One outgoing carriageway at a node: its OSM way and the directed edge it leaves on.
 GroupKey = tuple[str, tuple[str, ...]]
@@ -629,6 +654,502 @@ def _aligned_blocks(
                 lane.centerline = _points(shifted)
                 moved.add(lane.identifier)
     return moved
+
+
+def _road_components(
+    lanes: Sequence[LaneFeature],
+    connectors: Sequence[ConnectorFeature],
+    continuation_links: Sequence[tuple[str, str, str]],
+    *,
+    max_turn_degrees: float,
+) -> dict[str, BlockKey]:
+    """Which road each lane belongs to — the unit that may be moved bodily sideways.
+
+    A road is coarser than `_aligned_blocks`' component on purpose, and the finer unit was
+    tried and is wrong. Those components chain blocks across straight *single-feeder* joins,
+    so a way is cut in two wherever anything merges into it partway along; give the two halves
+    different shifts and the way kinks by the difference. Measured, that opened a 4.03 m step
+    inside way 859429321, three more inside 756118317 and one inside 1016771782 — the defect
+    v24 and v25 exist to remove.
+
+    So every block of one OSM way in one direction is one road unconditionally, and blocks are
+    then chained across direct continuations and shallow `through` connectors on top of that.
+    A merge is *not* a chain: the joining way has its own line and closing the gap is the
+    taper's job.
+    """
+    parent: dict[BlockKey, BlockKey] = {}
+
+    def find(item: BlockKey) -> BlockKey:
+        parent.setdefault(item, item)
+        while parent[item] != item:
+            parent[item] = parent[parent[item]]
+            item = parent[item]
+        return item
+
+    def union(left: BlockKey, right: BlockKey) -> None:
+        # The smaller root always wins, so the representative of a road does not depend on the
+        # order the joins happened to be visited in.
+        roots = sorted((find(left), find(right)))
+        if roots[0] != roots[1]:
+            parent[roots[1]] = roots[0]
+
+    lane_lookup = {lane.identifier: lane for lane in lanes}
+    carriageways: dict[tuple[str, str], list[BlockKey]] = {}
+    for lane in lanes:
+        block = _lane_block(lane)
+        find(block)
+        carriageways.setdefault((lane.source_way_ids[0], lane.direction), []).append(block)
+    for blocks in carriageways.values():
+        for other in blocks[1:]:
+            union(blocks[0], other)
+    for connector in connectors:
+        if connector.status == "forbidden":
+            continue
+        if connector.movement != "through":
+            continue
+        if abs(connector.turn_angle_degrees) > max_turn_degrees:
+            continue
+        union(
+            _lane_block(lane_lookup[connector.from_lane_id]),
+            _lane_block(lane_lookup[connector.to_lane_id]),
+        )
+    for _node_id, source_id, target_id in continuation_links:
+        source, target = lane_lookup[source_id], lane_lookup[target_id]
+        if _join_turn_degrees(source, target) <= max_turn_degrees:
+            union(_lane_block(source), _lane_block(target))
+    return {lane.identifier: find(_lane_block(lane)) for lane in lanes}
+
+
+class LateralPair(NamedTuple):
+    """How two lanes lie alongside each other at their closest approach.
+
+    `clearance` is the clear road between their drawn edges, so it goes negative when one is
+    laid over the other. `kerbward` says the second lane is on the first one's kerb side rather
+    than its offside, which is what decides whether moving both roads kerbward opens the gap
+    between them or closes it.
+    """
+
+    clearance: float
+    kerbward: bool
+    opposing: bool
+
+
+def _lane_samples(lane: LaneFeature, step: float) -> list[tuple[float, float, float, float]]:
+    """Points along a centreline with the direction of travel at each, every `step` metres."""
+    points = [(point.x, point.y) for point in lane.centerline]
+    walked: list[tuple[float, float, float, float]] = []
+    for start, end in zip(points, points[1:], strict=False):
+        span = math.hypot(end[0] - start[0], end[1] - start[1])
+        if span <= SEPARATION_COINCIDENT_M:
+            continue
+        unit_x, unit_y = (end[0] - start[0]) / span, (end[1] - start[1]) / span
+        along = 0.0
+        while along < span:
+            walked.append((start[0] + unit_x * along, start[1] + unit_y * along, unit_x, unit_y))
+            along += step
+    return walked
+
+
+def _closest_on(
+    points: Sequence[tuple[float, float]], x: float, y: float
+) -> tuple[float, float, float, float, float] | None:
+    """Nearest point on a polyline to (x, y), with the polyline's direction there.
+
+    `None` when the nearest point is one of the polyline's own ends. Two lanes that meet
+    end-on — a two-way road handing over to the one-way carriageway that carries on from it —
+    have their closest approach at the shared node, and the perpendicular offset there is the
+    width of the road rather than an overlap: they run away from each other, not alongside.
+    Without this, the fixture's ways 10 and 11 read as 1.75 m of overlap and were parted.
+    """
+    best: tuple[float, float, float, float, float] | None = None
+    for start, end in zip(points, points[1:], strict=False):
+        run_x, run_y = end[0] - start[0], end[1] - start[1]
+        span_squared = run_x * run_x + run_y * run_y
+        if span_squared <= SEPARATION_COINCIDENT_M * SEPARATION_COINCIDENT_M:
+            continue
+        along = ((x - start[0]) * run_x + (y - start[1]) * run_y) / span_squared
+        along = max(0.0, min(1.0, along))
+        near_x, near_y = start[0] + run_x * along, start[1] + run_y * along
+        gap = math.hypot(x - near_x, y - near_y)
+        if best is None or gap < best[0]:
+            span = math.sqrt(span_squared)
+            best = (gap, near_x, near_y, run_x / span, run_y / span)
+    if best is None:
+        return None
+    for terminal in (points[0], points[-1]):
+        if math.hypot(best[1] - terminal[0], best[2] - terminal[1]) <= SEPARATION_COINCIDENT_M:
+            return None
+    return best
+
+
+def _lateral_neighbours(
+    lanes: Sequence[LaneFeature],
+    roads: Mapping[str, BlockKey],
+    excluded: AbstractSet[str],
+    connected: AbstractSet[frozenset[str]],
+    *,
+    side_sign: float,
+    search: float,
+    parallel_max_degrees: float,
+    sample: float,
+) -> dict[tuple[str, str], LateralPair]:
+    """Every pair of lanes that runs alongside a lane of another road.
+
+    Four kinds of pair are dropped, and each one abuts by design rather than by mistake:
+
+    - lanes of the same road, which is what the road unit is for;
+    - lanes sharing an OSM way — a two-way way puts its two directions wholly on either side of
+      its line, so they meet *on* it, and reading that as an overlap would demand a lane-width
+      of separation on every two-way road there is;
+    - lanes a connector or a continuation joins, because two lanes that meet are meant to touch;
+    - lanes cut back to `MIN_TRIMMED_LANE_M`, which are the interior of a junction box, where
+      traffic crosses. The test is the clamp rather than a length, the same distinction
+      `conversion._stub_lanes` draws.
+    """
+    cos_limit = math.cos(math.radians(parallel_max_degrees))
+    entries = []
+    for lane in lanes:
+        if lane.identifier in excluded or len(lane.centerline) < 2:
+            continue
+        points = [(point.x, point.y) for point in lane.centerline]
+        xs = [point[0] for point in points]
+        ys = [point[1] for point in points]
+        entries.append(
+            (
+                lane,
+                points,
+                (min(xs), min(ys), max(xs), max(ys)),
+                _lane_samples(lane, sample),
+                lane.width_m / 2,
+            )
+        )
+    entries.sort(key=lambda item: item[0].identifier)
+
+    def closest_approach(
+        walked: Sequence[tuple[float, float, float, float]],
+        points: Sequence[tuple[float, float]],
+        half: float,
+    ) -> tuple[float, float, float] | None:
+        """(clearance, lateral sign, direction dot) at the tightest sample, or None."""
+        found: tuple[float, float, float] | None = None
+        for x, y, unit_x, unit_y in walked:
+            near = _closest_on(points, x, y)
+            if near is None or near[0] > search:
+                continue
+            gap, near_x, near_y, run_x, run_y = near
+            dot = unit_x * run_x + unit_y * run_y
+            if abs(dot) < cos_limit:
+                continue
+            lateral = unit_x * (near_y - y) - unit_y * (near_x - x)
+            clearance = abs(lateral) - half
+            if found is None or clearance < found[0]:
+                found = (clearance, 1.0 if lateral > 0 else -1.0, 1.0 if dot > 0 else -1.0)
+        return found
+
+    pairs: dict[tuple[str, str], LateralPair] = {}
+    for index, (lane, points, bounds, walked, half) in enumerate(entries):
+        for other, other_points, other_bounds, other_walked, other_half in entries[index + 1 :]:
+            if bounds[0] - search > other_bounds[2] or other_bounds[0] - search > bounds[2]:
+                continue
+            if bounds[1] - search > other_bounds[3] or other_bounds[1] - search > bounds[3]:
+                continue
+            if roads[lane.identifier] == roads[other.identifier]:
+                continue
+            if set(lane.source_way_ids) & set(other.source_way_ids):
+                continue
+            if frozenset((lane.identifier, other.identifier)) in connected:
+                continue
+            span = half + other_half
+            forward = closest_approach(walked, other_points, span)
+            # Swept from both sides, because one lane may be far shorter than the other and a
+            # sweep of the long one can step straight over the pinch.
+            backward = closest_approach(other_walked, points, span)
+            if backward is not None:
+                # The reading is in the other lane's frame. Running the same way its left is
+                # this lane's left, so swapping the roles alone flips the sign; running the
+                # other way its left is this lane's right, and the two flips cancel.
+                backward = (backward[0], -backward[1] * backward[2], backward[2])
+            best = min(
+                (item for item in (forward, backward) if item is not None),
+                key=lambda item: item[0],
+                default=None,
+            )
+            if best is None:
+                continue
+            pairs[(lane.identifier, other.identifier)] = LateralPair(
+                clearance=best[0],
+                kerbward=best[1] * side_sign > 0,
+                opposing=best[2] < 0,
+            )
+    return pairs
+
+
+# How many times the layout below sweeps its constraints before giving up. Both extracts settle
+# in far fewer; the cap is only there so a pathological corridor cannot spin.
+SEPARATION_MAX_PASSES = 4000
+# Below this a shift is arithmetic dust rather than a real move.
+SEPARATION_TOLERANCE_M = 1e-6
+# And below this a round has stopped saying anything new: a millimetre is far finer than any
+# road marking, so there is nothing left to chase.
+SEPARATION_SETTLED_M = 1e-3
+# How many times the geometry is re-read and re-solved. One reading treats every pair as two
+# parallel lines, which it is not: the angle between two roads eats part of each shift, and
+# moving a road changes where two roads come closest. Measured, one round leaves 16 overlaps on
+# mosque and 3 on junction-1 and makes three pairs worse.
+SEPARATION_ROUNDS = 8
+
+
+def _separation_layout(
+    pairs: Mapping[tuple[str, str], LateralPair],
+    roads: Mapping[str, BlockKey],
+    size: Mapping[BlockKey, int],
+    *,
+    target: float,
+    budget: Mapping[BlockKey, tuple[float, float]],
+) -> dict[BlockKey, float]:
+    """How far each road has to move kerbward, from one reading of the geometry.
+
+    Three kinds of constraint, and the sign of each follows from where the other lane is:
+
+    - **demand** — opposing, the other lane on the offside, closer than `target`. Both roads
+      moving kerbward open the gap, so `s(a) + s(b)` must reach the shortfall.
+    - **push** — same direction, the other lane kerbward. Moving kerbward closes on it, so
+      `s(a) - s(b)` is bounded by the clear road there is, and a road with none in front of it
+      pushes its neighbour along rather than stopping.
+    - **squeeze** — opposing, the other lane on the *kerb* side. Both shifts close, so the sum
+      is bounded. Rare: none on mosque, 52 on junction-1.
+
+    An allowance is `max(clearance, 0)`. A same-direction pair that already overlaps is a slip
+    landing on the lane it joins; it has to be stopped from getting worse, not made to separate.
+    An opposing pair already clear of `target` needs no constraint at all — kerbward only ever
+    helps it — and that is what keeps the system solvable.
+
+    The shortfall of a demand goes to the road with **fewer lanes**, the rule
+    `_merge_taper_plan` and `_aligned_blocks` already apply so the through carriageway is never
+    the one that gives way. Splitting it evenly also converges, but moves half again as many
+    lanes and moves the main carriageway instead of the link.
+
+    **A shift may be negative, and that is what stops a road drifting.** `budget` gives each
+    road a floor and a ceiling, and the floor is how far it has already been moved: on a later
+    reading a road that overshot can be handed back, as far as its own line and no further. An
+    opposing pair with room to spare therefore carries a demand too — a negative one — so it
+    says how much may be given back rather than nothing at all. Without it a road only ever
+    gained, and mosque's median link ended 4.68 m clear of a carriageway it was asked to clear
+    by 1.00, squeezing the one on its other side by 0.98 m.
+    """
+    demands: list[tuple[BlockKey, BlockKey, float, str, str]] = []
+    pushes: list[tuple[BlockKey, BlockKey, float]] = []
+    squeezes: list[tuple[BlockKey, BlockKey, float]] = []
+    for (first, second), pair in sorted(pairs.items()):
+        road_a, road_b = roads[first], roads[second]
+        if road_a == road_b:
+            continue
+        allowance = max(pair.clearance, 0.0)
+        if pair.opposing:
+            if pair.kerbward:
+                squeezes.append((road_a, road_b, allowance))
+            else:
+                demands.append((road_a, road_b, target - pair.clearance, first, second))
+        elif pair.kerbward:
+            pushes.append((road_a, road_b, allowance))
+        else:
+            pushes.append((road_b, road_a, allowance))
+
+    shift: dict[BlockKey, float] = dict.fromkeys(size, 0.0)
+
+    def raise_to(road: BlockKey, value: float) -> bool:
+        capped = min(value, budget[road][1])
+        if capped > shift[road] + SEPARATION_TOLERANCE_M:
+            shift[road] = capped
+            return True
+        return False
+
+    for _pass in range(SEPARATION_MAX_PASSES):
+        moved = False
+        for road_a, road_b, need, _first, _second in demands:
+            short = need - (shift[road_a] + shift[road_b])
+            if short <= SEPARATION_TOLERANCE_M:
+                continue
+            yields = road_a if (size[road_a], road_a) <= (size[road_b], road_b) else road_b
+            moved |= raise_to(yields, shift[yields] + short)
+        for behind, ahead, allowance in pushes:
+            if shift[behind] - shift[ahead] > allowance + SEPARATION_TOLERANCE_M:
+                moved |= raise_to(ahead, shift[behind] - allowance)
+        for road_a, road_b, allowance in squeezes:
+            over = shift[road_a] + shift[road_b] - allowance
+            if over > SEPARATION_TOLERANCE_M:
+                shift[road_a] = max(0.0, shift[road_a] - over / 2)
+                shift[road_b] = max(0.0, shift[road_b] - over / 2)
+                moved = True
+        if not moved:
+            break
+
+    # Feasible is not the same as small. Widest road first, lower each one to the least its own
+    # demands and pushes still allow, until nothing gives.
+    for _pass in range(SEPARATION_MAX_PASSES):
+        moved = False
+        for road in sorted(size, key=lambda item: (-size[item], item)):
+            lowest = budget[road][0]
+            for road_a, road_b, need, _first, _second in demands:
+                if road_a == road:
+                    lowest = max(lowest, need - shift[road_b])
+                elif road_b == road:
+                    lowest = max(lowest, need - shift[road_a])
+            for behind, ahead, allowance in pushes:
+                if ahead == road:
+                    lowest = max(lowest, shift[behind] - allowance)
+            lowest = min(lowest, budget[road][1])
+            if lowest < shift[road] - SEPARATION_TOLERANCE_M:
+                shift[road] = lowest
+                moved = True
+        if not moved:
+            break
+    return shift
+
+
+def _separated_roads(
+    lanes: Sequence[LaneFeature],
+    roads: Mapping[str, BlockKey],
+    excluded: AbstractSet[str],
+    connected: AbstractSet[frozenset[str]],
+    *,
+    side_sign: float,
+    target: float,
+    max_shift: float,
+    search: float,
+    parallel_max_degrees: float,
+    sample: float,
+    rounds: int,
+) -> tuple[set[str], list[tuple[str, str, float]]]:
+    """Open a median between carriageways running in opposite directions.
+
+    `_lane_offset` places a block from its own way's tags, knowing nothing about what else is
+    already in the corridor, so a median link is laid straight over the carriageway coming the
+    other way. The correction is a lateral translation of a whole road: nothing here bends a
+    lane, so nothing that was straight stops being straight.
+
+    **Kerbward is always the direction.** An opposing carriageway sits on a lane's offside, so
+    moving each of the two roads kerbward in its own frame opens the gap between them, and every
+    shift is non-negative. `_separation_layout` works out how far, from one reading of the
+    geometry.
+
+    **One reading is not enough, and this was measured rather than assumed.** A layout solved
+    once left 16 overlaps on mosque and 3 on junction-1, and made three pairs *worse* — mosque
+    way 182502377 against slip 191861354 went from clear to 2.51 m of overlap. Two reasons, both
+    from treating a pair as if it were two parallel lines: roads meeting at up to
+    `SEPARATION_PARALLEL_MAX_DEG` lose part of each shift to the angle between them, and moving a
+    road changes *where* two roads come closest, so the station the constraint was read at is no
+    longer the tightest one. So the geometry is re-read and re-solved each round, and the shift a
+    road has already spent comes off its allowance. `unresolved` is measured on the geometry as
+    it finally stands, never on the reading that produced it.
+    """
+    members: dict[BlockKey, list[LaneFeature]] = {}
+    for lane in lanes:
+        members.setdefault(roads[lane.identifier], []).append(lane)
+    size = {road: len(items) for road, items in members.items()}
+    spent: dict[BlockKey, float] = dict.fromkeys(members, 0.0)
+    # Every round lays each road out from where it started rather than from where the last round
+    # left it. `offset_curve` is not its own inverse on a curved line, so moving a road out and
+    # part of the way back again would leave it a slightly different shape each time.
+    original = {
+        lane.identifier: LineString((point.x, point.y) for point in lane.centerline)
+        for lane in lanes
+    }
+
+    def read() -> dict[tuple[str, str], LateralPair]:
+        return _lateral_neighbours(
+            lanes,
+            roads,
+            excluded,
+            connected,
+            side_sign=side_sign,
+            search=search,
+            parallel_max_degrees=parallel_max_degrees,
+            sample=sample,
+        )
+
+    pairs = read()
+    for _round in range(rounds):
+        shift = _separation_layout(
+            pairs,
+            roads,
+            size,
+            target=target,
+            budget={road: (-spent[road], max_shift - spent[road]) for road in members},
+        )
+        if max((abs(value) for value in shift.values()), default=0.0) <= SEPARATION_SETTLED_M:
+            break
+        for road in sorted(members):
+            if abs(shift[road]) <= SEPARATION_TOLERANCE_M:
+                continue
+            spent[road] = min(max(spent[road] + shift[road], 0.0), max_shift)
+            for lane in members[road]:
+                line = original[lane.identifier]
+                lane.centerline = _points(
+                    line
+                    if spent[road] <= SEPARATION_TOLERANCE_M
+                    else _as_line(
+                        line.offset_curve(spent[road] * side_sign, join_style="mitre"), line
+                    )
+                )
+        pairs = read()
+
+    moved_lanes = {
+        lane.identifier
+        for road, items in members.items()
+        if spent[road] > SEPARATION_TOLERANCE_M
+        for lane in items
+    }
+    unresolved = [
+        (first, second, pair.clearance)
+        for (first, second), pair in sorted(pairs.items())
+        if pair.opposing
+        and not pair.kerbward
+        and pair.clearance < target - 1e-3
+        and roads[first] != roads[second]
+    ]
+    return moved_lanes, unresolved
+
+
+def _opposing_overlap_findings(
+    unresolved: Sequence[tuple[str, str, float]],
+    lane_lookup: Mapping[str, LaneFeature],
+) -> list[ReviewFinding]:
+    """Opposing carriageways the layout could not part, one finding per pair of ways.
+
+    A warning rather than a blocker: only blockers gate export, and there is nothing to decide —
+    it says the corridor as drawn cannot hold both roads plus a median, which is a fact about
+    the OSM rather than a question for the reviewer.
+    """
+    worst: dict[tuple[str, str], tuple[float, str, str]] = {}
+    for first, second, residual in unresolved:
+        ways = tuple(
+            sorted(
+                (lane_lookup[first].source_way_ids[0], lane_lookup[second].source_way_ids[0])
+            )
+        )
+        held = worst.get(ways)
+        if held is None or residual < held[0]:
+            worst[ways] = (residual, first, second)
+    findings: list[ReviewFinding] = []
+    for ways, (residual, first, second) in sorted(worst.items()):
+        findings.append(
+            _finding(
+                rule="opposing_carriageways_overlap",
+                severity="warning",
+                source_type="way",
+                source_ids=list(ways),
+                affected_feature_ids=sorted((first, second)),
+                proposed_value={"clearance_m": round(residual, 3)},
+                confidence="medium",
+                reason=(
+                    f"ways {ways[0]} and {ways[1]} carry traffic in opposite directions and "
+                    f"cannot be parted to {SEPARATION_TARGET_M:.2f} m without moving a road "
+                    f"more than {MAX_ROAD_SHIFT_M:.2f} m; {residual:.2f} m of clearance remains"
+                ),
+            )
+        )
+    return findings
 
 
 def _join_line(lane: LaneFeature, *, at_end: bool) -> JoinLine | None:
@@ -2343,6 +2864,11 @@ def build_lane_model(
     lane_offsets: dict[str, float] = {}
     placement_pinned: set[str] = set()
     centred_lanes: set[str] = set()
+    # Lanes on an edge too short to carry both its junction setbacks, so they reach into the
+    # junction box rather than stopping at its edge. `_lateral_neighbours` leaves them out: they
+    # are the interior of a junction, where traffic crosses on purpose. `trim_clamped` below
+    # counts the same edges, but by edge key rather than by lane.
+    clamped_lanes: set[str] = set()
     # Lane count, width and speed are properties of a *way*, and a decision on one
     # writes a tag onto that way. The loop below runs once per graph edge, so asking
     # per edge put the same question to the reviewer once for every segment a road
@@ -2453,6 +2979,8 @@ def build_lane_model(
                 centred_lanes.add(lane_id)
             lanes_by_start.setdefault(str(u), []).append(lane_id)
             lanes_by_end.setdefault(str(v), []).append(lane_id)
+        if clamped:
+            clamped_lanes.update(created)
         for lane_index, _lane_id in enumerate(created):
             if side_sign > 0:
                 lane_lookup_left = created[lane_index + 1] if lane_index + 1 < count else None
@@ -3073,6 +3601,33 @@ def build_lane_model(
         centred_lanes,
         max_turn_degrees=ALIGNMENT_MAX_TURN_DEG,
     )
+    # Then the corridor: two carriageways running opposite ways are parted, each road moving
+    # bodily kerbward. It runs after the alignment, which has just settled where a road's blocks
+    # sit relative to each other, and before the taper, so the taper closes whatever step this
+    # opens where a road merges into one that moved.
+    roads = _road_components(
+        lanes, connectors, continuation_links, max_turn_degrees=ALIGNMENT_MAX_TURN_DEG
+    )
+    connected_lanes = {
+        frozenset((connector.from_lane_id, connector.to_lane_id)) for connector in connectors
+    }
+    connected_lanes |= {
+        frozenset((source_id, target_id)) for _node_id, source_id, target_id in continuation_links
+    }
+    separated, unresolved = _separated_roads(
+        lanes,
+        roads,
+        clamped_lanes,
+        connected_lanes,
+        side_sign=1.0 if driving_side == "left" else -1.0,
+        target=SEPARATION_TARGET_M,
+        max_shift=MAX_ROAD_SHIFT_M,
+        search=SEPARATION_SEARCH_M,
+        parallel_max_degrees=SEPARATION_PARALLEL_MAX_DEG,
+        sample=SEPARATION_SAMPLE_M,
+        rounds=SEPARATION_ROUNDS,
+    )
+    findings.extend(_opposing_overlap_findings(unresolved, lane_lookup))
     taper_plan = _merge_taper_plan(
         connectors, lane_lookup, min_gap=config.lane_geometry.merge_taper_min_gap_m
     )
@@ -3084,7 +3639,7 @@ def build_lane_model(
         taper_length=config.lane_geometry.merge_taper_length_m,
         min_gap=config.lane_geometry.merge_taper_min_gap_m,
     )
-    redrawn |= aligned
+    redrawn |= aligned | separated
     for (lane_id, moved_end), destination in sorted(taper_plan.items()):
         lane = lane_lookup[lane_id]
         tapered = _tapered_line(
@@ -3346,6 +3901,13 @@ def build_lane_model(
         # apart from `merge_tapers` because they are opposite answers to the same-looking
         # gap: one road continuing, against two roads meeting.
         "aligned_lanes": len(aligned),
+        # Lanes moved bodily sideways to keep a median between carriageways running in opposite
+        # directions, and how many whole roads that was. Counted apart from `aligned_lanes`
+        # because the two answer different questions about the same lateral move: one road's
+        # position against the road behind it, against one road's position against the road
+        # beside it.
+        "separated_lanes": len(separated),
+        "separated_roads": len({roads[lane_id] for lane_id in separated}),
         "signals": len(signals),
         "stop_lines": len(stop_lines),
         "restrictions": len(restrictions),
