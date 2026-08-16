@@ -535,4 +535,8 @@ are not: two-point lane polylines load (MetaDrive skips a lane only at
   topology may mark a restriction already satisfied; incomplete or
   contradictory evidence remains review-required.
 - V1 produces a valid static map only. Vehicles, actors, traffic-light cycles,
-  and scenario timelines are intentionally deferred.
+  and scenario timelines are intentionally deferred. Traffic-light cycles arrived
+  with `convert --signals`; the rest is picked up, as plans and not yet as code,
+  in `stage-7-an-agent-at-the-wheel.md` (the ego driven by a keyboard and then by
+  a model) and `stage-8-live-traffic.md` (other vehicles on the road). Both sit
+  entirely downstream of a finished Stage 6 dataset.
