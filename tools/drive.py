@@ -432,6 +432,16 @@ def main() -> int:
         "within a second, and the same gate cuts off the idm ego at a measured 4.26 m.",
     )
     parser.add_argument(
+        "--record",
+        default=None,
+        help="Write (observation, executed action) pairs to this .npz, for imitation learning. "
+        "It reads `vehicle.current_action`, so it captures what the car actually did rather "
+        "than what was asked of it - which is why a keyboard drive under --agent-policy manual "
+        "produces a file the same shape as one recorded through env.step (see "
+        "`examples/drive_with_a_policy.py`). Under --agent-policy replay every recorded action "
+        "is [0, 0]: that policy sets the car's position directly and never acts.",
+    )
+    parser.add_argument(
         "--lights",
         default="tape",
         choices=["tape", "live"],
@@ -622,6 +632,15 @@ def main() -> int:
         }
     )
 
+    # Built here rather than imported at the top so that a run without --record does not depend
+    # on `agent_env` at all, and so the only cost of the flag existing is this branch.
+    recorder = None
+    if arguments.record:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from agent_env import ActionRecorder
+
+        recorder = ActionRecorder()
+
     indices = (
         [arguments.scenario_index] if arguments.scenario_index is not None else list(range(count))
     )
@@ -629,7 +648,7 @@ def main() -> int:
     failures = 0
     try:
         for index in indices:
-            env.reset(seed=index)
+            observation, _ = env.reset(seed=index)
 
             if not reported_gpu:
                 reported_gpu = True
@@ -655,6 +674,8 @@ def main() -> int:
             scenario = env.engine.data_manager.current_scenario
             scenario_id = scenario["id"]
             lights = getattr(env.engine, "light_manager", None)
+            if recorder is not None:
+                recorder.start_episode(scenario_id)
 
             # The recording's length is the right bound for a replayed car - there is nothing
             # after the last recorded position - and the wrong one for any policy that drives
@@ -704,7 +725,13 @@ def main() -> int:
             info = {}
             steps = 0
             while budget is None or steps < budget:
-                _, _, terminated, truncated, info = env.step([0, 0])
+                previous_observation = observation
+                observation, _, terminated, truncated, info = env.step([0, 0])
+                if recorder is not None:
+                    # The observation that *produced* the action, paired with the action the
+                    # car executed for it - so the one from before the step, not the one the
+                    # step returned. An imitation learner is fitting the first to the second.
+                    recorder.record(previous_observation, env.agent)
                 heights.append(float(env.agent.origin.getZ()))
                 speeds.append(float(env.agent.speed))
                 if lights is not None:
@@ -860,6 +887,29 @@ def main() -> int:
                 )
     finally:
         env.close()
+
+    if recorder is not None:
+        # Said rather than left to be discovered: a replayed car's policy returns None every
+        # step, so nothing is ever written to `current_action` and the file comes out as a
+        # column of zeros - 352 of them on `junction-1`, measured. It is still saved, because a
+        # recording of the observations is a real thing to want; it is simply not a drive.
+        empty = recorder.all_zero()
+        written = recorder.save(arguments.record)
+        if written is None:
+            print("recorded     nothing: the drive took no steps")
+        else:
+            observations, actions = written
+            print(
+                f"recorded     {observations[0]} steps, observations {observations}, "
+                f"actions {actions} -> {arguments.record}"
+                + (
+                    "\n             every action is [0, 0]: --agent-policy replay sets the "
+                    "car's position directly and never acts, so there is nothing here to "
+                    "imitate. Use manual or idm."
+                    if empty
+                    else ""
+                )
+            )
 
     print("result       {}".format("FAILED" if failures else "OK"))
     return 1 if failures else 0

@@ -333,6 +333,46 @@ above is measured from it — so `convert --routes` is as necessary here as for 
 replay. Not arriving does not set the exit status in this mode: the driver is the
 variable, so a kerb or a wrong turn is printed but does not make the run `FAILED`.
 
+### Drive it with your own code
+
+The ego is driven by `env.step([steering, throttle_brake])` — two floats in [-1, 1] — and
+that is the whole of the connection. It is the same socket the keyboard uses, because
+MetaDrive's manual-control policy is a subclass of the one that reads the action argument.
+
+`tools/agent_env.py` builds an environment with the terrain settings an OSM-sized map needs,
+and `examples/drive_with_a_policy.py` is the loop. Run it with MetaDrive's interpreter, from
+the repo root:
+
+```bash
+/home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
+  examples/drive_with_a_policy.py workspaces/junction-1/scenarionet
+```
+
+It ships driving with MetaDrive's own IDM, and the only line a model replaces is
+`policy = IdmDriver(env)`. A policy is anything callable taking the observation and
+returning `[steering, throttle]`; nothing registers it and MetaDrive never learns it exists.
+
+The IDM baseline is there to prove the wiring rather than to drive well: `drive.sh -- --agent-policy
+idm` runs the same class *inside* the simulator, where the action is ignored, so the two must
+produce the same drive — measured, and they agree exactly on both extracts.
+
+**Recording, for imitation learning.** `--record out.npz` on either the example or `drive.sh`
+writes `(observation, executed action)` pairs, so a drive you steer yourself and a drive your
+model steers come out the same shape:
+
+```bash
+./drive.sh junction-1 -- --render 3D --agent-policy manual --max-lateral-dist 30 \
+  --record workspaces/junction-1/demos/keith-1.npz
+```
+
+The path is relative to the repo root, not to `scripts/` — `drive.sh` changes there before it
+runs anything — and the directory is created if it does not exist. Inside the workspace is the
+right home for it: `workspaces/` is gitignored, so a demonstration set does not land in a commit.
+
+It reads the action the car *executed*, not the one it was asked for. Under
+`--agent-policy replay` there is no action at all — that policy places the car directly — so
+every recorded action is `[0, 0]` and the run says so.
+
 ---
 
 ## How it works
@@ -610,7 +650,9 @@ src/osm_scenario/
   reachability_view.py, route_builder_view.py     the HTML views
   assets/             committed compiled browser clients
 web/                  TypeScript sources for those clients
-tools/                drive.py, check_dataset.py   (run under MetaDrive's venv)
+tools/                drive.py, check_dataset.py, signal_control.py,
+                      agent_env.py   (all run under MetaDrive's venv)
+examples/             drive_with_a_policy.py — the loop your own policy goes in
 config/default.yaml
 docs/policies/        road selection, Stage 2 algorithms, finding reference
 docs/mapping-algo-changes/   a dated record of every corrected mapping mistake

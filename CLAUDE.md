@@ -568,6 +568,68 @@ re-derive:
   is a `convert`-time file. It lives on the command line, with `LINE_WIDTH_M` in `.env` for
   anyone who does not want to type it.
 
+### Driving the ego with something other than the tape — the gym contract (2026-08-17)
+
+**The tick is the call.** MetaDrive is not a process ticking away with a queue or a listener
+waiting for input. `env.step(action)` advances exactly 0.1 s — 5 physics ticks of 0.02 s
+(`base_env.py:190, :462`) — and returns; between two calls nothing in the simulator moves.
+So simulated and wall-clock time are decoupled, and a policy taking 3 s freezes the simulator
+for 3 s and then advances the same 0.1 s. The only place MetaDrive deliberately spends
+wall-clock time is `ForceFPS.real_time_simulation`, which throttles the *display* and is off
+headless.
+
+**The action is two floats in [-1, 1]** — `[steering, throttle_brake]`, `[0] × max_steering`
+degrees at the wheels, `[1] ≥ 0` engine force and `< 0` brakes (`base_vehicle.py:472-520`). It
+reaches the car as `engine.external_actions`, read by `EnvInputPolicy` (`base_engine.py:425`,
+`env_input_policy.py:27`), which is `BaseEnv`'s default (`base_env.py:55`) and which
+`ScenarioEnv` does **not** override. So **passing an action *is* driving the ego** — there is
+nothing to register and nothing to subclass. `tools/agent_env.make_env` therefore never sets
+`agent_policy`, and `examples/drive_with_a_policy.py` is four lines.
+
+**A keyboard drive and a model drive are the same code path.** `ManualControlPolicy` subclasses
+`EnvInputPolicy` (`manual_control_policy.py:37`) and they differ only in where the two numbers
+come from. That is why `--agent-policy manual` is a value on an enum rather than a module, and
+why a recording made at the keyboard and one made through `env.step` come out the same shape.
+
+**Start behind the socket with MetaDrive's IDM, not with a model, because it is the only thing
+that tests the plumbing.** `agent_env.IdmDriver` builds `TrajectoryIDMPolicy` from *outside* the
+agent manager — legal because `BasePolicy.engine` is a `get_engine()` property
+(`base_policy.py:78`) — with the same three arguments `agent_manager.py:48-50` passes, and feeds
+its `[steering, acc]` to `env.step`. `drive.py --agent-policy idm` runs that same class *inside*
+the engine, where the action is ignored, so the two must agree. Measured: `junction-1` 291 steps
+/ completion 0.774 and `mosque` 1180 / 0.723 both ways, with the recorded arrays **bit-identical**.
+It reads the engine rather than `obs` (`idm_policy.py:239-297`), so its `obs` argument is
+accepted and ignored purely to keep the signature a model will use.
+
+Four things bite, and each reads as a driving problem rather than a plumbing one:
+
+- **`action_check` is off by default** (`base_env.py:69`) and `EnvInputPolicy` simply clips
+  (`env_input_policy.py:36`). Output in **[0, 1]** and the car **cannot brake at all**, because
+  `_apply_throttle_brake` only brakes below zero. Output far outside and every step saturates, so
+  steering is a switch at full lock. **`NaN` passes through unclipped** — `min(max(nan, -1), 1)`
+  is `nan` in Python — and reaches `setSteeringValue`. Pass `action_check=True` while developing;
+  it is a config key, not code.
+- **A discrete action space is also a config key** — `discrete_action` gives `Discrete(25)`,
+  `use_multi_discrete` gives `MultiDiscrete([5, 5])` (`env_input_policy.py:52-69`).
+- **`max_lateral_dist` (4 m) ends the episode** measured from the *recorded* route, so a model
+  that has not learned to steer is cut off within a second or two. MetaDrive's rule, not ours.
+- **`routes.json` still chooses the goal.** `ScenarioMapManager.reset` calls `get_sdc_track()`
+  unconditionally and `TrajectoryNavigation`'s reference line *is* the tape. An agent-driven ego
+  makes the tape the goal rather than the drive; it does not remove the need for one.
+
+**`current_action` is stale under any policy whose `act` returns `None`.** `before_step` appends
+to `last_current_action` only when it got an action (`base_vehicle.py:225-226`), so a recording
+made under `--agent-policy replay` is a column of `[0, 0]` — 352 of them on `junction-1`,
+measured — written rather than refused, and reported as such by `ActionRecorder.all_zero`. The
+same is true of `WaypointPolicy`. **And the pair is the observation from before the step**, with
+the action executed during it; the returned observation is off by one.
+
+**There is a second socket if the model predicts a path rather than pedals.**
+`ScenarioWaypointEnv` / `WaypointPolicy` takes `{"position": (horizon, 2)}` in the ego's local
+frame (`scenario_env.py:106-113, 442`). It costs the physics — `set_static=True` is asserted, so
+the car is placed rather than driven and can go where a car could not — and it costs the
+recorder, for the reason above. Reachable through `make_env(**overrides)`; not the default.
+
 ### A junction is bare inside and kerbed outside, and both halves are deliberate
 
 `_map_features` writes boundary features for `model.lanes` only, so a `ConnectorFeature` — a
