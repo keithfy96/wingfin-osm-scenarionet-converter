@@ -563,6 +563,21 @@ def main() -> int:
             }[arguments.agent_policy],
         )
     )
+    if arguments.agent_policy == "manual":
+        # MetaDrive keeps the real list in `constants.py:37` and shows it on `h`; printed here
+        # too because the first run is the one where nobody knows to press `h`. The focus line
+        # is the failure this cannot check for us: panda3d reads the keyboard through the
+        # window, so keys pressed while another window has focus reach nothing, and the ego -
+        # which spawns at the *recorded* speed rather than at rest - drives off on its own.
+        from metadrive.constants import HELP_MESSAGE
+
+        print("             " + HELP_MESSAGE.replace("\n", "\n             ").rstrip())
+        print(
+            "             Click the window before driving: the keys go to whichever window has "
+            "focus.\n             The on-screen `steering` and `throttle` are what the car is "
+            "executing - if\n             they stay at 0 while you press W or A, the window is "
+            "not getting the keys."
+        )
 
     environment_class = ScenarioEnv
     if arguments.lights == "live":
@@ -654,6 +669,14 @@ def main() -> int:
             # `None` - and the loop ends only when the episode terminates or the window closes.
             if arguments.agent_policy == "manual":
                 allowance, budget = None, None
+                # Not a detail: `ScenarioEnv` puts the ego on the tape's first position *with
+                # the speed recorded there*, so the drive starts mid-traffic rather than at a
+                # standstill, and a driver who is still reaching for the keys is already
+                # moving. `p` pauses if that is not wanted.
+                print(
+                    f"             ego starts at {float(env.agent.speed) * 3.6:.0f} km/h - the "
+                    "recorded speed, not a standstill; `p` pauses"
+                )
             else:
                 allowance = 0 if arguments.agent_policy == "replay" else _longest_red(scenario)
                 budget = length + allowance
@@ -700,7 +723,35 @@ def main() -> int:
                     path.append(tuple(env.agent.position))
                 steps += 1
                 if arguments.render == "3D":
-                    env.render(text={"scenario": scenario_id})
+                    overlay = {"scenario": scenario_id}
+                    if arguments.agent_policy == "manual":
+                        # The action the car is *executing*, on screen, because the one thing
+                        # that goes wrong here is invisible: panda3d reads the keyboard through
+                        # the window's own focus, so a window that does not have it leaves the
+                        # policy returning [0, 0] with nothing to say so. The ego also spawns at
+                        # the recorded speed rather than at rest, so a car nobody is steering
+                        # drives off on its own and looks exactly like a car being steered
+                        # badly. These two numbers separate the cases: press W and watch
+                        # `throttle` move; if it stays at 0 the window is not getting the keys.
+                        #
+                        # `controller` is a different question and answers the other half:
+                        # `action_info["manual_control"]` (`manual_control_policy.py:87`) is the
+                        # policy's own flag for whether it consulted the keyboard *at all* this
+                        # step, which it does not in top-down view or when the camera is not
+                        # tracking this car. False there, and `q` is what fixes it.
+                        steering, throttle = (float(v) for v in env.agent.current_action)
+                        consulted = env.engine.get_policy(env.agent.id).action_info.get(
+                            "manual_control"
+                        )
+                        overlay.update(
+                            {
+                                "steering (A/D)": f"{steering:+.2f}",
+                                "throttle (W/S)": f"{throttle:+.2f}",
+                                "speed": f"{float(env.agent.speed) * 3.6:.0f} km/h",
+                                "controller": "read" if consulted else "IGNORED - press q",
+                            }
+                        )
+                    env.render(text=overlay)
                 elif arguments.render in ("2D", "semantic"):
                     env.render(
                         mode="top_down",

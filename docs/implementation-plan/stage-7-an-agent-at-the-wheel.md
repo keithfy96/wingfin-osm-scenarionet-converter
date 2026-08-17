@@ -189,6 +189,17 @@ now** - this costs nothing and removes a trap.
       (`scenario_env.py:84`), so nothing changes unless it is asked for.
     - The existing report - `arrive_dest`, route completion, vehicle z, light
       transitions - is printed unchanged at the end of a manual drive.
+    - **An on-screen readout of the executed action**, added after Keith's first
+      real drive went straight off the road. Two facts made that unreadable: the
+      ego spawns at the **recorded** speed, measured at 50 km/h on `junction-1`,
+      so a car receiving no input drives away by itself and looks like a car
+      being steered badly; and panda3d reads the keyboard through the focused
+      window, so keys pressed elsewhere reach nothing silently. `steering`,
+      `throttle`, `speed` and whether the policy consulted the controller at all
+      are now on screen, and MetaDrive's own key list is printed at startup.
+      **The path itself was measured sound before any of this was written**:
+      forcing the controller's inputs gives steering 0.801 and +66.8 deg of
+      heading in 2 s, and braking takes the car from 7.63 m/s to 0.01.
   - Verified (measured 2026-08-17 unless marked):
     1. `./scripts/drive.sh junction-1 -- --render 3D --agent-policy manual`
        builds the window on the RTX 4050, reports

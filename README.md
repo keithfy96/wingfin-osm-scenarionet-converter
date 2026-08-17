@@ -306,6 +306,14 @@ inside `scripts/`:
 MetaDrive falls back to reading the keyboard through a blank pygame window, and the
 failure would otherwise be a window that never appears.
 
+**Click the window before driving.** panda3d reads the keyboard through whichever window
+has focus, so keys pressed anywhere else reach nothing — and because the ego spawns at the
+*recorded* speed rather than at a standstill (**50 km/h** on `junction-1`), a car nobody is
+steering drives off on its own and looks exactly like a car being steered badly. The
+on-screen `steering` and `throttle` are what the car is executing: press `w` and watch
+`throttle` move. If they stay at 0, the window is not getting the keys. `p` pauses if you
+would rather not start at speed.
+
 **Press `h` in the window for MetaDrive's own key list.** `w` `s` `a` `d` drive —
 **the arrow keys are not bound** — `q` is the driving view and `b` the top-down one,
 and the keyboard stops steering while the camera is top-down, which is MetaDrive's
