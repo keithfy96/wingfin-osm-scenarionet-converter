@@ -2,19 +2,19 @@
 
 ## Status
 
-**Stage 7a and 7b are both built** (2026-08-17), and every figure under their
-`Verify` blocks below is measured rather than read.
+**Stages 7a, 7b and 7c are all built**, and every figure under their `Verify`
+blocks below is measured rather than read.
 
-7a's one open item is the keyboard itself: keys do not reach the window on this
-machine, and that is environmental rather than anything in this repo - stock
-MetaDrive has never accepted them either, and neither WASD (panda3d `InputState`)
-nor `h` / `esc` (`accept()` handlers) arrive, so the fault is below both, at the
-window. The session is KDE Plasma on **Wayland** and panda3d 1.10.16 has no
-Wayland backend, so the window is an X11 client under XWayland; a Plasma (X11)
-session is the free test and Keith's next step. The policy-to-vehicle path was
-measured sound independently: forcing the controller's inputs gives steering
-0.801 and +66.8 deg of heading in 2 s, and braking takes the car from 7.63 m/s to
-0.01.
+7a's open item - keys not reaching the window under Wayland - is closed: Keith's
+commit `1a8489e`, "validated manual driving works", records the keyboard driving
+the car. The reading in this document's history was that panda3d 1.10.16 has no
+Wayland backend and the window was an X11 client under XWayland.
+
+**7c** (2026-08-18) answers the question 7b left open once the socket existed:
+*what does a model actually see, and where does it run?* Keith asked for camera,
+lidar, IMU and GPS, and asked for a program that drives and dumps everything
+MetaDrive produces so the input could be chosen from what is really there rather
+than from a guess. Both halves are below.
 
 Stage 8, live traffic, is a separate document -
 `stage-8-live-traffic.md`. The two do not depend on each other and can be
@@ -394,6 +394,96 @@ now** - this costs nothing and removes a trap.
       the recorder is 7b's own output and 7a is what fills it, which is blocked on
       the keyboard - and until stage 8 the map holds no other vehicle, so the
       120-laser block of the 161-number observation is constant.
+
+---
+
+## Stage 7c - real sensors out, a hosted model's steering back (2026-08-18)
+
+Built, and every number below measured on `junction-1`'s `test` route.
+
+### Why the survey came first
+
+Keith's question was "how do I get a model to see the lidar and reply", and his
+own suggested alternative - a program that drives and dumps everything - was the
+right first step, because **what goes on the wire cannot be chosen until it is
+known what exists**. It also corrected a premise this document had carried since
+7b: the 161-float array the loop passes around is not sensor data at all. It is
+`LidarStateObservation`, a normalised RL summary, and **39 of its 161 numbers
+move**. `tools/sensor_survey.py` reports the layout, the ranges and what varied,
+and writes samples: a PNG per camera, the point cloud and the observation as
+`.npy`, and `track.csv` with position, latitude/longitude, IMU and action per
+step. `scripts/sensor-survey.sh` wraps it for the same reason `drive.sh` exists -
+the cameras need a render context and the PRIME-offload pair in front of the
+command.
+
+The full measured tables live in `CLAUDE.md`; the three findings that changed the
+design are here.
+
+- **The 120-laser lidar block is constant 1.0.** `Lidar.perceive` scans the
+  *dynamic* world and our scenarios hold one car. Not a misconfiguration, and it
+  fixes itself at stage 8 - which is why the tool measures it every run instead of
+  quoting a number. The road is seen by the 12-laser side detector; the route by
+  the 22-number navigation block.
+- **A camera can only be read with `image_observation=True`, and that replaces the
+  observation** with `{"image", "state"}` whose state is 41 numbers and no lidar at
+  all. The two are welded together offscreen. The survey builds
+  `LidarStateObservation(env.config)` itself so it can report both honestly.
+- **GPS is exact rather than approximate**, and needed nothing invented: the
+  dataset carries its projection and MetaDrive records the shift it applied when it
+  re-centred the scenario. `tools/geodesy.py` inverts it with Vincenty's direct
+  solution because `pyproj` is not in MetaDrive's 3.8 venv - agreeing with `pyproj`
+  to **0.000000 m** over 25 points spanning +/-900 m.
+
+### The socket
+
+`tools/policy_client.py` (`RemotePolicy`, `SensorPack`, `sensor_config`),
+`examples/policy_server.py` (stdlib only, one `act()` to edit, four stand-in
+backends), `--policy-url` on the 7b example, and `--agent-policy remote` on
+`drive.py` so a hosted model drives with the 3D view, the terrain, the lights and
+`--record` for free.
+
+`remote` maps to `EnvInputPolicy` - **the same class as `manual`** - which is the
+7b finding made concrete: a keyboard drive and a model drive are one code path.
+It follows `manual` wherever `drive.py` special-cases a self-driving policy: no
+episode budget, and excluded from `failures`, so the exit status keeps meaning
+"the dataset is drivable" rather than "the model drove it".
+
+### Verified
+
+1. **The wire is lossless.** A local drive and a remote drive fed the *same*
+   float32 actions: **291 steps, completion 0.774126 both**, observations and
+   actions **bit-identical**.
+2. **The observation arrives whole.** Every one of the 291 the server received was
+   bit-identical to the one the car had.
+3. **The reply steers, with the right sign.** `--steering 1.0` leaves the road in
+   13 steps at -4.59 m lateral; `-1.0` in 12 at +4.00 m; `[0, 0]` coasts 188.
+4. **Cost.** 0.880 ms per step headless against `env.step`'s own 0.954 ms, rising
+   to 49.0 ms with every sensor on. `TCP_NODELAY` is worth **41.0 -> 0.126 ms**.
+5. **GPS lands on the map.** All 291 points inside `source/map.osm`'s bounds.
+6. **Additive.** `replay` and `idm` byte-identical to `git show HEAD:tools/drive.py`
+   on both extracts, and `manual`'s refusal path unchanged. Datasets untouched.
+   `uv run ruff check` clean; `uv run pytest` 408 passed with its one known failure.
+
+### Two things that were nearly written down wrong
+
+- **A recording is float32; `IdmDriver` returns float64.** Replaying a recording
+  against the float64 original diverges to 1.9e-3 by step 6 - chaotic amplification
+  of a 1e-8 action difference, and **nothing to do with the wire**. The test only
+  says anything because it holds the dtype fixed on both sides. Counting that as a
+  transport fault would have been the 7b "counting refusals is not counting faults"
+  mistake in a new place.
+- **`--render offscreen` costs 3.6 MB a step with no sensors requested**, because it
+  forces the observation into a 3-frame camera stack. `none` and `3D` keep it at 161
+  floats, so the 3D row *with* a camera is cheaper than the offscreen row without
+  one. `drive.py` prints KB/step rather than leaving that to be discovered.
+
+### Left for Keith
+
+Still the model. The slot is `act()` in `examples/policy_server.py` on his side and
+`policy = RemotePolicy(url)` on this one, and nothing here fills either. What 7c
+adds is that the input can now be chosen from a measurement, the transport is
+proven before a model is blamed for it, and the model can run on an interpreter
+that is not MetaDrive's Python 3.8.
 
 ---
 

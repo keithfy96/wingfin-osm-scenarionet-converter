@@ -61,6 +61,15 @@ import logging
 import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Imported at the top, unlike `agent_env` and `signal_control` below, because argparse needs
+# the sensor names to build its help text before anything else runs. It costs nothing:
+# `policy_client` imports only the standard library and `geodesy` at module level, and reaches
+# for MetaDrive lazily inside the one function that needs it.
+from policy_client import HEAVY_SENSORS as HEAVY_POLICY_SENSORS  # noqa: E402
+from policy_client import SENSORS as POLICY_SENSORS  # noqa: E402
+
 # Both ends of the range `base_env` accepts: it asserts the value is a power of two within
 # these bounds before handing it to `TerrainProperty`.
 MIN_REGION_M = 512
@@ -411,14 +420,30 @@ def main() -> int:
     parser.add_argument(
         "--agent-policy",
         default="replay",
-        choices=["replay", "idm", "manual"],
+        choices=["replay", "idm", "manual", "remote"],
         help="`replay` teleports the ego onto its recorded positions, so it passes through "
         "red lights - it has no dynamics to interrupt. `idm` follows the same recorded route "
         "as a reference line while braking for obstacles and for the wall a red light puts "
         "across the lane, so route completion stops being exact by construction. `manual` "
         "hands the wheel to the keyboard - WASD, and the arrow keys are not bound "
         "(`manual_controller.py:50-55`) - and requires --render 3D; the recorded route becomes "
-        "the goal rather than the drive, and the run is not bounded by the recording's length.",
+        "the goal rather than the drive, and the run is not bounded by the recording's length. "
+        "`remote` hands it to a model hosted in another process, over --policy-url; it is the "
+        "same code path as `manual`, differing only in where the two numbers come from.",
+    )
+    parser.add_argument(
+        "--policy-url",
+        default=None,
+        help="Where the hosted model is listening, for --agent-policy remote. e.g. "
+        "http://127.0.0.1:8642 - see examples/policy_server.py.",
+    )
+    parser.add_argument(
+        "--sensors",
+        default="",
+        help="Comma-separated extras sent to a --policy-url alongside the observation: "
+        + ", ".join(POLICY_SENSORS)
+        + ". `imu` and `gps` cost about a kilobyte a step and need nothing registered; a "
+        "camera or the point cloud costs hundreds of KB and needs --render 3D or offscreen.",
     )
     parser.add_argument(
         "--max-lateral-dist",
@@ -467,6 +492,27 @@ def main() -> int:
             f"result       FAILED: --agent-policy manual needs --render 3D, not "
             f"--render {arguments.render}. Without a rendered window MetaDrive reads the "
             f"keyboard through a blank pygame window instead."
+        )
+        return 1
+
+    sensor_names = tuple(name.strip() for name in arguments.sensors.split(",") if name.strip())
+    if arguments.agent_policy == "remote" and not arguments.policy_url:
+        print("result       FAILED: --agent-policy remote needs --policy-url")
+        return 1
+    if arguments.policy_url and arguments.agent_policy != "remote":
+        print(
+            f"result       FAILED: --policy-url only drives under --agent-policy remote, not "
+            f"{arguments.agent_policy}. The other three ignore the action passed to env.step."
+        )
+        return 1
+    # A camera has to be rendered before it can be read: `base_env.py:343` drops every camera
+    # from the sensor list when nothing is rendering, so asking for one under --render none
+    # sends nothing and says nothing. Refused instead.
+    heavy = [name for name in sensor_names if name in HEAVY_POLICY_SENSORS]
+    if heavy and arguments.render == "none":
+        print(
+            f"result       FAILED: --sensors {','.join(heavy)} needs --render 3D or offscreen. "
+            f"Without a render context MetaDrive builds no camera at all."
         )
         return 1
 
@@ -557,6 +603,11 @@ def main() -> int:
         "replay": ReplayEgoCarPolicy,
         "idm": TrajectoryIDMPolicy,
         "manual": EnvInputPolicy,
+        # The same class as `manual`, and that is the fact rather than a shortcut:
+        # `ManualControlPolicy` subclasses `EnvInputPolicy` (`manual_control_policy.py:37`),
+        # so a keyboard drive and a hosted model's drive differ only in where the two numbers
+        # come from. `manual_control` below is what separates them.
+        "remote": EnvInputPolicy,
     }[arguments.agent_policy]
     print(
         "ego policy   {} - {}".format(
@@ -570,6 +621,8 @@ def main() -> int:
                 # steer in top-down view - and `b` does not toggle back out of it.
                 "manual": "driven from the keyboard: WASD, `h` for MetaDrive's own key list, "
                 "`q` back to the driving view from `b`'s top-down one",
+                "remote": f"driven by the model at {arguments.policy_url}; the recorded route "
+                "becomes the goal rather than the drive",
             }[arguments.agent_policy],
         )
     )
@@ -609,6 +662,19 @@ def main() -> int:
     if arguments.render == "offscreen":
         offscreen = {"image_observation": True, "sensors": {"rgb_camera": (RGBCamera, 320, 240)}}
 
+    # A camera asked for by --sensors has to be registered on the env before it exists to be
+    # read. Merged rather than assigned: `image_observation` looks its source up by the name
+    # `rgb_camera` (`image_obs.py:68`), so replacing the dict above would kill the env at
+    # construction with a KeyError that names a sensor nobody asked about.
+    if sensor_names:
+        from policy_client import sensor_config
+
+        registered = sensor_config(sensor_names)
+        if registered:
+            merged = dict(offscreen.get("sensors", {}))
+            merged.update(registered)
+            offscreen["sensors"] = merged
+
     env = environment_class(
         {
             "data_directory": dataset,
@@ -640,6 +706,20 @@ def main() -> int:
         from agent_env import ActionRecorder
 
         recorder = ActionRecorder()
+
+    # Built after the env, because `SensorPack` checks the sensors it was asked for are really
+    # registered rather than sending nothing for them.
+    remote = None
+    if arguments.agent_policy == "remote":
+        from policy_client import RemotePolicy, SensorPack
+
+        remote = RemotePolicy(arguments.policy_url, pack=SensorPack(env, sensor_names))
+        remote.spec({"dataset": dataset})
+        print(
+            "sensors      {}".format(
+                ", ".join(sensor_names) if sensor_names else "the observation only"
+            )
+        )
 
     indices = (
         [arguments.scenario_index] if arguments.scenario_index is not None else list(range(count))
@@ -676,6 +756,8 @@ def main() -> int:
             lights = getattr(env.engine, "light_manager", None)
             if recorder is not None:
                 recorder.start_episode(scenario_id)
+            if remote is not None:
+                remote.start_episode(scenario_id)
 
             # The recording's length is the right bound for a replayed car - there is nothing
             # after the last recorded position - and the wrong one for any policy that drives
@@ -688,7 +770,10 @@ def main() -> int:
             # wrong turn and come back, or drive the route twice, and none of that is a fault to
             # be cut off after a fixed number of steps. So `manual` has no budget at all -
             # `None` - and the loop ends only when the episode terminates or the window closes.
-            if arguments.agent_policy == "manual":
+            # A hosted model is in exactly the same position, and for the same reason: it is
+            # not following the tape, so the tape's length is not a bound on how long its drive
+            # legitimately takes.
+            if arguments.agent_policy in ("manual", "remote"):
                 allowance, budget = None, None
                 # Not a detail: `ScenarioEnv` puts the ego on the tape's first position *with
                 # the speed recorded there*, so the drive starts mid-traffic rather than at a
@@ -726,7 +811,12 @@ def main() -> int:
             steps = 0
             while budget is None or steps < budget:
                 previous_observation = observation
-                observation, _, terminated, truncated, info = env.step([0, 0])
+                # `[0, 0]` for the three policies that ignore it - `replay` and `idm` are
+                # chosen through `agent_policy` and never read the argument, and `manual` reads
+                # the keyboard instead. Only `remote` puts anything here, which is exactly what
+                # makes it the same socket as the keyboard rather than a fourth mechanism.
+                action = remote(observation) if remote is not None else [0, 0]
+                observation, _, terminated, truncated, info = env.step(action)
                 if recorder is not None:
                     # The observation that *produced* the action, paired with the action the
                     # car executed for it - so the one from before the step, not the one the
@@ -844,8 +934,10 @@ def main() -> int:
                 # the dataset - a wrong turn or a kerb is the human's, and reporting `FAILED`
                 # for it would make the exit status mean something different in this mode than
                 # in the other two. Printed either way; only counted for a policy that drives
-                # the route the same way every time.
-                if arguments.agent_policy != "manual":
+                # the route the same way every time. `remote` is the same case with a model in
+                # the driving seat: the exit status must keep meaning "the dataset is drivable"
+                # rather than "the model drove it".
+                if arguments.agent_policy not in ("manual", "remote"):
                     failures += 1
 
             if lights is not None and lights.spawned_objects:
@@ -887,6 +979,34 @@ def main() -> int:
                 )
     finally:
         env.close()
+
+    if remote is not None and remote.calls:
+        # Reported against `env.step`'s own 0.954 ms rather than alone, because the number only
+        # means something beside the work it is added to. A figure near 40 ms is not a slow
+        # model: it is Nagle's algorithm meeting delayed ACK because one end of the socket did
+        # not set TCP_NODELAY, and it costs 43x the simulator per step.
+        print(
+            f"policy       {remote.calls} calls to {arguments.policy_url}, "
+            f"{1000 * remote.seconds / remote.calls:.3f} ms each on average "
+            f"(env.step itself is about 1 ms), {remote.seconds:.2f} s total"
+        )
+        # Printed because the one surprise here is invisible otherwise. Under --render
+        # offscreen MetaDrive turns the observation itself into a stack of camera frames
+        # (image_observation is what keeps a camera alive at all, base_env.py:343), so the
+        # drive sends 3.6 MB a step whether or not any --sensors were asked for, and the round
+        # trip goes from 0.9 ms to about 28. --render none and --render 3D both leave the
+        # observation as the 161-float vector.
+        print(
+            f"             {remote.sent_bytes / remote.calls / 1024:.1f} KB sent per step"
+            + (
+                " - most of it the observation itself, which --render offscreen turns into a "
+                "stack of camera frames whether or not any --sensors were asked for. --render "
+                "none and --render 3D both leave it at 161 floats."
+                if arguments.render == "offscreen"
+                else ""
+            )
+        )
+        remote.close()
 
     if recorder is not None:
         # Said rather than left to be discovered: a replayed car's policy returns None every

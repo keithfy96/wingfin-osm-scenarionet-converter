@@ -29,6 +29,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "tools"))
 
 from agent_env import ActionRecorder, IdmDriver, make_env  # noqa: E402
+from policy_client import SENSORS, RemotePolicy, SensorPack, sensor_config  # noqa: E402
 
 
 def main() -> int:
@@ -51,14 +52,39 @@ def main() -> int:
         "episode. MetaDrive's own 4 m applies when this is not given, and a policy that has "
         "not learned to steer crosses it in a second or two.",
     )
+    parser.add_argument(
+        "--policy-url",
+        default=None,
+        help="Drive with a model hosted in another process instead of the IDM - see "
+        "examples/policy_server.py. e.g. http://127.0.0.1:8642",
+    )
+    parser.add_argument(
+        "--sensors",
+        default="",
+        help="Comma-separated extras to send alongside the observation, for --policy-url: "
+        + ", ".join(SENSORS)
+        + ". The numeric ones cost about a kilobyte a step; a camera or the point cloud costs "
+        "hundreds and needs --render offscreen or 3D.",
+    )
     arguments = parser.parse_args()
+
+    names = tuple(name.strip() for name in arguments.sensors.split(",") if name.strip())
+    if names and not arguments.policy_url:
+        parser.error("--sensors only means something with --policy-url")
 
     overrides = {}
     if arguments.max_lateral_dist is not None:
         overrides["max_lateral_dist"] = arguments.max_lateral_dist
+    registered = sensor_config(names) if names else {}
+    if registered:
+        overrides["sensors"] = registered
 
     env = make_env(arguments.dataset, render=arguments.render, verbose=True, **overrides)
-    policy = IdmDriver(env)
+    if arguments.policy_url:
+        policy = RemotePolicy(arguments.policy_url, pack=SensorPack(env, names))
+        policy.spec({"dataset": arguments.dataset})
+    else:
+        policy = IdmDriver(env)
     recorder = ActionRecorder() if arguments.record else None
 
     try:
@@ -67,6 +93,8 @@ def main() -> int:
             scenario = env.engine.data_manager.current_scenario
             if recorder is not None:
                 recorder.start_episode(scenario["id"])
+            if isinstance(policy, RemotePolicy):
+                policy.start_episode(scenario["id"])
 
             steps = 0
             info = {}
@@ -96,6 +124,17 @@ def main() -> int:
             )
     finally:
         env.close()
+
+    if isinstance(policy, RemotePolicy) and policy.calls:
+        # Printed against env.step's own 0.954 ms rather than on its own: the number only means
+        # something next to the work it is being added to. A median near 40 ms means TCP_NODELAY
+        # is missing at one end, not that the model is slow.
+        print(
+            f"policy       {policy.calls} calls, "
+            f"{1000 * policy.seconds / policy.calls:.3f} ms each on average, "
+            f"{policy.seconds:.2f} s total"
+        )
+        policy.close()
 
     if recorder is not None:
         written = recorder.save(arguments.record)

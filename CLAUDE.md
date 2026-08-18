@@ -630,6 +630,120 @@ frame (`scenario_env.py:106-113, 442`). It costs the physics — `set_static=Tru
 the car is placed rather than driven and can go where a car could not — and it costs the
 recorder, for the reason above. Reachable through `make_env(**overrides)`; not the default.
 
+### The observation is not sensor data, and the lidar in it is blind (2026-08-18)
+
+**`LidarStateObservation`'s 161 floats are an RL summary, not what a driver sees**, and reading
+them as "the sensors" is the mistake this section exists to stop. Measured over `junction-1`'s
+291-step `test` route, **39 of the 161 move**:
+
+| indices | what | moves |
+|---|---|---|
+| `0:12` | side detector — 12 lasers, **static** world: the road edges | 12/12 |
+| `12:17` | heading error, speed, steering, last throttle, last steering | 5/5 |
+| `17:18` | yaw rate | 1/1 |
+| `18:19` | lateral offset in lane | 1/1 |
+| `19:41` | navigation — next 10 route points (ahead, sideways), car frame, clipped 30 m | 20/22 |
+| `41:161` | ray lidar — 120 lasers, 50 m | **0/120, all exactly 1.0** |
+
+**The lidar block is blind because `Lidar.perceive` scans `physics_world.dynamic_world`** and our
+scenarios hold one car. Not a misconfiguration, and it fixes itself at stage 8 — which is why
+`tools/sensor_survey.py` measures it every run instead of anyone quoting this table. The road is
+seen by the *side detector*; the route is the navigation block. And the observation is **[0, 1]**
+while the action is **[-1, 1]**, so a model matching output range to input range cannot brake.
+
+**All four modalities Keith asked for exist.** `RGBCamera` / `DepthCamera` / `SemanticCamera` at
+`(180, 320, 3|1)`; `PointCloudLidar(200, 64, ego_centric=True)` at `(64, 200, 3)` — a real 3-D
+cloud, unlike the ray ring; IMU assembled from the bullet body (`body.get_linear_velocity()`,
+`body.getAngularVelocity()`, `roll`/`pitch`/`heading_theta`, acceleration differenced over the
+0.1 s step) because **MetaDrive has no IMU sensor class**; and GPS below. Four traps:
+
+- **A camera cannot be read without `image_observation=True`.** `base_env.py:343` deletes every
+  `BaseCamera` from the sensor list when neither `use_render` nor `image_observation` is set, and
+  `_render_mode` is then decided by whether any camera survived (`:385-390`). So the two are
+  welded together offscreen.
+- **And turning it on replaces the observation.** `ImageStateObservation.observe` returns
+  `{"image": ..., "state": ...}` where `state` is the **41-number** `StateObservation` with *no
+  lidar block at all* (`image_obs.py:40`). A model trained on the 161-vector is handed something
+  else. `sensor_survey.py` builds `LidarStateObservation(env.config)` itself and calls
+  `.observe(env.agent)` rather than taking `env.step`'s return — legal from outside because
+  `BaseObservation` reaches the engine through `get_engine()`, the same seam `IdmDriver` uses.
+- **A partial `sensors=` override wipes `rgb_camera` and kills the env at construction** with
+  `KeyError: 'rgb_camera' does not exist in existing config` from `image_obs.py:68`, because
+  `image_source` defaults to that name. `agent_env.make_env` merges rather than assigns.
+- **The point cloud's unhit rays land on the depth buffer's far plane** — measured −18438 m to
+  +10991 m raw, with 70.3% of 12800 rays inside 200 m. A raw min/max describes the sky.
+
+**GPS is exact, and needs no dependency.** Two facts meet: the dataset carries
+`metadata.coordinate_system_wkt` (azimuthal equidistant on WGS 84, `junction-1` centred
+3.185894327145 N, 101.611554629362 E) and MetaDrive re-centres each scenario on the ego's first
+position but **records the shift** as `metadata.old_origin_in_current_coordinate` — verified
+`[+55.725, −75.469]` against a first position of `[−55.725, +75.469]`. So
+`projected = metadrive_xy − that`, then invert. `pyproj` is a dependency of *this repo* on 3.10
+and is **not in MetaDrive's 3.8 venv**, so `tools/geodesy.py` solves it directly: PROJ's
+ellipsoidal `aeqd` is geodesic, so the inverse *is* Vincenty's direct problem. Checked against
+`pyproj` over 25 points spanning ±900 m — **0.000000 m** — and all 291 points of a drive land
+inside `source/map.osm`'s bounds. Do not reach for a spherical approximation; it was not needed.
+
+### A hosted model drives through the same socket, and Nagle is the trap (2026-08-18)
+
+`--agent-policy remote --policy-url` on `drive.py`, `--policy-url` on
+`examples/drive_with_a_policy.py`, `tools/policy_client.py` on this side and
+`examples/policy_server.py` on the model's. **`remote` maps to `EnvInputPolicy` — the same class
+as `manual`** — because a keyboard drive and a model drive differ only in where the two numbers
+come from; `manual_control` is the only thing separating them. It follows `manual` wherever
+`drive.py` special-cases a policy that drives itself: no episode budget, and not counted toward
+`failures`, so the exit status keeps meaning "the dataset is drivable" rather than "the model
+drove it".
+
+**The socket exists because of the interpreter, not because of taste.** MetaDrive's venv is
+Python 3.8.20 with no torch. Anything that *does* run on 3.8 should skip all of this and pass a
+plain callable. And because `env.step` is the tick, a slow policy makes a drive slow and never
+makes it wrong.
+
+**`TCP_NODELAY` is worth 325×, and missing it reads as a slow simulator.** A localhost round trip
+carrying 161 floats out and two back: **41.0 ms** stock, **0.126 ms** with the option set on both
+ends — Nagle meeting delayed ACK. `env.step` itself is **0.954 ms** median headless. The client
+sets it on its socket; the server sets `disable_nagle_algorithm`. Miss either half and it returns.
+
+Measured per step on `junction-1`, all giving the same 291-step drive:
+
+| `--render` | `--sensors` | sent | round trip |
+|---|---|---|---|
+| `none` | — | 0.9 KB | 0.880 ms |
+| `none` | `imu,gps` | 1.4 KB | 0.977 ms |
+| `3D` | `camera,imu,gps` | 901.5 KB | 14.98 ms |
+| `offscreen` | — | **3600.4 KB** | 29.35 ms |
+| `offscreen` | everything | 5001.2 KB | 49.03 ms |
+
+**`--render offscreen` costs 3.6 MB a step with no sensors asked for**, because it forces
+`image_observation` and the observation becomes a 3-frame camera stack (320×240 by default, hence
+3600 KB; a 320×180 camera gives 2700 KB). `none` and `3D` both keep it at 161 floats — which is
+why the 3D row *with* a camera is cheaper than the offscreen row without one. `drive.py` prints
+KB/step so this is a number rather than a mystery.
+
+**Four things the plumbing test settled, and none of them needed a model:**
+
+- serving back a local IDM drive's own actions reproduced it exactly — **291 steps, completion
+  0.774126, bit-identical observations and actions** — but only when both sides read the *same
+  float32*. The recorder saves float32 while `IdmDriver` returns float64, so replaying a recording
+  against the float64 original diverges to 1.9e-3 by step 6. That is chaotic amplification of a
+  1e-8 action difference, **not the wire**, and the test has to hold the dtype fixed to say
+  anything.
+- every observation the server received was bit-identical to the one the car had.
+- `--backend constant --steering 1.0` leaves the road in 13 steps at −4.59 m lateral and
+  `-1.0` in 12 at +4.00 m — opposite sides, so the action reaches the wheels with the right sign.
+- the client **refuses** what MetaDrive would swallow: out of [-1, 1], `NaN`, `inf`, wrong length.
+
+**`kill -INT` does not reliably stop a `serve_forever` without a controlling terminal** —
+measured: the process kept serving and `--log-observations` never wrote. `policy_server.py`
+handles SIGINT and SIGTERM explicitly and calls `shutdown` from another thread, because calling
+it from the handler deadlocks against the loop it is stopping.
+
+**`tools/` runs on 3.8 and ruff checks it against this repo's 3.10.** Ruff asked for
+`zip(..., strict=)` (B905) in `policy_client.py` and that keyword does not exist on 3.8; the loop
+is indexed instead. Parse every new `tools/` or `examples/` file with MetaDrive's own interpreter
+before believing ruff.
+
 ### A junction is bare inside and kerbed outside, and both halves are deliberate
 
 `_map_features` writes boundary features for `model.lanes` only, so a `ConnectorFeature` — a

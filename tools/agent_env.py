@@ -124,6 +124,16 @@ def make_env(
         config["image_observation"] = True
         config["sensors"] = {"rgb_camera": (RGBCamera, 320, 240)}
     config.update(overrides)
+    # `sensors` is the one override that must merge rather than replace. `image_observation`
+    # reads `config["sensors"][image_source]` (`image_obs.py:68`) with `image_source` defaulting
+    # to `rgb_camera`, so a caller registering a depth camera and a point-cloud lidar - without
+    # knowing that - loses the key the observation is built from and the env dies at
+    # construction with `KeyError: 'rgb_camera' does not exist in existing config`. Merging
+    # keeps the caller's own `rgb_camera` when it supplies one, so nothing is silently ignored.
+    if "sensors" in overrides and render == "offscreen":
+        merged = {"rgb_camera": (RGBCamera, 320, 240)}
+        merged.update(overrides["sensors"])
+        config["sensors"] = merged
 
     if verbose:
         print(

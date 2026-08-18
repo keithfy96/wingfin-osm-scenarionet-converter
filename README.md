@@ -373,6 +373,134 @@ It reads the action the car *executed*, not the one it was asked for. Under
 `--agent-policy replay` there is no action at all — that policy places the car directly — so
 every recorded action is `[0, 0]` and the run says so.
 
+### What a model can actually see
+
+Run the survey before choosing what your model takes as input. It drives, then reports every
+output MetaDrive can produce — shapes, ranges, and whether each one *moved* over the drive —
+and writes samples you can look at:
+
+```bash
+./sensor-survey.sh junction-1
+./sensor-survey.sh junction-1 -- --policy straight     # a constant action instead of the IDM
+```
+
+Samples land in `workspaces/<workspace>/sensor-survey/`: a PNG per camera, the point cloud as
+`.npy`, the observation as `.npy`, and `track.csv` with position, latitude/longitude, IMU and
+the action, one row per step.
+
+All four modalities are there. Measured on `junction-1`:
+
+| | how | what comes back |
+|---|---|---|
+| **camera** | `RGBCamera`, `DepthCamera`, `SemanticCamera` | `(180, 320, 3)` and `(180, 320, 1)`, floats in [0, 1] |
+| **lidar, 3-D** | `PointCloudLidar` | `(64, 200, 3)` — x, y, z per ray, in the car's own frame |
+| **lidar, ray** | the 120-laser ring in the observation | **constant 1.0 today** — see below |
+| **IMU** | assembled from the physics body | 3-D velocity and angular velocity, roll, pitch, heading, acceleration |
+| **GPS** | the dataset's own projection | latitude and longitude, exact |
+
+Two of those need saying plainly.
+
+**The 120-laser lidar block in the observation is blind, and it is not misconfigured.** That
+sensor scans the *dynamic* world, and our scenarios hold exactly one car — the ego. All 120
+values sit at 1.0 for the whole drive and will start carrying something when traffic does. What
+sees the road today is the 12-laser side detector at `[0:12]`, and what carries the route is the
+navigation block at `[19:41]`. Of the 161 numbers, **39 move**.
+
+**GPS is exact rather than approximate.** The dataset carries the projection Stage 1 chose
+(`metadata.coordinate_system_wkt`) and MetaDrive records the shift it applied when it re-centred
+the scenario, so world metres invert back to WGS 84 with nothing estimated. Checked against
+`pyproj` over ±900 m: **0.000000 m** of disagreement, and all 291 points of the drive land inside
+the bounds of `source/map.osm`.
+
+### Look at the point cloud
+
+```bash
+./view-point-cloud.sh junction-1
+./view-point-cloud.sh mosque -- --colour distance-ahead
+./view-point-cloud.sh junction-1 -- --max-range 0    # keep the far-plane misses too
+```
+
+Drag to orbit, scroll to zoom, `h` in the window for the rest. Open3D is pulled into a throwaway
+overlay by `uv run --with open3d` rather than added to this repo's dependencies — it is a 450 MB
+wheel used to look at a file, not to build one — and it must not go into MetaDrive's venv either,
+which is a reference checkout. The script also sends the window through XWayland, because this
+desktop is Wayland and Open3D's GLFW picks the Wayland backend and then fails to initialise GLEW.
+
+Two things about the file itself, both of which make the naive three-line Open3D snippet show you
+nothing useful:
+
+- **It is `(64, 200, 3)`, not `(N, 3)`** — 200 rays over 64 channels, so it needs reshaping.
+- **A ray that hits nothing lands on the depth buffer's far plane.** Raw extent runs to
+  **18476 m** on `junction-1`; only **9000 of 12800** rays (70.3%) are inside the sensor's own
+  200 m. Left in, the viewer autoscales to the sky and the road is a dot. They are dropped by
+  default.
+
+And one thing that is a fact about the scenario rather than the viewer: **every return is the
+ground.** Both extracts hit on 45 of 64 channels, all within **0.1 m** of z = −2 m, because the
+scenarios hold one car and MetaDrive's terrain carries no buildings. So colouring by height —
+the usual choice for a lidar — is flat, and the default here is range instead. Like the blind
+120-laser ring above, this fills in when there is traffic to hit.
+
+### Host a model and let it drive
+
+Your model does not have to run where MetaDrive runs — MetaDrive's venv is Python 3.8.20 with no
+torch. Put the model behind a socket instead. Edit `act()` in `examples/policy_server.py`, which
+imports nothing but the standard library, and run it on whatever interpreter your model needs:
+
+```bash
+python examples/policy_server.py --port 8642
+```
+
+Then drive against it, either headless or watching in 3D:
+
+```bash
+./drive.sh junction-1 -- --render 3D --agent-policy remote \
+  --policy-url http://127.0.0.1:8642 --sensors imu,gps,camera
+```
+
+`--sensors` takes any of `imu, gps, camera, depth, semantic, point-cloud`; the observation is
+always sent. In a training loop use the example instead, which needs no window at all:
+
+```bash
+/home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
+  examples/drive_with_a_policy.py workspaces/junction-1/scenarionet \
+  --policy-url http://127.0.0.1:8642 --sensors imu,gps
+```
+
+**Prove the wire before you blame a model.** Serve back the actions a local IDM drive recorded,
+and the remote drive must reproduce it exactly:
+
+```bash
+python examples/policy_server.py --port 8642 --backend replay --replay-from drive.npz
+```
+
+Measured: 291 steps and route completion 0.774126 both ways, with the recorded observations and
+actions **bit-identical**, and every observation the server received identical to the one the car
+had. `--backend constant --steering 1.0` is the other half of the check — the car leaves the road
+in 13 steps, and to the opposite side from `--steering -1.0`.
+
+**What it costs per step**, against `env.step`'s own ~1 ms:
+
+| `--render` | `--sensors` | sent per step | round trip |
+|---|---|---|---|
+| `none` | — | 0.9 KB | **0.88 ms** |
+| `none` | `imu,gps` | 1.4 KB | 0.98 ms |
+| `3D` | `camera,imu,gps` | 901 KB | 15.0 ms |
+| `offscreen` | — | 3600 KB | 29.4 ms |
+| `offscreen` | everything | 5001 KB | 49.0 ms |
+
+Two things to know from that table. **`--render offscreen` makes the observation itself a stack
+of camera frames**, whether or not you asked for a sensor — that is how MetaDrive keeps a camera
+alive at all — so it costs 3.6 MB a step for an image nobody wanted. `--render none` and
+`--render 3D` both leave the observation at 161 floats, which is why the 3D row with a camera on
+is cheaper than the offscreen row with nothing. And **if you ever see ~40 ms a step, that is not
+a slow model**: it is Nagle's algorithm meeting delayed ACK because one end of the socket lost
+`TCP_NODELAY`. Both ends set it; a stock `http.server` does not.
+
+The client refuses an action MetaDrive would have swallowed. `action_check` is off by default and
+`EnvInputPolicy` simply clips, so an output in [0, 1] silently loses the ability to brake and
+`NaN` is not clipped at all. Those are raised instead.
+
 ---
 
 ## How it works
@@ -651,8 +779,11 @@ src/osm_scenario/
   assets/             committed compiled browser clients
 web/                  TypeScript sources for those clients
 tools/                drive.py, check_dataset.py, signal_control.py,
-                      agent_env.py   (all run under MetaDrive's venv)
+                      agent_env.py, sensor_survey.py, policy_client.py,
+                      geodesy.py   (all run under MetaDrive's venv)
+                      view_point_cloud.py   (this repo's venv + open3d)
 examples/             drive_with_a_policy.py — the loop your own policy goes in
+                      policy_server.py — the model's side, stdlib only, any interpreter
 config/default.yaml
 docs/policies/        road selection, Stage 2 algorithms, finding reference
 docs/mapping-algo-changes/   a dated record of every corrected mapping mistake
