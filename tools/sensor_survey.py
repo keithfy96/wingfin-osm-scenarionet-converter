@@ -211,14 +211,18 @@ def main() -> int:
         # car and the axes are the world's.
         point_cloud=(PointCloudLidar, cloud_width, cloud_height, True),
     )
-    # Every entry above is an image buffer, and so is every rig camera. Past
-    # `MAX_IMAGE_BUFFERS` panda3d's reset fails intermittently - see the constant - so a rig
-    # *replaces* the survey's own image sensors rather than joining them. Measured on this
-    # spec: the rig alone survives 5 runs of 5, the rig plus the point cloud 1 of 5.
+    # A rig run is the rig and nothing else: the four sensors above are replaced rather than
+    # joined. That is what was asked for - a rig of RGB cameras, without the point cloud - and
+    # it is also the cheaper shape, because every entry here is an image buffer rendered every
+    # step whether or not anything reads it.
     #
-    # Nothing is lost, only split across two runs: the observation, track.csv and the GPS are
-    # written either way, and `--policy idm` is deterministic - the same seed gives the same
-    # drive - so a plain run and a rig run describe the same 291 steps and their rows line up.
+    # It is *not* forced by the buffer ceiling any more. `MAX_IMAGE_BUFFERS` is 9 and a rig of
+    # 7 leaves room for two; adding one of these four back measures 5/5. Adding two does not
+    # (1/5), so the room is smaller than the count suggests - see the constant.
+    #
+    # Nothing is unavailable, only split across two runs: the observation, track.csv and the
+    # GPS are written either way, and `--policy idm` is deterministic, so a plain run and a rig
+    # run describe the same drive and their rows line up.
     dropped_for_rig = ()
     if rig is not None:
         clash = set(sensors) & set(rig.names)
@@ -232,7 +236,8 @@ def main() -> int:
         if len(rig) > MAX_IMAGE_BUFFERS:
             print(
                 f"camera rig rejected: {len(rig)} cameras is more than the "
-                f"{MAX_IMAGE_BUFFERS} image buffers panda3d holds reliably - past it "
+                f"{MAX_IMAGE_BUFFERS} image buffers panda3d holds reliably (measured: "
+                f"{MAX_IMAGE_BUFFERS} of them 5 runs of 5, one more 3 of 5). Past it "
                 "MetaDrive's reset fails intermittently, which looks like a working rig "
                 f"until it does not. Drop {len(rig) - MAX_IMAGE_BUFFERS} camera(s), or "
                 "survey them in two runs: --policy idm is deterministic, so the same seed "
@@ -426,11 +431,23 @@ def main() -> int:
     add(f"CAMERAS      one frame each at step {arguments.sample_at}, written as PNG")
     if dropped_for_rig:
         add(f"  not sampled this run: {', '.join(dropped_for_rig)}")
-        add(f"  A rig replaces them rather than joining them - {len(dropped_for_rig)} + "
-            f"{len(rig)} buffers is past the {MAX_IMAGE_BUFFERS} panda3d holds reliably")
-        add("  (measured: rig alone 5 runs of 5, rig + point cloud 1 of 5). Run without")
-        add("  --camera-rig for those four; --policy idm is deterministic, so it is the")
-        add("  same drive and the rows line up.")
+        add("  A rig run is the rig alone. Run without --camera-rig for these four -")
+        add("  --policy idm is deterministic, so it is the same drive and the rows line up.")
+        stale = [
+            (name, os.path.join(out, name))
+            for name in ("rgb_camera.png", "depth_camera.png", "semantic_camera.png",
+                         "point-cloud.npy")
+        ]
+        stale = [(name, path) for name, path in stale if os.path.exists(path)]
+        if stale:
+            # Named rather than deleted, and named rather than left to be noticed. These are a
+            # previous run's files sitting beside this run's track.csv, and nothing about them
+            # says so - pairing an old point cloud with a new track is a silent mistake.
+            add("")
+            add("  LEFT OVER from an earlier run, NOT from this one:")
+            for name, path in stale:
+                hours = (time.time() - os.path.getmtime(path)) / 3600.0
+                add(f"    {name:<22} {hours:6.1f} h old")
     for name in [n for n in SURVEY_SENSORS[:3] if n in sensors]:
         value = samples.get(name)
         if isinstance(value, Exception):

@@ -131,9 +131,19 @@ def make_env(
     # construction with `KeyError: 'rgb_camera' does not exist in existing config`. Merging
     # keeps the caller's own `rgb_camera` when it supplies one, so nothing is silently ignored.
     if "sensors" in overrides and render == "offscreen":
-        merged = {"rgb_camera": (RGBCamera, 320, 240)}
-        merged.update(overrides["sensors"])
-        config["sensors"] = merged
+        # ...but only when the caller has not already named a camera of their own to build the
+        # observation from. A rig registers seven cameras and points `image_source` at one of
+        # them, and adding this eighth on top is a whole render pass every step feeding
+        # nothing - measured on `junction-1`, `env.engine.sensors` held `rgb_camera` beside the
+        # seven while `image_source` read `cam_front`. It also spends one of the very few
+        # image buffers panda3d holds reliably (`camera_rig.MAX_IMAGE_BUFFERS`).
+        source = (overrides.get("vehicle_config") or {}).get("image_source", "rgb_camera")
+        if source in overrides["sensors"]:
+            config["sensors"] = dict(overrides["sensors"])
+        else:
+            merged = {"rgb_camera": (RGBCamera, 320, 240)}
+            merged.update(overrides["sensors"])
+            config["sensors"] = merged
 
     if verbose:
         print(

@@ -515,21 +515,46 @@ For the real 7-camera spec at its own resolutions:
 
 | | read | `env.step` | total | rate | bytes/step |
 |---|---|---|---|---|---|
-| 6 × 512×288 | 19.4 ms | 48.6 ms | 67.9 ms | 14.7 Hz | 2.65 MB |
-| all 7 (+ 1280×720) | 28.8 ms | 64.5 ms | 93.4 ms | 10.7 Hz | 5.42 MB |
+| 6 × 512×288 | 8.5 ms | 29.7 ms | 38.2 ms | 26.2 Hz | 2.65 MB |
+| all 7 (+ 1280×720) | 13.0 ms | 40.8 ms | 53.9 ms | 18.6 Hz | 5.42 MB |
 
-`cam_front_wide` alone is 2.77 MB of that 5.42 and 25 ms of the 93.
+`cam_front_wide` alone is 2.77 MB of that 5.42 and about 16 ms of the 54.
 
-### A rig replaces the survey's own sensors — it does not join them
+**These were 67.9 ms and 93.4 ms until `make_env` stopped building a camera nobody reads.**
+In offscreen mode it merged a 320×240 `rgb_camera` into `sensors` unconditionally, because
+`image_source` defaults to that name and a caller registering only a depth camera would
+otherwise die at construction. A rig *does* name an `image_source` — one of its own cameras —
+so the fallback was an extra buffer rendered every step and read by nothing. Removing it is
+**1.7× on the whole loop**, which is far more than a 320×240 buffer's own pixels are worth;
+the mechanism was not chased further than the measurement, repeated three times at 51.1,
+57.0 and 53.9 ms.
 
-**Past seven image buffers panda3d stops being reliable.** `env.reset` fails
-*intermittently* inside `graphicsEngine.renderFrame()` with
-`AssertionError: _formats_by_animation.empty() at geomMunger.cxx:350`, or
+### A rig run is the rig alone
+
+`--camera-rig` drops `rgb_camera`, `depth_camera`, `semantic_camera` and `point_cloud`.
+That is what the rig is *for* — seven RGB cameras, no point cloud — and it is also the
+cheaper shape, since every registered sensor is a buffer rendered every step whether
+anything reads it or not.
+
+**It is not forced by the buffer ceiling.** `env.reset` does fail *intermittently* past a
+certain load, inside `graphicsEngine.renderFrame()` with
+`AssertionError: _formats_by_animation.empty() at geomMunger.cxx:350` or
 `MutexPosixImpl::~MutexPosixImpl(): Assertion 'result == 0' failed`, and the process then
-aborts or segfaults. Measured over 5 runs each on `junction-1` with this spec: **the rig
-alone 5/5, the rig plus the point cloud 1/5.** A lighter set survives further — the
-survey's own four plus four 512×288 cameras is also 8 buffers and ran 5/5 — so the limit
-is *load* rather than a clean count, and 7 is the figure that holds for a rig this size.
+aborts or segfaults. Measured over 5 runs at each size on `junction-1`, counting the
+buffers the engine really holds:
+
+| RGB cameras | 7 | 8 | 9 | 10 | 11 | 12 |
+|---|---|---|---|---|---|---|
+| runs surviving | 5/5 | 5/5 | **5/5** | 3/5 | 1/5 | 1/5 |
+
+So a 7-camera rig has room for two more. **Mixing camera types costs more than the count
+suggests**, which is the part not to read off that table: adding *one* non-RGB camera to
+the rig is free — a `DepthCamera`, a `SemanticCamera` or a `PointCloudLidar` each give 5/5
+at 8 buffers — but *two* of them give **1/5 at 9**, where nine RGB cameras give 5/5.
+
+This ceiling was **7** until `make_env` stopped injecting the dead `rgb_camera` described
+above. That buffer sat inside every earlier count, so the old figures were describing a rig
+one camera larger than the caller had asked for.
 
 Four readings that each looked like the cause and are not:
 
@@ -548,11 +573,11 @@ The intermittency is why `--camera-rig` **refuses** a rig over the limit rather 
 warning: a rig one camera over the line looks like it works, then fails on a run somebody
 is relying on.
 
-So a `--camera-rig` run drops `rgb_camera`, `depth_camera`, `semantic_camera` and
-`point_cloud`, and says so in the report. **Nothing is lost, only split across two runs**:
-`track.csv`, `observation.npy` and the GPS are written either way, and `--policy idm` is
-deterministic — the same seed gives the same drive — so a plain run and a rig run describe
-the same steps and their rows line up.
+**Nothing is unavailable, only split across two runs.** `track.csv`, `observation.npy` and
+the GPS are written either way, and `--policy idm` is deterministic — the same seed gives
+the same drive — so a plain run and a rig run describe the same steps and their rows line
+up. The report names any file left behind by the earlier run, with its age, so an old point
+cloud is not paired with a fresh track by accident.
 
 ### What it writes
 

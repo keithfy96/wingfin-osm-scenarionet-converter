@@ -70,16 +70,23 @@ STEP_S = 0.1
 # Past this, `env.reset` fails *intermittently* inside `graphicsEngine.renderFrame()` with
 # `AssertionError: _formats_by_animation.empty() at line 350 of panda/src/gobj/geomMunger.cxx`
 # or `MutexPosixImpl::~MutexPosixImpl(): Assertion 'result == 0' failed`, and the process then
-# aborts or segfaults. Measured over 5 runs at each size on `junction-1`, with the 7-camera
-# spec this was built for: **7 buffers (the rig alone) 5/5, 8 (rig + the point cloud) 1/5**.
-# A lighter set survives further - the survey's own four plus four 512x288 cameras is also 8
-# buffers and ran 5/5 - so the limit is load rather than a clean count, and 7 is the figure
-# that holds for a rig of this size.
+# aborts or segfaults. Measured over 5 runs at each size on `junction-1`, counting the buffers
+# the engine really holds (`env.engine.sensors` less the three ray detectors):
+#
+#     7 RGB  5/5      10 RGB  3/5
+#     8 RGB  5/5      11 RGB  1/5
+#     9 RGB  5/5      12 RGB  1/5
+#
+# **Mixing camera types costs more than the count suggests.** Adding *one* non-RGB camera to a
+# 7-camera rig is free - a `DepthCamera`, a `SemanticCamera` or a `PointCloudLidar` each give
+# 5/5 at 8 buffers - but *two* of them give **1/5 at 9**, where nine RGB cameras give 5/5. So
+# this ceiling is honest for an all-RGB rig, which is what `SUPPORTED_TYPES` allows, and a
+# caller adding several other kinds alongside one should re-measure rather than trust it.
 #
 # Four readings that each looked like the cause and are not:
 #
 #   * not the GPU: 1/5 on the RTX 4050 through `__NV_PRIME_RENDER_OFFLOAD`, 2/5 on the Intel
-#     iGPU, same 11 buffers.
+#     iGPU, with the same eleven buffers.
 #   * not `multi_thread_render` (default True, `threading-model Cull`): False gave 0/5.
 #   * not panda3d's threading generally: `loadPrcFileData("", "threading-model")` before
 #     MetaDrive is imported gave 2/5 against 3/5 with it left alone.
@@ -87,9 +94,13 @@ STEP_S = 0.1
 #     nothing byte for byte, and every camera renders pixel-identically alone and in the full
 #     rig anyway.
 #
+# This was 7 until `agent_env.make_env` stopped injecting an `rgb_camera` no rig reads. That
+# dead buffer was inside every count above, so the old figures were describing a rig one
+# camera larger than the caller had asked for.
+#
 # The intermittency is why this is a refusal rather than a warning: a rig one camera over the
 # line looks like it works, and then fails on a run somebody is relying on.
-MAX_IMAGE_BUFFERS = 7
+MAX_IMAGE_BUFFERS = 9
 
 
 class RigError(Exception):

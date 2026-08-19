@@ -439,10 +439,14 @@ you point a model at it:
   cameras are named backwards whichever reading you take.
 - **The cameras are mounted on the ego, not one camera re-aimed per view.** Six mounted cameras
   cost 20.4 ms a step against 77.3 ms for MetaDrive's own borrow-and-re-aim example.
-- **A rig replaces the survey's own four sensors rather than joining them.** Past seven image
-  buffers panda3d's reset fails intermittently — measured, the rig alone survives 5 runs of 5
-  and the rig plus the point cloud 1 of 5 — so a rig over the limit is refused outright. Nothing
-  is lost: `--policy idm` is deterministic, so a plain run gives the other four on the same drive.
+- **A rig run is the rig alone** — no point cloud, no depth or semantic camera. The seven-camera
+  spec costs 53.9 ms a step, 18.6 Hz, 5.42 MB. Nothing is unavailable: `--policy idm` is
+  deterministic, so a plain run gives the other four over the same drive, and the report names
+  any file the earlier run left behind so an old one is not mistaken for a new one.
+- **Nine image buffers is the measured ceiling**, past which MetaDrive's reset fails
+  *intermittently* — 9 cameras survive 5 runs of 5, 10 give 3/5, 11 give 1/5 — so a rig over it
+  is refused outright rather than warned about. Mixing in more than one non-RGB camera costs
+  more than the count suggests: two of them measure 1/5 at nine buffers.
 
 `docs/scenario-datapoints.md` §10 has the conversion table, the measurements, and what was ruled
 out along the way.
