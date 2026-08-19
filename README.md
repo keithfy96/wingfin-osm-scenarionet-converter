@@ -418,19 +418,37 @@ Every column and index is written up in `docs/scenario-datapoints.md`.
 
 The survey above samples **one** forward camera at MetaDrive's default mount. A real vehicle
 carries several, and the spec for a rig is a file — CARLA's sensor-spec shape, which is what the
-rigs around here are already written in:
+rigs around here are already written in.
+
+From inside `scripts/`:
 
 ```bash
+# one frame per camera, to workspaces/junction-1/sensor-survey/rig-<camera>.png
 ./sensor-survey.sh junction-1 -- --camera-rig ~/Desktop/work/wingfin/data/cams.txt
-./sensor-survey.sh junction-1 -- --camera-rig ~/Desktop/work/wingfin/data/cams.txt \
-    --rig-record --steps 60         # every step, to sensor-survey/rig/<camera>.npy
 
-python tools/camera_rig.py ~/Desktop/work/wingfin/data/cams.txt   # resolve it, no engine
+# every step as arrays, to workspaces/junction-1/sensor-survey/rig/<camera>.npy
+./sensor-survey.sh junction-1 -- --camera-rig ~/Desktop/work/wingfin/data/cams.txt \
+    --rig-record --steps 60
+
+./sensor-survey.sh mosque -- --camera-rig ~/Desktop/work/wingfin/data/cams.txt
 ```
 
-`--camera-rig` writes one PNG per view; `--rig-record` writes `(steps, H, W, 3)` uint8 per
-camera, row-aligned with `track.csv` and `observation.npy`. Three things worth knowing before
-you point a model at it:
+and from the **repo root**, to resolve a spec without starting a simulator — mounts, aims and
+the per-step size, in a second:
+
+```bash
+python tools/camera_rig.py ~/Desktop/work/wingfin/data/cams.txt
+```
+
+`--camera-rig` writes one PNG per view, plus the usual `survey.txt`, `track.csv` and
+`observation.npy`. `--rig-record` adds `(steps, H, W, 3)` uint8 per camera, row *n* of each
+being row *n* of `track.csv`.
+
+**Keep `--steps` low until you want the whole drive.** The 7-camera spec is 5.42 MB a step, so
+a full 291-step `junction-1` run is **1.6 GB**. The tool prints the projected size before it
+starts anything.
+
+Four things worth knowing before you point a model at it:
 
 - **The frame is converted, not copied.** CARLA is x-forward with `yaw` positive to the right;
   MetaDrive is y-forward with heading positive to the **left**. So the mount is an x/y swap and
