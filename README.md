@@ -412,6 +412,41 @@ the scenario, so world metres invert back to WGS 84 with nothing estimated. Chec
 `pyproj` over ±900 m: **0.000000 m** of disagreement, and all 291 points of the drive land inside
 the bounds of `source/map.osm`.
 
+Every column and index is written up in `docs/scenario-datapoints.md`.
+
+### A rig of several cameras
+
+The survey above samples **one** forward camera at MetaDrive's default mount. A real vehicle
+carries several, and the spec for a rig is a file — CARLA's sensor-spec shape, which is what the
+rigs around here are already written in:
+
+```bash
+./sensor-survey.sh junction-1 -- --camera-rig ~/Desktop/work/wingfin/data/cams.txt
+./sensor-survey.sh junction-1 -- --camera-rig ~/Desktop/work/wingfin/data/cams.txt \
+    --rig-record --steps 60         # every step, to sensor-survey/rig/<camera>.npy
+
+python tools/camera_rig.py ~/Desktop/work/wingfin/data/cams.txt   # resolve it, no engine
+```
+
+`--camera-rig` writes one PNG per view; `--rig-record` writes `(steps, H, W, 3)` uint8 per
+camera, row-aligned with `track.csv` and `observation.npy`. Three things worth knowing before
+you point a model at it:
+
+- **The frame is converted, not copied.** CARLA is x-forward with `yaw` positive to the right;
+  MetaDrive is y-forward with heading positive to the **left**. So the mount is an x/y swap and
+  the aim is a sign flip, and the tool prints where each camera *actually* points rather than
+  trusting its name — `cams.txt` disagrees with itself about the sign, and two of its four side
+  cameras are named backwards whichever reading you take.
+- **The cameras are mounted on the ego, not one camera re-aimed per view.** Six mounted cameras
+  cost 20.4 ms a step against 77.3 ms for MetaDrive's own borrow-and-re-aim example.
+- **A rig replaces the survey's own four sensors rather than joining them.** Past seven image
+  buffers panda3d's reset fails intermittently — measured, the rig alone survives 5 runs of 5
+  and the rig plus the point cloud 1 of 5 — so a rig over the limit is refused outright. Nothing
+  is lost: `--policy idm` is deterministic, so a plain run gives the other four on the same drive.
+
+`docs/scenario-datapoints.md` §10 has the conversion table, the measurements, and what was ruled
+out along the way.
+
 ### Look at the point cloud
 
 ```bash
@@ -779,7 +814,7 @@ src/osm_scenario/
   assets/             committed compiled browser clients
 web/                  TypeScript sources for those clients
 tools/                drive.py, check_dataset.py, signal_control.py,
-                      agent_env.py, sensor_survey.py, policy_client.py,
+                      agent_env.py, sensor_survey.py, camera_rig.py, policy_client.py,
                       geodesy.py   (all run under MetaDrive's venv)
                       view_point_cloud.py   (this repo's venv + open3d)
 examples/             drive_with_a_policy.py — the loop your own policy goes in

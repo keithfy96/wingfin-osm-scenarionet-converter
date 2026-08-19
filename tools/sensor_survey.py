@@ -34,10 +34,12 @@ import argparse
 import csv
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from agent_env import IdmDriver, make_env  # noqa: E402
+from camera_rig import MAX_IMAGE_BUFFERS, RigError, load_rig  # noqa: E402
 from geodesy import aeqd_inverse, projection_origin  # noqa: E402
 
 # Where the point cloud's unhit rays land. They are put on the depth buffer's far plane and
@@ -49,6 +51,10 @@ POINT_CLOUD_MAX_RANGE_M = 200.0
 # sensor configuration (`scenario_env.py:61`): side_detector 12 lasers, lane_line_detector
 # off, lidar 120. The widths are asserted against the real observation below rather than
 # trusted, because turning a detector on moves every boundary after it.
+# The survey's own sensors, in report order. A `--camera-rig` run drops the first three: the
+# rig's views supersede a single forward RGB, and the buffer budget is what it is.
+SURVEY_SENSORS = ("rgb_camera", "depth_camera", "semantic_camera", "point_cloud")
+
 OBSERVATION_BLOCKS = (
     ("side detector, 12 lasers, static world - road edges", 12),
     ("heading error, speed, steering, last throttle, last steering", 5),
@@ -137,6 +143,22 @@ def main() -> int:
         "a 64-channel lidar (MetaDrive's own example uses exactly this)",
     )
     parser.add_argument(
+        "--camera-rig",
+        default=None,
+        help="A CARLA-shaped camera spec (see tools/camera_rig.py). Its cameras are mounted "
+        "on the ego beside the four sensors above, and one frame from each is written at "
+        "--sample-at. The spec's frame is converted, not copied: CARLA is x-forward / "
+        "+yaw-right and MetaDrive is y-forward / +heading-left.",
+    )
+    parser.add_argument(
+        "--rig-record",
+        action="store_true",
+        help="Write EVERY step of every rig camera to <out>/rig/<camera>.npy as "
+        "(steps, H, W, 3) uint8, row-aligned with track.csv and observation.npy. This is the "
+        "model input rather than a picture of it, and it is large - a 7-camera rig over a "
+        "291-step drive is 1.6 GB - so the projected size is printed before anything runs.",
+    )
+    parser.add_argument(
         "--max-lateral-dist",
         type=float,
         default=None,
@@ -162,23 +184,84 @@ def main() -> int:
     if lateral is None:
         lateral = 4.0 if arguments.policy == "idm" else 1000.0
 
+    # Read before the env is built: a spec this refuses should cost nothing, and the rig's
+    # cameras have to be in `sensors` at construction - `engine_core.setup_sensors` runs once.
+    rig = None
+    if arguments.camera_rig:
+        try:
+            rig = load_rig(arguments.camera_rig)
+        except RigError as error:
+            print(f"camera rig rejected: {error}", file=sys.stderr)
+            return 1
+        for line in rig.describe():
+            print(line)
+        if arguments.rig_record:
+            gigabytes = rig.megabytes * arguments.steps / 1000.0
+            print(
+                f"rig recording  {rig.megabytes:.2f} MB/step x up to "
+                f"{arguments.steps} steps = up to {gigabytes:.2f} GB"
+            )
+
+    sensors = dict(
+        rgb_camera=(RGBCamera, arguments.camera_width, arguments.camera_height),
+        depth_camera=(DepthCamera, arguments.camera_width, arguments.camera_height),
+        semantic_camera=(SemanticCamera, arguments.camera_width, arguments.camera_height),
+        # `ego_centric=True` zeroes the translation only - the rotation matrix is still built
+        # from the camera's *world* hpr (`point_cloud_lidar.py:66-75`), so the origin is the
+        # car and the axes are the world's.
+        point_cloud=(PointCloudLidar, cloud_width, cloud_height, True),
+    )
+    # Every entry above is an image buffer, and so is every rig camera. Past
+    # `MAX_IMAGE_BUFFERS` panda3d's reset fails intermittently - see the constant - so a rig
+    # *replaces* the survey's own image sensors rather than joining them. Measured on this
+    # spec: the rig alone survives 5 runs of 5, the rig plus the point cloud 1 of 5.
+    #
+    # Nothing is lost, only split across two runs: the observation, track.csv and the GPS are
+    # written either way, and `--policy idm` is deterministic - the same seed gives the same
+    # drive - so a plain run and a rig run describe the same 291 steps and their rows line up.
+    dropped_for_rig = ()
+    if rig is not None:
+        clash = set(sensors) & set(rig.names)
+        if clash:
+            print(
+                "camera rig rejected: {} is already a survey sensor; rename it in the "
+                "spec".format(", ".join(sorted(clash))),
+                file=sys.stderr,
+            )
+            return 1
+        if len(rig) > MAX_IMAGE_BUFFERS:
+            print(
+                f"camera rig rejected: {len(rig)} cameras is more than the "
+                f"{MAX_IMAGE_BUFFERS} image buffers panda3d holds reliably - past it "
+                "MetaDrive's reset fails intermittently, which looks like a working rig "
+                f"until it does not. Drop {len(rig) - MAX_IMAGE_BUFFERS} camera(s), or "
+                "survey them in two runs: --policy idm is deterministic, so the same seed "
+                "gives the same drive and the two runs line up row for row.",
+                file=sys.stderr,
+            )
+            return 1
+        dropped_for_rig = tuple(sensors)
+        sensors = rig.sensors()
+
     env = make_env(
         dataset,
         render=arguments.render,
         verbose=True,
         max_lateral_dist=lateral,
-        sensors=dict(
-            rgb_camera=(RGBCamera, arguments.camera_width, arguments.camera_height),
-            depth_camera=(DepthCamera, arguments.camera_width, arguments.camera_height),
-            semantic_camera=(SemanticCamera, arguments.camera_width, arguments.camera_height),
-            # `ego_centric=True`: points come back in the car's own frame, which is what a
-            # perception model wants. False gives world coordinates, which move with the map.
-            point_cloud=(PointCloudLidar, cloud_width, cloud_height, True),
-        ),
+        sensors=sensors,
+        # `image_observation` reads `config["sensors"][image_source]` (`image_obs.py:68`) and
+        # the name defaults to `rgb_camera`, which a rig run has just removed. It lives in
+        # `vehicle_config`; passed at the top level MetaDrive dies at construction with
+        # `KeyError: "'{'image_source'}' does not exist in existing config"`.
+        vehicle_config=dict(image_source=rig.image_source() if rig else "rgb_camera"),
     )
 
     policy = IdmDriver(env) if arguments.policy == "idm" else _straight_driver()
     observation, _ = env.reset(seed=arguments.scenario)
+    # After the reset, not before: `mount` parents each camera to `env.agent.origin`, and the
+    # ego does not exist until the scenario is loaded.
+    if rig is not None:
+        rig.mount(env)
     scenario = env.engine.data_manager.current_scenario
     metadata = scenario["metadata"]
 
@@ -208,6 +291,10 @@ def main() -> int:
     info_samples = []
     steps = 0
     samples = {}
+    rig_samples = {}
+    rig_frames = {name: [] for name in (rig.names if rig else ())}
+    rig_read_s = 0.0
+    rig_error = None
 
     while steps < arguments.steps:
         action = policy(observation)
@@ -248,7 +335,7 @@ def main() -> int:
         )
 
         if steps == arguments.sample_at:
-            for name in ("rgb_camera", "depth_camera", "semantic_camera", "point_cloud"):
+            for name in [n for n in SURVEY_SENSORS if n in sensors]:
                 try:
                     sensor = env.engine.get_sensor(name)
                     samples[name] = numpy.asarray(
@@ -256,6 +343,24 @@ def main() -> int:
                     )
                 except Exception as error:  # noqa: BLE001 - reported, never fatal
                     samples[name] = error
+
+        # The rig is read every step when recording and once otherwise, and it is timed
+        # either way - the per-step cost is the number that decides whether a rig this size
+        # can sit inside a training loop, and it is not guessable from the camera count.
+        if rig is not None and rig_error is None and (
+            arguments.rig_record or steps == arguments.sample_at
+        ):
+            try:
+                started = time.perf_counter()
+                frames = rig.read()
+                rig_read_s += time.perf_counter() - started
+                if steps == arguments.sample_at:
+                    rig_samples = frames
+                if arguments.rig_record:
+                    for name, frame in frames.items():
+                        rig_frames[name].append(frame)
+            except Exception as error:  # noqa: BLE001 - reported, never fatal
+                rig_error = error
 
         observation, _, terminated, truncated, info = env.step(action)
         if stepped_observation_shape is None:
@@ -319,7 +424,14 @@ def main() -> int:
     # ---- cameras and the point cloud ----------------------------------------------------
     add("")
     add(f"CAMERAS      one frame each at step {arguments.sample_at}, written as PNG")
-    for name in ("rgb_camera", "depth_camera", "semantic_camera"):
+    if dropped_for_rig:
+        add(f"  not sampled this run: {', '.join(dropped_for_rig)}")
+        add(f"  A rig replaces them rather than joining them - {len(dropped_for_rig)} + "
+            f"{len(rig)} buffers is past the {MAX_IMAGE_BUFFERS} panda3d holds reliably")
+        add("  (measured: rig alone 5 runs of 5, rig + point cloud 1 of 5). Run without")
+        add("  --camera-rig for those four; --policy idm is deterministic, so it is the")
+        add("  same drive and the rows line up.")
+    for name in [n for n in SURVEY_SENSORS[:3] if n in sensors]:
         value = samples.get(name)
         if isinstance(value, Exception):
             add(f"  {name:<16} FAILED {type(value).__name__}: {str(value)[:90]}")
@@ -333,10 +445,60 @@ def main() -> int:
                 f"range [{float(value.min()):.3f}, {float(value.max()):.3f}]  -> {written}"
             )
 
+    if rig is not None:
+        add("")
+        add(f"CAMERA RIG   {len(rig)} camera(s) from {rig.path}")
+        add("  the spec is CARLA's frame (x fwd, y right, z up, +yaw right); MetaDrive's is")
+        add("  x right, y fwd, z up, +heading LEFT. So the mount is an x/y swap and the aim")
+        add("  is a sign flip - `aims` below is where each camera really points.")
+        if rig_error is not None:
+            add(f"  FAILED {type(rig_error).__name__}: {str(rig_error)[:90]}")
+        for camera in rig.cameras:
+            frame = rig_samples.get(camera.name)
+            shape = "not sampled" if frame is None else str(frame.shape)
+            size = f"{camera.width}x{camera.height}"
+            add(
+                f"  {camera.name:<16} {size:>9}  fov {camera.fov:>3.0f}  "
+                f"H{camera.hpr[0]:+7.1f}  {camera.aim:<34} {shape}"
+            )
+            if frame is not None:
+                written = _write_image(os.path.join(out, "rig-" + camera.name + ".png"), frame)
+                add(f"  {'':<16} -> {written}")
+        reads = steps if arguments.rig_record else (1 if rig_samples else 0)
+        if reads:
+            per_step_ms = rig_read_s / reads * 1000.0
+            add(
+                f"  read           {per_step_ms:.2f} ms/step over {reads} read(s), "
+                f"{rig.megabytes:.2f} MB/step"
+            )
+        add("  the cameras are MOUNTED on the ego, not one camera re-aimed per view: every")
+        add("  buffer fills in the same render pass, so the cost lands in env.step and the")
+        add("  read is nearly free. Re-aiming one camera calls taskMgr.step() twice per view.")
+        add("  panda3d prints `shader_terrain(error): More views than supported` past ~6")
+        add("  cameras. Measured inert here - every camera is pixel-identical rendered alone")
+        add("  and in the full rig - because use_mesh_terrain is off and ShaderTerrainMesh is")
+        add("  not what draws this ground.")
+        if arguments.rig_record:
+            rig_out = os.path.join(out, "rig")
+            os.makedirs(rig_out, exist_ok=True)
+            total = 0
+            for name, frames in rig_frames.items():
+                if not frames:
+                    continue
+                stacked = numpy.stack(frames)
+                numpy.save(os.path.join(rig_out, name + ".npy"), stacked)
+                total += stacked.nbytes
+                add(f"  -> rig/{name}.npy  {stacked.shape}  {stacked.dtype}")
+            add(
+                f"  {total / 1e9:.2f} GB, row-aligned with track.csv and observation.npy"
+            )
+
     add("")
     add("POINT CLOUD  a real 3-D cloud, in the car's own frame - x, y, z per ray")
     cloud = samples.get("point_cloud")
-    if isinstance(cloud, Exception):
+    if dropped_for_rig:
+        add("  not sampled: a camera rig is mounted, see CAMERA RIG above")
+    elif isinstance(cloud, Exception):
         add(f"  FAILED {type(cloud).__name__}: {str(cloud)[:110]}")
     elif cloud is None:
         add(f"  not sampled: the drive ended before step {arguments.sample_at}")

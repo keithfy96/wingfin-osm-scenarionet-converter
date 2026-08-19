@@ -8,6 +8,11 @@
 #   ./scripts/sensor-survey.sh -- --camera-width 640 --camera-height 360
 #   GPU=integrated ./scripts/sensor-survey.sh        # force the built-in graphics
 #
+#   # a multi-camera rig, in place of the single forward camera and the point cloud
+#   ./scripts/sensor-survey.sh -- --camera-rig ~/Desktop/work/wingfin/data/cams.txt
+#   ./scripts/sensor-survey.sh -- --camera-rig ~/Desktop/work/wingfin/data/cams.txt \
+#       --rig-record --steps 60     # every step to <workspace>/sensor-survey/rig/*.npy
+#
 # Answers "what can a model actually see": camera, lidar, IMU, GPS. Writes PNGs, the point
 # cloud, the observation and a per-step CSV into <workspace>/sensor-survey/.
 #
@@ -27,7 +32,7 @@ PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --) shift; PASSTHROUGH=("$@"); break ;;
-        -h|--help) sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^#\s\?//'; exit 0 ;;
+        -h|--help) sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^#\s\?//'; exit 0 ;;
         -*) die "unknown option: $1
   This script takes only a workspace. To pass $1 to sensor_survey.py, put it after --:
     ./scripts/sensor-survey.sh ${POSITIONAL:-<workspace>} -- $1" ;;

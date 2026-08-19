@@ -424,3 +424,144 @@ Drag to orbit, scroll to zoom, `h` in the window for the rest. The tool reshapes
 `(64, 200, 3)` to a flat list and drops the far-plane misses, both of which the naive
 three-line Open3D snippet does not — without them the viewer autoscales to an 18 km
 sphere and the road is a dot.
+
+---
+
+## 10. A multi-camera rig — `--camera-rig`
+
+Everything above describes **one** forward camera at MetaDrive's default mount. A real
+vehicle carries several, and the spec for a rig is a file rather than an argument:
+
+```bash
+./scripts/sensor-survey.sh junction-1 -- \
+    --camera-rig ~/Desktop/work/wingfin/data/cams.txt
+./scripts/sensor-survey.sh junction-1 -- \
+    --camera-rig ~/Desktop/work/wingfin/data/cams.txt --rig-record --steps 60
+```
+
+`tools/camera_rig.py --check-frame <dataset>` re-measures the conversion below against a
+live engine, and `python tools/camera_rig.py <spec>` prints the resolved rig without
+starting one.
+
+### The spec is CARLA's frame and MetaDrive's is not
+
+`cams.txt` is a CARLA sensor spec: `x` forward, `y` right, `z` up, **`yaw` positive to
+the right**. MetaDrive's vehicle-local frame is different, and the difference was
+measured rather than reasoned — a `NodePath` parented to `env.agent.origin`, given a
+local pose, and read back in world coordinates against the car's own heading:
+
+```
+local +y 1 m  ->  ahead +1.000 m, right -0.000 m       MetaDrive: +y forward,
+local +x 1 m  ->  ahead +0.000 m, right +1.000 m                  +x right, +z up
+H = +55       ->  +55.00 deg from the car's heading    H positive turns LEFT
+H = -55       ->  -55.00 deg from the car's heading
+```
+
+So the conversion is an **x/y swap** and a **sign flip**, neither of which is a rename:
+
+| spec (CARLA) | MetaDrive |
+|---|---|
+| `transform.x` (forward) | `position[1]` |
+| `transform.y` (right) | `position[0]` |
+| `transform.z` (up) | `position[2]` |
+| `transform.yaw` (+ right) | `hpr[0] = -yaw` (+ left) |
+| `fov` | `lens.setFov(fov)` — **horizontal**; vertical follows the aspect ratio (70 → 43.0°, 120 → 88.5° at 16:9) |
+| `tick_rate` | must be `0.1`, MetaDrive's own step — nothing here resamples |
+
+`pitch` and `roll` are `0.0` on every camera in the spec this was built for, so neither
+sign has ever been measured against MetaDrive. A non-zero one is **refused**, not guessed.
+
+### `cams.txt` disagrees with itself about the sign of `yaw`
+
+Under **no** single convention are all four side cameras named correctly:
+
+| reading | `cam_left` −55 | `cam_right` +55 | `cam_back_left` +125 | `cam_back_right` −125 |
+|---|---|---|---|---|
+| `+yaw` = **right** (CARLA) | left ✓ | right ✓ | rear-**right** ✗ | rear-**left** ✗ |
+| `+yaw` = **left** (ROS) | **right** ✗ | **left** ✗ | rear-left ✓ | rear-right ✓ |
+
+Exactly two of the four are backwards either way — the front pair and the back pair
+disagree. `camera_rig.py` resolves **CARLA's** reading, because the file's whole shape is
+CARLA's and the front pair agrees with it, and then **prints where each camera actually
+points** so the disagreement is visible on every run rather than baked in:
+
+```
+cam_back_left      512x288  fov  70  H -125.0  aims 125 deg to the right, i.e. rear-right
+cam_back_right     512x288  fov  70  H +125.0  aims 125 deg to the left, i.e. rear-left
+```
+
+Fixing it is a one-line edit to `cams.txt` — which pair is wrong is not ours to decide.
+
+### The cameras are mounted, not borrowed
+
+MetaDrive's own six-view example
+(`metadrive/tests/scripts/multiview_generation_with_image_on_cuda.py`) re-aims a *single*
+camera per view through `perceive(..., new_parent_node, position, hpr)`, which steps the
+task manager twice per call — six serialised render passes. Parenting six cameras to the
+ego instead lets one pass fill every buffer. Measured on `junction-1` at 320×180:
+
+| | read | `env.step` | total | rate |
+|---|---|---|---|---|
+| no cameras | — | 9.8 ms | 9.8 ms | 102 Hz |
+| **6 mounted** | **2.2 ms** | 18.2 ms | **20.4 ms** | **49 Hz** |
+| 1 borrowed 6× | 67.1 ms | 10.2 ms | 77.3 ms | 13 Hz |
+
+That example has a second flaw worth not copying: it shares one `ImageObservation` across
+its six views, so all six dict entries are the same array object and its 3-deep "stack" is
+the last three *views* rather than the last three *timesteps*. `camera_rig` does not go
+through `ImageObservation` at all.
+
+For the real 7-camera spec at its own resolutions:
+
+| | read | `env.step` | total | rate | bytes/step |
+|---|---|---|---|---|---|
+| 6 × 512×288 | 19.4 ms | 48.6 ms | 67.9 ms | 14.7 Hz | 2.65 MB |
+| all 7 (+ 1280×720) | 28.8 ms | 64.5 ms | 93.4 ms | 10.7 Hz | 5.42 MB |
+
+`cam_front_wide` alone is 2.77 MB of that 5.42 and 25 ms of the 93.
+
+### A rig replaces the survey's own sensors — it does not join them
+
+**Past seven image buffers panda3d stops being reliable.** `env.reset` fails
+*intermittently* inside `graphicsEngine.renderFrame()` with
+`AssertionError: _formats_by_animation.empty() at geomMunger.cxx:350`, or
+`MutexPosixImpl::~MutexPosixImpl(): Assertion 'result == 0' failed`, and the process then
+aborts or segfaults. Measured over 5 runs each on `junction-1` with this spec: **the rig
+alone 5/5, the rig plus the point cloud 1/5.** A lighter set survives further — the
+survey's own four plus four 512×288 cameras is also 8 buffers and ran 5/5 — so the limit
+is *load* rather than a clean count, and 7 is the figure that holds for a rig this size.
+
+Four readings that each looked like the cause and are not:
+
+- **not the GPU** — 1/5 on the RTX 4050 through `__NV_PRIME_RENDER_OFFLOAD`, 2/5 on the
+  Intel iGPU, same eleven buffers
+- **not `multi_thread_render`** (default `True`, `threading-model Cull`) — `False` gave 0/5
+- **not panda3d threading generally** — `loadPrcFileData("", "threading-model")` before
+  MetaDrive is imported gave 2/5 against 3/5 with it left alone
+- **not `stm-max-views`**, which panda3d complains about past ~6 cameras. Raising it
+  changed nothing byte for byte, and **every camera renders pixel-identically alone and in
+  the full rig** — 0.00% of pixels differing by more than 10 on all four late cameras. That
+  message is inert here because `use_mesh_terrain` is off, so `ShaderTerrainMesh` is not
+  what draws this ground.
+
+The intermittency is why `--camera-rig` **refuses** a rig over the limit rather than
+warning: a rig one camera over the line looks like it works, then fails on a run somebody
+is relying on.
+
+So a `--camera-rig` run drops `rgb_camera`, `depth_camera`, `semantic_camera` and
+`point_cloud`, and says so in the report. **Nothing is lost, only split across two runs**:
+`track.csv`, `observation.npy` and the GPS are written either way, and `--policy idm` is
+deterministic — the same seed gives the same drive — so a plain run and a rig run describe
+the same steps and their rows line up.
+
+### What it writes
+
+| flag | file | shape |
+|---|---|---|
+| `--camera-rig` | `sensor-survey/rig-<camera>.png` | one frame each, at `--sample-at` |
+| `--rig-record` | `sensor-survey/rig/<camera>.npy` | `(steps, H, W, 3)` uint8, **every step** |
+
+`--rig-record` is the model input rather than a picture of it, and it is large — 5.42 MB a
+step, so a 291-step `junction-1` drive is 1.6 GB. It is off by default and the projected
+size is printed before anything runs. Row *n* of every `rig/<camera>.npy` is row *n* of
+`track.csv` and row *n* of `observation.npy`: same step, same drive.
