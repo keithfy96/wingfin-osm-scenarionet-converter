@@ -863,7 +863,10 @@ about 5.1 B per lane per step, which a 20-lane plan at 100 Hz turns into ~370 KB
 
 `tools/step_timing.py` / `scripts/step-timing.sh` drives every rate a workspace holds and
 reports wall-clock against simulated time. Re-measure with it rather than quoting a number
-from this file.
+from this file. **What every row, column and CSV field means is
+`docs/step-timing-rows.md`**, and `--list-rows` prints the short version — neither this
+section nor the README is the place to look that up, and a row description that lives in
+two places drifts.
 
 **And it does not reproduce the four hand-measured `env.step` figures in the table above.**
 Same route, same `--render none`, same replay policy: **2.357 ms at 10 Hz against the 1.094
@@ -900,6 +903,26 @@ Six things not to re-derive:
   the cheap buffer read. `sensor_ms` here is therefore the *numeric* sensors only. An earlier
   version of the plan had a row isolating "the readback" by not reading it, which is not a
   thing that can be arranged.
+- **Every offscreen row carries a camera, and the `sensors` column has to say so.** It printed
+  the row's *read* list — what the timing loop pulls out for itself — which the camera is
+  deliberately not in, so rows 1 and 2 read as `imu,gps` and looked camera-less while drawing a
+  320×180 frame every step. Keith read the table exactly that way. `sensors` is now taken off
+  the live env (`image_observation` on **and** a camera really registered), and `camera_size`
+  off the frame's own shape, so a row that stops building one says so instead of repeating what
+  it was meant to do. **The camera must never go in `read`**: `SensorPack` reads with a parent
+  node, which forces a second `taskMgr.step()` (`base_camera.py:188`) and would charge the
+  benchmark for a frame no training loop draws. Row 3 was doing that *and* sending the image
+  twice, the observation it ships already being the image stack - measured over the same
+  drive, **3601.0 KB a step against 2700.9** once the camera left its read list.
+- **The camera is about three quarters of a step, so it is what the sweep mostly measures.**
+  `--rows 2,6` on `junction-1`, same route and policy either side: 16.69 ms a step against
+  **4.06** at 10 Hz (5.45x real time against **19.82x**), 17.48 against **3.57** at 100 Hz
+  (0.51x against **2.30x**). Row 6 reads imu/gps for exactly this reason — it used to read
+  nothing, so the subtraction moved two things at once.
+- **imu/gps cost ~0.13 ms, which no row can measure.** That is under the run-to-run spread that
+  already defeated row 2 minus row 1; back to back, row 4 has come out dearer than row 2 on
+  noise. Row 4 is therefore labelled as what it is — the vision-only shape — and
+  `sensor_ms_median` answers the sensor question directly.
 - **`--physics-hz` exists because `--step-hz` derives both keys from one number.** 10 Hz gives
   `(0.02, 5)` — **50 Hz of physics, not 10** — and 100 Hz gives `(0.01, 1)`, so one step at
   100 Hz is *cheaper* and `ms/step` is not comparable across rates. `--physics-hz 100

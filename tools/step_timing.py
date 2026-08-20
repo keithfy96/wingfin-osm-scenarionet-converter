@@ -43,12 +43,17 @@ they are missed:
   where the physics costs only 2x. The decision rate is the one that separates, and it
   separates in the caller's loop rather than in any config key: hold the action across N steps.
 
-* **The camera readback is already inside `env.step`.** With `image_observation=True` -
-  which `--render offscreen` sets, and which is the only way a camera exists without a window
-  (`base_env.py:342-347` deletes every `BaseCamera` otherwise) - `ImageStateObservation.observe`
-  calls `perceive()` and rolls the 3-frame stack as part of building the return value
-  (`image_obs.py:85`). It cannot be timed separately and must not be timed twice, so
-  `sensor_ms` here is the *numeric* sensors only and the camera lives in `step_ms`.
+* **Every offscreen row carries a camera, and it is most of what a step costs.** With
+  `image_observation=True` - which `--render offscreen` sets, and which is the only way a
+  camera exists without a window (`base_env.py:342-347` deletes every `BaseCamera` otherwise)
+  - the *observation* **is** the image stack: `ImageStateObservation.observe` calls
+  `perceive()` and rolls the three frames as part of building `env.step`'s return value
+  (`image_obs.py:85`). So there is no seam to time it in, and no setting that draws it without
+  reading it - turning the read off turns the camera off. `sensor_ms` is therefore the
+  *numeric* sensors only, and the camera lives in `step_ms`. It is **about three quarters of
+  a step** - `--rows 2,6` on `junction-1` at 10 Hz measured 16.69 ms against 4.06 with no
+  graphics - so it is what this sweep mostly measures. Row 2 against row 6 prices it, and
+  `carried` is what makes the `sensors` column say the camera is there at all.
 
 Every run writes its own CSV, named for the moment it started, carrying the machine it was
 measured on in every row - so a file from this laptop and a file from a container on another
@@ -104,20 +109,20 @@ ROWS = {
         isolates="a training-shaped step, with a controller driving",
     ),
     3: dict(
-        render="offscreen", policy="remote", read=("camera", "imu", "gps"),
+        render="offscreen", policy="remote", read=("imu", "gps"),
         isolates="your model in the same seat, over --policy-url",
     ),
     4: dict(
         render="offscreen", policy="idm", read=(),
-        isolates="the same without imu/gps: what the numeric sensors cost",
+        isolates="vision only: a camera and MetaDrive's own state, nothing else read",
     ),
     5: dict(
         render="offscreen", policy="idm", read=("imu", "gps"), physics_hz=100.0,
         isolates="physics pinned at 100 Hz: CARLA-shaped at a 10 Hz dataset",
     ),
     6: dict(
-        render=None, policy="idm", read=(),
-        isolates="no graphics at all: the physics-and-managers floor",
+        render=None, policy="idm", read=("imu", "gps"),
+        isolates="no graphics at all: what the camera and the render path cost",
     ),
     # There is deliberately no unthrottled twin of this row. `ForceFPS` is built only
     # onscreen and takes its interval from `physics_world_step_size` (`force_fps.py:12-22`),
@@ -133,6 +138,24 @@ ROWS = {
 }
 
 DEFAULT_ROWS = (1, 2)
+
+
+def carried(row):
+    """Everything a row's drive actually has, camera included.
+
+    `row["read"]` is only what this loop reads *itself*, and the camera is deliberately not
+    in it: with `image_observation` on, MetaDrive draws a frame and rolls the 3-frame stack
+    inside `env.step` while building the observation (`image_obs.py:85`), so reading it here
+    as well forces a second render pass (`base_camera.py:188`) and charges the benchmark for
+    a frame no training loop draws. Every offscreen row therefore carries a camera whether
+    or not `read` mentions one - which is what the `sensors` column has to say, having read
+    as "no camera on rows 1 and 2" for as long as it printed `read` alone.
+
+    This is the *declared* list, for `--list-rows`, which has no env to ask. A run reports
+    what its own env holds; see `drive`.
+    """
+    camera = ("camera",) if row["render"] == "offscreen" else ()
+    return camera + tuple(row["read"])
 
 
 def rate_keys(step_hz, physics_hz):
@@ -276,6 +299,22 @@ def drive(env, row, arguments, url=None):
             return dict(skip_reason=refusal.splitlines()[0].replace("REFUSED: ", ""))
 
     read = tuple(row["read"])
+
+    # What this run *carries*, asked of the live env rather than taken from the row
+    # definition. A camera is only real when `image_observation` is on and one is registered,
+    # and the frame's own shape is the honest camera size - so if anything ever stops
+    # building one, the table says so instead of repeating what it was meant to do.
+    has_camera = bool(env.config.get("image_observation")) and "rgb_camera" in (
+        env.config.get("sensors") or {}
+    )
+    camera_size = ""
+    stack_size = ""
+    if isinstance(observation, dict) and "image" in observation:
+        shape = observation["image"].shape
+        camera_size = f"{int(shape[1])}x{int(shape[0])}"
+        stack_size = int(shape[3]) if len(shape) > 3 else ""
+    sensors = ",".join((("camera",) if has_camera else ()) + read)
+
     pack = SensorPack(env, read) if read else None
     policy = None
     if row["policy"] == "idm":
@@ -346,6 +385,18 @@ def drive(env, row, arguments, url=None):
     return dict(
         gl_renderer=gl_renderer,
         force_fps=force_fps_state,
+        sensors=sensors,
+        camera_size=camera_size,
+        stack_size=stack_size,
+        # Named the same way the declared fallback names it, so a skipped row and a row that
+        # ran describe the same thing: `LidarStateObservation`'s 161 floats are what
+        # `--render none` leaves, and `image_observation` replaces them with a dict whose
+        # `state` half has no lidar block at all (`image_obs.py:40`).
+        observation_kind=(
+            "image+state{}".format(len(observation["state"]))
+            if isinstance(observation, dict) and "state" in observation
+            else f"lidarstate{len(observation)}"
+        ),
         scenario_id=scenario["id"],
         sim_dt_s=sim_dt,
         physics_dt_s=float(env.config["physics_world_step_size"]),
@@ -424,18 +475,57 @@ def _hz(value):
     return f"{float(value):g}"
 
 
+# Where the fuller explanation lives. Named in the listing and in the table's footer,
+# because the question "what is row 5" is asked at the terminal rather than in a browser.
+ROWS_DOC = "docs/step-timing-rows.md"
+
+
+def row_listing():
+    """Every row, rendered from `ROWS` itself.
+
+    From the dict rather than from a copy, so a row added later cannot be missing here -
+    the failure this exists to prevent is a listing that describes a tool from last month.
+    """
+    lines = ["  #  render     policy  sensors         physics  isolates"]
+    for number, row in sorted(ROWS.items()):
+        marks = "  [default]" if number in DEFAULT_ROWS else ""
+        if row["policy"] == "remote":
+            marks += "  [needs --policy-url]"
+        lines.append(
+            "  {:<2} {:<10} {:<7} {:<15} {:<8} {}{}".format(
+                number,
+                row["render"] or "none",
+                row["policy"],
+                ",".join(carried(row)) or "-",
+                f"{_hz(row['physics_hz'])} Hz" if row.get("physics_hz") else "dataset",
+                row["isolates"],
+                marks,
+            )
+        )
+    lines.append("")
+    lines.append(f"  full reference: {ROWS_DOC}")
+    return "\n".join(lines)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Time env.step against the simulated time it buys, at every rate a "
         "workspace holds.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("dataset", nargs="+", help="Converted dataset directories to time.")
+    # `*` rather than `+` so `--list-rows` is answerable without a dataset: it is a question
+    # about the tool, not about a workspace. The refusal below says so in those terms, which
+    # argparse's own "the following arguments are required" would not.
+    parser.add_argument("dataset", nargs="*", help="Converted dataset directories to time.")
+    parser.add_argument(
+        "--list-rows", action="store_true",
+        help=f"Print what every row measures and exit. The same table, longer, is in {ROWS_DOC}.",
+    )
     parser.add_argument(
         "--rows", default=",".join(str(number) for number in DEFAULT_ROWS),
-        help="Which configurations to run, comma separated. The default pair differs only in "
-        "who drives; read `policy` rather than the difference between them. Others: "
-        + "; ".join("{}={}".format(number, row["isolates"]) for number, row in ROWS.items()),
+        help="Which configurations to run, comma separated - see --list-rows, or "
+        f"{ROWS_DOC}. The default pair differs only in who drives; read `policy` rather "
+        "than the difference between them.",
     )
     parser.add_argument(
         "--label", default=None,
@@ -456,7 +546,9 @@ def main():
     parser.add_argument("--policy-url", default=None, help="Where row 3's model is listening.")
     parser.add_argument(
         "--warmup", type=int, default=WARMUP_STEPS,
-        help="Steps dropped from the distribution. They stay in wall_seconds.",
+        help="Steps driven before the clock starts, so no row is charged for the graphics "
+        "driver warming up. They are outside wall_seconds as well as outside the "
+        "distribution; reset_seconds carries the terrain build separately.",
     )
     parser.add_argument("--max-steps", type=int, default=0, help="Cap the drive. 0 is no cap.")
     parser.add_argument("--scenario-index", type=int, default=0, help="Which scenario to drive.")
@@ -464,6 +556,17 @@ def main():
     parser.add_argument("--csv", default=None, help="Name the CSV outright. Refuses to overwrite.")
     parser.add_argument("--no-csv", action="store_true", help="Print the table and write nothing.")
     arguments = parser.parse_args()
+
+    if arguments.list_rows:
+        print(row_listing())
+        return 0
+    if not arguments.dataset:
+        print(
+            "result       FAILED: name at least one dataset directory to time, e.g.\n"
+            "             tools/step_timing.py workspaces/junction-1/scenarionet-10hz\n"
+            "             (--list-rows needs no dataset; it only says what each row measures)"
+        )
+        return 1
 
     try:
         wanted = [int(part) for part in arguments.rows.split(",") if part.strip()]
@@ -491,6 +594,11 @@ def main():
     print("  gpu  {}      gl  {}".format(facts["gpu_name"] or "none reported", gl))
     print("  env  python {} / numpy {} / {}".format(
         facts["python"], facts["numpy"], facts["metadrive"]))
+    # Said here because it is the largest single thing being measured and was invisible: the
+    # camera is drawn and read on every offscreen row, and its cost lands inside ms/step.
+    if any(ROWS[number]["render"] == "offscreen" for number in wanted):
+        print("  cam  {}x{} RGB, 3-frame stack, drawn and read inside env.step on every "
+              "offscreen row".format(*CAMERA_SIZE))
     print("")
     print(HEADER)
 
@@ -519,16 +627,15 @@ def main():
                 label=label, timestamp=stamp, gl_max_texture=ceiling or "",
                 dataset=os.path.basename(os.path.normpath(dataset)),
                 row=number, render=row["render"] or "none", policy=row["policy"],
-                sensors=",".join(row["read"]),
-                # MetaDrive reads the camera inside `env.step` when `image_observation` is on
-                # (`image_obs.py:85`), so on every row but 3 the image costs what it costs
-                # there. Row 3's `SensorPack` reads it *again* with a parent node, which
-                # forces another `taskMgr.step()` - real for a hosted model, and named here so
-                # the row is not read as the model being slow.
-                camera_read_mode=(
-                    "observation+parent" if row["policy"] == "remote"
-                    else "observation" if offscreen else "none"
-                ),
+                # Declared, so a row that never gets as far as an env still says what it
+                # would have carried. A row that runs overwrites all four from its own env.
+                sensors=",".join(carried(row)),
+                # MetaDrive draws the camera and reads it inside `env.step` when
+                # `image_observation` is on (`image_obs.py:85`), so the image costs what it
+                # costs there on every offscreen row. No row reads one in the timing loop as
+                # well: that forces a second render pass and would charge the benchmark for a
+                # frame no training loop draws.
+                camera_read_mode="observation" if offscreen else "none",
                 camera_size="x".join(str(one) for one in CAMERA_SIZE) if offscreen else "",
                 stack_size=3 if offscreen else "", norm_pixel="True" if offscreen else "",
                 observation_kind="image+state41" if offscreen else "lidarstate161",
@@ -573,6 +680,7 @@ def main():
                     sensor_ms_median=result["sensor"]["median"],
                 )
                 for key in (
+                    "sensors", "camera_size", "stack_size", "observation_kind",
                     "gl_renderer", "force_fps", "scenario_id", "sim_dt_s", "physics_dt_s",
                     "decision_repeat", "steps", "measured_steps", "warmup_steps", "sim_seconds",
                     "wall_seconds", "realtime_factor", "reset_seconds", "arrive_dest",
@@ -586,11 +694,17 @@ def main():
             print(table_line(record))
 
     print("")
+    left = [number for number in sorted(ROWS) if number not in wanted]
+    if left:
+        print("  not run: {}  (--rows adds them; --list-rows says what they measure)".format(
+            ",".join(str(number) for number in left)))
     print("  `policy` is the driver's own cost, timed around the call - read that rather than")
     print("  subtracting one row from another, which about 1 ms of run-to-run spread swamps.")
     print("  rpt is decision_repeat: physics ticks per env.step, so ms/step is not comparable")
-    print("  across rates - x real is. A camera is read inside env.step, so it is in ms/step")
-    print("  and not in the sensor column.")
+    print("  across rates - x real is. Every offscreen row draws and reads a camera; MetaDrive")
+    print("  builds the observation out of it inside env.step, so that cost is in ms/step and")
+    print("  never in the policy or sensor columns. Row 2 against row 6 is what it costs.")
+    print(f"  what every row and column means: {ROWS_DOC}  (or --list-rows)")
 
     if not arguments.no_csv and records:
         path = csv_path(arguments, records[0]["dataset"], label, stamp)

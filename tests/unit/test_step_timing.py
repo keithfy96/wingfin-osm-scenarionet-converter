@@ -20,7 +20,15 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
 
-from step_timing import percentiles, rate_keys  # noqa: E402
+from step_timing import (  # noqa: E402
+    DEFAULT_ROWS,
+    FIELDS,
+    ROWS,
+    carried,
+    percentiles,
+    rate_keys,
+    row_listing,
+)
 
 # -- the rate pair ---------------------------------------------------------------------
 
@@ -136,3 +144,73 @@ def test_a_workspace_with_no_dataset_at_all_is_refused(tmp_path):
     workspace = _workspace(tmp_path)
     with pytest.raises(AssertionError, match="no dataset at all"):
         _list_datasets(workspace)
+
+
+# -- the reference cannot drift from what runs -----------------------------------------
+
+DOC = REPO / "docs" / "step-timing-rows.md"
+
+
+def test_the_listing_describes_every_row_as_the_dict_holds_it():
+    """Rendered from `ROWS`, so a row added later cannot be missing - and its render mode,
+    policy and sensor list cannot be described as something they are not."""
+    listing = row_listing()
+    for number, row in ROWS.items():
+        line = next(
+            (one for one in listing.splitlines() if one.strip().startswith(f"{number} ")), None
+        )
+        assert line is not None, f"row {number} is missing from --list-rows"
+        assert (row["render"] or "none") in line
+        assert row["policy"] in line
+        assert (",".join(carried(row)) or "-") in line
+        assert row["isolates"] in line
+
+
+def test_the_listing_marks_the_default_rows():
+    listing = row_listing()
+    for line in listing.splitlines():
+        for number in ROWS:
+            if line.strip().startswith(f"{number} "):
+                assert ("[default]" in line) == (number in DEFAULT_ROWS)
+
+
+def test_no_row_reads_a_camera_in_the_loop():
+    """Every offscreen row draws and reads a camera - MetaDrive does it inside `env.step`
+    while building the observation - so `sensors` must name one. It must never be in `read`:
+    `SensorPack` reads with a parent node, which forces a second render of the same frame and
+    would charge the benchmark for work no training loop does."""
+    for number, row in ROWS.items():
+        assert "camera" not in row["read"], f"row {number} would render twice a step"
+        if row["render"] == "offscreen":
+            assert "camera" in carried(row), f"row {number} draws a camera and does not say so"
+
+
+def test_the_doc_names_the_sensors_each_row_really_carries():
+    """A doc that says `imu+gps` where the drive renders a camera describes a run that is not
+    happening, which is worse than saying nothing - the camera is most of what a step costs."""
+    doc = DOC.read_text(encoding="utf-8").splitlines()
+    for number, row in ROWS.items():
+        heading = next((one for one in doc if one.startswith(f"### Row {number} ")), None)
+        assert heading is not None, f"the doc has no section for row {number}"
+        listed = next((one for one in doc if one.startswith(f"| **{number}** |")
+                       or one.startswith(f"| {number} |")), None)
+        assert listed is not None, f"row {number} is missing from the doc's row table"
+        for sensor in carried(row):
+            assert sensor in heading, f"row {number}'s heading does not name {sensor}"
+            assert sensor in listed, f"row {number}'s table line does not name {sensor}"
+
+
+def test_the_doc_covers_every_row():
+    """The doc is the fuller version of the same table; a row it does not mention is a row
+    nobody can look up."""
+    doc = DOC.read_text(encoding="utf-8")
+    for number, row in ROWS.items():
+        assert f"### Row {number}" in doc, f"the doc has no section for row {number}"
+        assert row["policy"] in doc
+
+
+def test_the_doc_covers_every_csv_field():
+    """A CSV reference that falls behind the writer is worse than none - a reader trusts it."""
+    doc = DOC.read_text(encoding="utf-8")
+    missing = [field for field in FIELDS if f"`{field}`" not in doc]
+    assert not missing, f"docs/step-timing-rows.md does not describe: {missing}"

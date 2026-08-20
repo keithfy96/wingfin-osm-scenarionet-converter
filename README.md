@@ -612,12 +612,23 @@ out along the way.
 ./step-timing.sh junction-1 -- --rows 1,2,5          # add the pinned-physics row
 ./step-timing.sh junction-1 -- --physics-hz 100      # pin the integrator on every row
 ./step-timing.sh mosque -- --label rig-container     # name the machine in the CSV
+./step-timing.sh -- --list-rows                      # what each row measures, and exit
 ```
+
+**`docs/step-timing-rows.md` is the reference** for what every row, printed column and CSV
+field means. What follows is how to run it and what it found.
 
 The default is **two rows that differ only in who drives** — row 1 replays the recorded track and
 decides nothing, row 2 puts MetaDrive's IDM in the seat. Put your own model behind `--policy-url`
-and run `--rows 3` and it takes the same seat. Both default rows run `--render offscreen`, because
-that is the only way a camera exists without a window.
+and run `--rows 3` and it takes the same seat; nothing else runs unless `--rows` asks for it, which
+is the usual reason a row is absent from a table.
+
+**Both default rows carry a 320×180 camera**, drawn and read every step — `--render offscreen` is
+the only way one exists without a window, and MetaDrive builds the observation out of it inside
+`env.step`. It is **about three quarters of what a step costs**, so it is the thing this sweep is
+mostly measuring. `--rows 2,6` prices it: on this laptop the same 10 Hz drive is 16.69 ms a step
+with the camera and **4.06 without**, 5.45x real time against **19.82x** — and at 100 Hz it is the
+difference between 0.51x and **2.30x**, between slower than the clock and twice as fast as it.
 
 **Read the `policy` column, not the difference between the rows.** Subtracting one row from the
 other was the intent and it does not survive the machine: measured three times over, row 1 came
@@ -636,10 +647,10 @@ Measured on this laptop (RTX 4050, `junction-1`, whole drive):
 
 ```
   #  render     policy  sensors        decide  physics  rpt   steps   sim s  wall s  x real  ms/step  policy    p95
-  1  offscreen  replay  imu,gps          10 Hz    50 Hz  x5     332    33.2     5.7   5.79x   16.80    0.00  21.39
-  2  offscreen  idm     imu,gps          10 Hz    50 Hz  x5     271    27.1     4.5   6.08x   15.48    0.66  18.18
-  1  offscreen  replay  imu,gps         100 Hz   100 Hz  x1    3496    35.0    57.4   0.61x   16.11    0.00  18.80
-  2  offscreen  idm     imu,gps         100 Hz   100 Hz  x1    2219    22.2    38.6   0.57x   16.79    0.68  21.12
+  1  offscreen  replay  camera,imu,gps   10 Hz    50 Hz  x5     332    33.2     5.7   5.79x   16.80    0.00  21.39
+  2  offscreen  idm     camera,imu,gps   10 Hz    50 Hz  x5     271    27.1     4.5   6.08x   15.48    0.66  18.18
+  1  offscreen  replay  camera,imu,gps  100 Hz   100 Hz  x1    3496    35.0    57.4   0.61x   16.11    0.00  18.80
+  2  offscreen  idm     camera,imu,gps  100 Hz   100 Hz  x1    2219    22.2    38.6   0.57x   16.79    0.68  21.12
 ```
 
 **The answer in one line: with a camera, 10 Hz runs at about 6x real time on this laptop and
