@@ -20,8 +20,8 @@ Six stages, each one refusing to run on a hand-off it cannot verify:
   │ normalize │  │ + connectors │  │ (browser, │  │ with your │  │ consistent? │  │ pickles   │
   │           │  │ + findings   │  │  manual)  │  │ decisions │  │             │  │           │
   └───────────┘  └──────────────┘  └───────────┘  └───────────┘  └─────────────┘  └───────────┘
-    source/        lane-model/       review.json    lane-model/    reports/map-     scenarionet/
-    normalized/    preliminary       (you export    reviewed       validation       *.pkl
+    source/        lane-model/       review.json    lane-model/    reports/map-     scenarionet-
+    normalized/    preliminary       (you export    reviewed       validation       10hz/*.pkl
                    .json             it by hand)    .json
 ```
 
@@ -349,17 +349,17 @@ The underlying commands, for anything the script does not cover:
 ```bash
 # load-and-check, no simulator needed
 /home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
-  tools/check_dataset.py workspaces/junction-1/scenarionet
+  tools/check_dataset.py workspaces/junction-1/scenarionet-10hz
 
 # drive it by hand, without the script
 __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
   /home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
-  tools/drive.py workspaces/junction-1/scenarionet --render 3D
+  tools/drive.py workspaces/junction-1/scenarionet-10hz --render 3D
 
 # adding manual line width 0.15 is the default setting
   __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
     /home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
-    tools/drive.py workspaces/mosque/scenarionet --render 3D --line-width-m 0.10
+    tools/drive.py workspaces/mosque/scenarionet-10hz --render 3D --line-width-m 0.10
 ```
 
 Use `tools/drive.py`, not `python -m scenarionet.sim`. Both load the dataset
@@ -371,13 +371,18 @@ picks a terrain size and texture resolution that fit. `--render` also accepts
 
 #### Trying the step rate end to end
 
-Runs straight through, and puts `junction-1` back at 10 Hz where it started. `convert`
-is typed from the repo root, because it takes workspace paths relative to it; the two
-scripts are typed from inside `scripts/`, which they cd out of themselves.
+Runs straight through, and leaves `junction-1` holding both rates. **A rate gets its
+own directory** — no flag writes `scenarionet-10hz`, `--step-hz 100` writes
+`scenarionet-100hz` — because a dataset can only be replayed at the rate it was written
+at, and the scenario filename is the same either way. `drive.sh` and `sensor-survey.sh`
+pick the directory that matches the rate they are about to run at, from `--step-hz`
+after `--` if there is one and from `STEP_HZ` in `.env` otherwise. `convert` is typed
+from the repo root, because it takes workspace paths relative to it; the two scripts are
+typed from inside `scripts/`, which they cd out of themselves.
 
 ```bash
 # 1. no flag changes nothing - the invariant the whole thing rests on
-sha256sum workspaces/junction-1/scenarionet/*.pkl > /tmp/before.txt
+sha256sum workspaces/junction-1/scenarionet-10hz/*.pkl > /tmp/before.txt
 uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yaml \
   --routes workspaces/junction-1/routes/routes.json
 sha256sum -c /tmp/before.txt                                   # all three OK
@@ -389,17 +394,21 @@ uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yam
 # 3. check it. The drivability gate measures a fixed 0.1 s window rather than one
 #    step, so it reports the same worst swing it reported at 10 Hz
 /home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
-  tools/check_dataset.py workspaces/junction-1/scenarionet
+  tools/check_dataset.py workspaces/junction-1/scenarionet-100hz
 
 # 4. drive and survey it, from inside scripts/
 cd scripts
 ./drive.sh junction-1 -- --render none --step-hz 100           # 3516 of 3695 steps
 ./sensor-survey.sh junction-1 -- --step-hz 100                 # IMU differenced over 0.01 s
 
-# 5. the refusal: a 10 Hz dataset driven at 100 Hz names both rates and both fixes
-cd .. && uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yaml \
-  --routes workspaces/junction-1/routes/routes.json
-cd scripts && ./drive.sh junction-1 -- --render none --step-hz 100      # REFUSED
+# 5. the refusal. The scripts cannot reach it any more - they pick the directory that
+#    matches - so it takes drive.py by hand, aimed at the 10 Hz dataset at 100 Hz
+cd .. && /home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
+  tools/drive.py workspaces/junction-1/scenarionet-10hz --render none --step-hz 100
+#    REFUSED, naming both rates and both fixes
+
+# 6. and asking a script for a rate nobody built names the rates that exist
+cd scripts && STEP_HZ=20 ./drive.sh junction-1
 ```
 
 Step 3 reports `step 0.01 s (100 Hz)` and `worst turn 27.9 deg per 0.1 s window (10
@@ -459,7 +468,7 @@ the repo root:
 
 ```bash
 /home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
-  examples/drive_with_a_policy.py workspaces/junction-1/scenarionet
+  examples/drive_with_a_policy.py workspaces/junction-1/scenarionet-10hz
 ```
 
 It ships driving with MetaDrive's own IDM, and the only line a model replaces is
@@ -596,6 +605,83 @@ Four things worth knowing before you point a model at it:
 `docs/scenario-datapoints.md` §10 has the conversion table, the measurements, and what was ruled
 out along the way.
 
+### Time it: how much real time one simulated second costs
+
+```bash
+./step-timing.sh junction-1                          # every rate the workspace holds
+./step-timing.sh junction-1 -- --rows 1,2,5          # add the pinned-physics row
+./step-timing.sh junction-1 -- --physics-hz 100      # pin the integrator on every row
+./step-timing.sh mosque -- --label rig-container     # name the machine in the CSV
+```
+
+The default is **two rows that differ only in who drives** — row 1 replays the recorded track and
+decides nothing, row 2 puts MetaDrive's IDM in the seat. Put your own model behind `--policy-url`
+and run `--rows 3` and it takes the same seat. Both default rows run `--render offscreen`, because
+that is the only way a camera exists without a window.
+
+**Read the `policy` column, not the difference between the rows.** Subtracting one row from the
+other was the intent and it does not survive the machine: measured three times over, row 1 came
+out at 8.90 / 8.99 / 10.07 ms a step and row 2 at 9.35 / 10.35 / 8.99, so the difference read
++0.45, +1.36 and **−1.08** ms while the driver's own cost sat at 0.37–0.43 ms throughout. About a
+millisecond of run-to-run spread swamps it. `policy` is timed directly around the policy call and
+is the number that answers "is my model the slow part"; the replay row is the reference for
+whether the simulator keeps up at all with nothing deciding.
+
+Every run prints its table and writes its own CSV into `<workspace>/reports/`, stamped with the
+moment it started. Nothing is appended to and nothing is overwritten, and every row carries the
+machine it was measured on — host, docker, CPU, GPU, GL ceiling, versions — so a file from a
+container on another box concatenates with this one and needs nothing lined up by hand.
+
+Measured on this laptop (RTX 4050, `junction-1`, whole drive):
+
+```
+  #  render     policy  sensors        decide  physics  rpt   steps   sim s  wall s  x real  ms/step  policy    p95
+  1  offscreen  replay  imu,gps          10 Hz    50 Hz  x5     332    33.2     5.7   5.79x   16.80    0.00  21.39
+  2  offscreen  idm     imu,gps          10 Hz    50 Hz  x5     271    27.1     4.5   6.08x   15.48    0.66  18.18
+  1  offscreen  replay  imu,gps         100 Hz   100 Hz  x1    3496    35.0    57.4   0.61x   16.11    0.00  18.80
+  2  offscreen  idm     imu,gps         100 Hz   100 Hz  x1    2219    22.2    38.6   0.57x   16.79    0.68  21.12
+```
+
+**The answer in one line: with a camera, 10 Hz runs at about 6x real time on this laptop and
+100 Hz runs at 0.6x** — slower than the clock, so an hour of simulated driving takes over an
+hour. And **run it on a quiet machine**: the same configuration measured 8 ms a step early in a
+session and 17 ms after twenty minutes of back-to-back sweeps, which is thermal rather than
+anything in the code. The absolute numbers are worth what the machine's state was worth; the
+ratios within one run are what compares.
+
+**`ms/step` is not comparable across rates and `x real` is**, which is the one way to misread
+this table. `env.step` holds one action across `decision_repeat` physics ticks — `rpt` in the
+table — and MetaDrive's 10 Hz default is `(0.02, 5)`, so **it integrates at 50 Hz, not 10**.
+Going to 100 Hz makes a step *cheaper* by dropping to one tick, while there are ten times as
+many of them.
+
+Three things the numbers above say, none of which were guessable:
+
+- **With a camera in the loop, the camera is the budget.** A 10 Hz step and a 100 Hz step cost
+  the same to within the noise — 16.80 against 16.11 ms above — because one frame is drawn per
+  `env.step` whatever the rate, so the render dominates and the five-against-one physics repeat
+  barely shows. Per *simulated* second that is a full 10x more rendering at 100 Hz against 2x
+  more integration, which is the whole of the 10x difference in `x real`.
+- **The camera readback is inside `env.step`, not beside it.** With `image_observation=True`,
+  `ImageStateObservation.observe` calls `perceive()` and rolls the 3-frame stack as part of
+  building the return value, so it cannot be timed separately and must not be timed twice. The
+  `sensors` column and `sensor_ms` are the *numeric* sensors only.
+- **The per-step overhead is what 100 Hz multiplies, not the physics.** With no graphics at all
+  (`--rows 6`), pinning the integrator finer gives 2.14 / 2.44 / 2.87 ms a step at 5 / 10 / 20
+  ticks — about **1.90 ms of fixed overhead plus 0.049 ms a tick**. Ten times as many steps
+  means ten times that 1.90 ms.
+
+**`--physics-hz` is the second dial, and it exists for the comparison with CARLA.** `--step-hz`
+derives both keys from one number, so 10 Hz decisions with 100 Hz physics cannot be asked for —
+and that pairing is precisely CARLA's default (`fixed_delta_seconds` 0.1,
+`max_substep_delta_time` 0.01, `max_substeps` 10). Benchmarked as shipped, MetaDrive at 10 Hz is
+integrating at half of what CARLA does at the same tick rate. `--physics-hz 100 --step-hz 10`
+is the matched shape, and it is also the likely configuration for camera-based training: full
+integration, a tenth of the rendering.
+
+A rate that does not divide the step is refused rather than rounded, because a decision cannot
+be finer than a physics tick.
+
 ### Look at the point cloud
 
 ```bash
@@ -652,7 +738,7 @@ In a training loop use the example instead, which needs no window at all:
 
 ```bash
 /home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
-  examples/drive_with_a_policy.py workspaces/junction-1/scenarionet \
+  examples/drive_with_a_policy.py workspaces/junction-1/scenarionet-10hz \
   --policy-url http://127.0.0.1:8642 --sensors imu,gps
 ```
 
@@ -713,7 +799,8 @@ The client refuses an action MetaDrive would have swallowed. `action_check` is o
   reports/                  every stage's JSON + Markdown report
   inspection/               one self-contained HTML page per stage
   routes/routes.json        hand-downloaded from the route builder
-  scenarionet/              dataset_summary.pkl, dataset_mapping.pkl, sd_*.pkl
+  scenarionet-10hz/         dataset_summary.pkl, dataset_mapping.pkl, sd_*.pkl
+  scenarionet-100hz/        the same routes converted at another rate, if you made one
 ```
 
 Each stage records its result and a sha256 into `source/manifest.json`, and the next
@@ -912,7 +999,7 @@ are deliberately covered by the same test cases (`web/test/route/geometry.test.t
 and `tests/unit/test_ego_route.py`) — if they ever diverge, the page would offer
 drives the converter refuses.
 
-Three pickles land in `scenarionet/`: one `sd_*.pkl` per scenario, plus
+Three pickles land in `scenarionet-<rate>hz/`: one `sd_*.pkl` per scenario, plus
 `dataset_summary.pkl` and `dataset_mapping.pkl`. They're written through a custom
 pickler because numpy 2 stamps a reference to `numpy._core` into the stream, which
 numpy 1.24 on Python 3.8 — the MetaDrive side — cannot resolve. Anything that changes
@@ -970,7 +1057,7 @@ src/osm_scenario/
 web/                  TypeScript sources for those clients
 tools/                drive.py, check_dataset.py, signal_control.py,
                       agent_env.py, sensor_survey.py, camera_rig.py, policy_client.py,
-                      geodesy.py   (all run under MetaDrive's venv)
+                      step_timing.py, geodesy.py   (all run under MetaDrive's venv)
                       view_point_cloud.py   (this repo's venv + open3d)
 examples/             drive_with_a_policy.py — the loop your own policy goes in
                       policy_server.py — the model's side, stdlib only, any interpreter

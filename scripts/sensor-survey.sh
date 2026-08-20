@@ -6,7 +6,7 @@
 #   ./scripts/sensor-survey.sh junction-1            # override the workspace for this run
 #   ./scripts/sensor-survey.sh -- --policy straight  # everything after -- goes to the tool
 #   ./scripts/sensor-survey.sh -- --camera-width 640 --camera-height 360
-#   ./scripts/sensor-survey.sh -- --step-hz 100      # every numeric sensor at 100 Hz
+#   ./scripts/sensor-survey.sh -- --step-hz 100      # the 100 Hz dataset, sensors at 100 Hz
 #   GPU=integrated ./scripts/sensor-survey.sh        # force the built-in graphics
 #
 #   # a multi-camera rig, in place of the single forward camera and the point cloud
@@ -27,7 +27,9 @@
 #   STEP_HZ           how many times a second the simulator advances; MetaDrive's own 10
 #                     applies when unset. It is what the IMU is differenced over, so it is
 #                     what makes the recorded acceleration a 100 Hz signal rather than a 10 Hz
-#                     one -- and it is the rate the policy is called at
+#                     one -- and it is the rate the policy is called at. It also picks
+#                     *which* dataset is surveyed, because a workspace holds one per rate:
+#                     STEP_HZ=100 surveys scenarionet-100hz. A --step-hz after -- wins.
 
 # shellcheck source=scripts/_common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
@@ -37,7 +39,7 @@ PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --) shift; PASSTHROUGH=("$@"); break ;;
-        -h|--help) sed -n '2,31p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
+        -h|--help) sed -n '2,33p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
         -*) die "unknown option: $1
   This script takes only a workspace. To pass $1 to sensor_survey.py, put it after --:
     ./scripts/sensor-survey.sh ${POSITIONAL:-<workspace>} -- $1" ;;
@@ -53,9 +55,7 @@ MD_PY="${METADRIVE_PYTHON:-/home/keith/Desktop/work/wingfin/metadrive/.venv/bin/
   It is a different interpreter from this repo's on purpose -- MetaDrive is 3.8 / numpy 1.24.
   Set METADRIVE_PYTHON in .env if the checkout lives somewhere else."
 
-DATASET="$WS/scenarionet"
-[[ -f "$DATASET/dataset_summary.pkl" ]] || die "no dataset at $DATASET.
-  Run ./scripts/run-stages-4-6.sh${POSITIONAL:+ $POSITIONAL} first."
+resolve_dataset ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}
 
 # The survey drives, so it needs a recorded car for the same reason drive.sh does:
 # ScenarioMapManager.reset calls get_sdc_track() unconditionally and a map-only dataset dies
@@ -98,6 +98,9 @@ fi
 ARGS+=(${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"})
 
 note "workspace  $WS"
+# Named because a workspace holds one dataset per rate, so which one this is cannot be read
+# off the workspace alone.
+note "dataset    ${DATASET#"$WS/"}"
 note "python     $MD_PY"
 if [[ $USE_NVIDIA -eq 1 ]]; then
     note "gpu        discrete, via PRIME offload (GPU=$GPU)"

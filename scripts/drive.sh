@@ -6,7 +6,7 @@
 #   ./scripts/drive.sh junction-1               # override the workspace for this run
 #   ./scripts/drive.sh -- --render 2D           # everything after -- goes to tools/drive.py
 #   ./scripts/drive.sh -- --line-width-m 0.1    # thinner lane lines, this run only
-#   ./scripts/drive.sh -- --step-hz 100         # 100 Hz; the dataset must match
+#   ./scripts/drive.sh -- --step-hz 100         # drives that workspace's 100 Hz dataset
 #   GPU=integrated ./scripts/drive.sh           # force the built-in graphics
 #
 # Why a script rather than a command: MetaDrive runs on its own interpreter (3.8 / numpy 1.24,
@@ -21,8 +21,10 @@
 #   LINE_INTERVAL_M   how finely a painted line is sampled; 2.0 restores MetaDrive's dashes
 #                     when unset, and a --line-width-m after -- still wins over this
 #   STEP_HZ           how many times a second the simulator advances; MetaDrive's own 10
-#                     applies when unset. A dataset converted at another rate must be driven
-#                     at that rate -- drive.py refuses a mismatch rather than driving it wrong
+#                     applies when unset. It also picks *which* dataset is driven, because a
+#                     workspace holds one per rate -- STEP_HZ=100 drives scenarionet-100hz --
+#                     and a dataset can only be replayed at the rate it was written at. A
+#                     --step-hz after -- wins over this, for the dataset as well as the run.
 
 # shellcheck source=scripts/_common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
@@ -32,7 +34,7 @@ PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --) shift; PASSTHROUGH=("$@"); break ;;
-        -h|--help) sed -n '2,25p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
+        -h|--help) sed -n '2,27p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
         -*) die "unknown option: $1
   This script takes only a workspace. To pass $1 to drive.py, put it after --:
     ./scripts/drive.sh ${POSITIONAL:-<workspace>} -- $1" ;;
@@ -48,9 +50,7 @@ MD_PY="${METADRIVE_PYTHON:-/home/keith/Desktop/work/wingfin/metadrive/.venv/bin/
   It is a different interpreter from this repo's on purpose -- MetaDrive is 3.8 / numpy 1.24.
   Set METADRIVE_PYTHON in .env if the checkout lives somewhere else."
 
-DATASET="$WS/scenarionet"
-[[ -f "$DATASET/dataset_summary.pkl" ]] || die "no dataset at $DATASET.
-  Run ./scripts/run-stages-4-6.sh${POSITIONAL:+ $POSITIONAL} first."
+resolve_dataset ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}
 
 # ScenarioEnv has no start-and-end setting: ScenarioMapManager.reset calls get_sdc_track()
 # unconditionally, so a dataset with no recorded car dies on KeyError('None') deep inside
@@ -102,6 +102,9 @@ fi
 ARGS+=(${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"})
 
 note "workspace  $WS"
+# Named because a workspace holds one dataset per rate, so which one this is cannot be read
+# off the workspace alone.
+note "dataset    ${DATASET#"$WS/"}"
 note "python     $MD_PY"
 if [[ $USE_NVIDIA -eq 1 ]]; then
     note "gpu        discrete, via PRIME offload (GPU=$GPU)"

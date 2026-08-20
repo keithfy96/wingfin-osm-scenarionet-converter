@@ -44,6 +44,8 @@ from osm_scenario.conversion import (
     _scenario,
     _step_seconds,
     convert_scenario,
+    dataset_dir_name,
+    report_file_name,
     scenario_file_name,
 )
 from osm_scenario.generation import MIN_TRIMMED_LANE_M
@@ -1565,10 +1567,63 @@ def test_a_faster_rate_writes_the_same_drive_with_ten_times_the_samples(tmp_path
     # The same drive: same distance, same duration, same speeds. Only the density moved.
     report = json.loads(report_path.read_text(encoding="utf-8"))
     slow_report = json.loads(
-        (slow_ws / "reports" / "scenario-conversion.json").read_text(encoding="utf-8")
+        (slow_ws / "reports" / report_file_name(0.1)).read_text(encoding="utf-8")
     )
     for key in ("distance_m", "duration_s", "speed_kph", "slowest_kph"):
         assert report["routes"][0][key] == pytest.approx(slow_report["routes"][0][key], abs=1e-9)
+
+
+def test_two_rates_stand_side_by_side_in_one_workspace(tmp_path: Path) -> None:
+    """A dataset can only be replayed at the rate it was written at, so each gets a home.
+
+    Nothing in the scenario id says which rate a build is - it is
+    `<workspace>-<fingerprint16>-<route name>` - so the two rates want the same filename,
+    and the stale-pickle sweep below the write loop would delete whichever was there first.
+    The rate is in the directory name instead, which makes the sweep clean one rate's
+    dataset without touching the other's.
+    """
+    workspace = _workspace(tmp_path, _model())
+    routes = _routes_file(workspace)
+    slow_paths, *_ = convert_scenario(
+        workspace=workspace, config=ConverterConfig(config_version=1), routes=routes
+    )
+    fast_paths, *_ = convert_scenario(
+        workspace=workspace,
+        config=ConverterConfig(config_version=1),
+        routes=routes,
+        step_hz=100.0,
+    )
+
+    assert slow_paths[0].parent == workspace / "scenarionet-10hz"
+    assert fast_paths[0].parent == workspace / "scenarionet-100hz"
+    # The second run's sweep must not have taken the first run's pickle with it.
+    for paths in (slow_paths, fast_paths):
+        for path in paths:
+            assert path.exists()
+        assert (paths[0].parent / "dataset_summary.pkl").exists()
+        assert (paths[0].parent / "dataset_mapping.pkl").exists()
+
+    slow = pickle.loads(slow_paths[0].read_bytes())
+    fast = pickle.loads(fast_paths[0].read_bytes())
+    assert slow["metadata"]["ts"][1] - slow["metadata"]["ts"][0] == pytest.approx(0.1)
+    assert fast["metadata"]["ts"][1] - fast["metadata"]["ts"][0] == pytest.approx(0.01)
+
+    # One report per rate, for the same reason: it carries each written file's sha256 and
+    # size, so a single report would describe the other build's bytes.
+    reports = {}
+    for rate, paths in ((0.1, slow_paths), (0.01, fast_paths)):
+        path = workspace / "reports" / report_file_name(rate)
+        reports[rate] = json.loads(path.read_text(encoding="utf-8"))
+        assert reports[rate]["step_hz"] == pytest.approx(1.0 / rate)
+        assert reports[rate]["dataset_dir"] == paths[0].parent.name
+    assert reports[0.1]["artifacts"] != reports[0.01]["artifacts"]
+
+    # The manifest names the build it is describing rather than leaving a reader to guess
+    # which of the two it belongs to.
+    manifest = json.loads((workspace / "source" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["stage_6"]["dataset_dir"] == "scenarionet-100hz"
+    assert manifest["stage_6"]["step_hz"] == pytest.approx(100.0)
+    assert manifest["stage_6"]["report"] == f"reports/{report_file_name(0.01)}"
 
 
 def test_every_light_state_array_is_as_long_as_the_faster_scenario(tmp_path: Path) -> None:
@@ -1943,10 +1998,10 @@ def test_all_three_pages_are_written_and_recorded_beside_the_dataset(tmp_path: P
     # Same argument for the lights: a dataset with none is how every dataset starts, and the
     # page is the only place a plan can be made.
     assert signal_path == workspace / "inspection" / "stage-6-signal-builder.html"
-    # In `inspection/`, not in `scenarionet/`: MetaDrive reads that directory and it must
-    # hold the dataset and nothing else.
+    # In `inspection/`, not in the dataset directory: MetaDrive reads that directory and it
+    # must hold the dataset and nothing else.
     for path in (html_path, builder_path, signal_path):
-        assert not (workspace / "scenarionet" / path.name).exists()
+        assert not (workspace / dataset_dir_name(0.1) / path.name).exists()
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["artifacts"]["reachability_html"]["path"] == (

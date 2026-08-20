@@ -363,6 +363,34 @@ def scenario_file_name(scenario_id: str) -> str:
     return f"sd_{_DATASET_NAME}_{_DATASET_VERSION}_{scenario_id}.pkl"
 
 
+def dataset_dir_name(time_step_s: float) -> str:
+    """The workspace-relative directory one rate's dataset lives in.
+
+    A dataset can only be replayed at the rate it was written at, and nothing in the
+    scenario id says which rate that is - it is `<workspace>-<fingerprint16>-<route name>`,
+    so the 10 Hz and 100 Hz builds of one route want the same filename. Naming the
+    directory after the rate is what lets both stand in one workspace, and it makes the
+    stale-pickle sweep below clean one rate's dataset without touching the other's.
+
+    Derived from the interval rather than from the `--step-hz` argument, so no flag and
+    `--step-hz 10` land in the same place - the same rule `.env.example` states for
+    `STEP_HZ`. `_step_seconds` has already refused any rate whose interval is not a whole
+    number of microseconds, so the worst name this can produce is `scenarionet-12.5hz`.
+    """
+    return f"scenarionet-{1.0 / time_step_s:g}hz"
+
+
+def report_file_name(time_step_s: float) -> str:
+    """The Stage 6 report for one rate, named the same way and for the same reason.
+
+    The report carries each written file's sha256 and size and the scenario filenames, all
+    of which move with the rate. One report over two live datasets would describe the other
+    one's bytes, which is exactly the stale-artefact-looks-current state the pickle sweep
+    exists to prevent.
+    """
+    return f"scenario-conversion-{1.0 / time_step_s:g}hz.json"
+
+
 class ConversionError(RuntimeError):
     """Raised when the validated map cannot be converted."""
 
@@ -2096,7 +2124,7 @@ def convert_scenario(
     if not scenarios:
         scenarios = [scenario]
 
-    dataset_dir = workspace / "scenarionet"
+    dataset_dir = workspace / dataset_dir_name(time_step_s)
     summary_path = dataset_dir / SUMMARY_FILE
     mapping_path = dataset_dir / MAPPING_FILE
 
@@ -2199,6 +2227,12 @@ def convert_scenario(
         "converted": scenario["metadata"]["counts"],
         "map_features": len(scenario["map_features"]),
         "routing": routing,
+        # The rate is already in the file, as the spacing of `metadata.ts`, but reading it
+        # back out of a pickle needs MetaDrive's interpreter. Named here beside the
+        # directory it decided, so a reader can tell which of a workspace's datasets this
+        # report describes without opening one.
+        "step_hz": 1.0 / time_step_s,
+        "dataset_dir": dataset_dir.relative_to(workspace).as_posix(),
         # Named outside the pickle because these are the strings every MetaDrive entry point
         # keys on, and the first thing to check when a load fails.
         "scenario_files": [path.name for path in scenario_paths],
@@ -2212,7 +2246,7 @@ def convert_scenario(
         "artifacts": artifacts,
     }
 
-    report_path = workspace / "reports" / "scenario-conversion.json"
+    report_path = workspace / "reports" / report_file_name(time_step_s)
     _write_text_atomic(report_path, json.dumps(report, indent=2, sort_keys=True) + "\n")
 
     manifest["stage_6"] = {
@@ -2221,6 +2255,9 @@ def convert_scenario(
         "converted": report["converted"],
         "map_features": report["map_features"],
         "routing": routing,
+        "step_hz": report["step_hz"],
+        "dataset_dir": report["dataset_dir"],
+        "report": report_path.relative_to(workspace).as_posix(),
         "routes": report["routes"],
         "signals": report["signals"],
         "scenario_files": report["scenario_files"],

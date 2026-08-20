@@ -213,7 +213,7 @@ side instead:
 
 ```bash
 /home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
-  tools/check_dataset.py workspaces/junction-1/scenarionet
+  tools/check_dataset.py workspaces/junction-1/scenarionet-10hz
 ```
 
 `conversion.py` pickles arrays through `_PortablePickler` precisely because of
@@ -239,7 +239,7 @@ uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yam
   --routes workspaces/junction-1/routes/routes.json
 # 3. drive (MetaDrive's own venv)
 /home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
-  tools/drive.py workspaces/junction-1/scenarionet --render 3D
+  tools/drive.py workspaces/junction-1/scenarionet-10hz --render 3D
 ```
 
 **Use `tools/drive.py`, not `python -m scenarionet.sim`.** `sim.py` loads the same
@@ -796,6 +796,31 @@ Same reason as `--speed-kph` and the render flags. `STEP_HZ` in `.env` reaches `
 is baked into bytes the review never re-checks, and picking it up from a machine-local file is
 how two workspaces end up at different rates with nobody having decided.
 
+**A rate gets its own directory, because the filename cannot carry it (2026-08-20).** The
+scenario id is `<workspace>-<fingerprint16>-<route name>`, so the 10 Hz and the 100 Hz build of
+one route want the *same* `sd_*.pkl` name — and the stale-pickle sweep under the write loop
+deletes whatever the current run did not write, so the second convert took the first one out.
+`conversion.dataset_dir_name` names it from the **interval** rather than from the `--step-hz`
+argument, so no flag and `--step-hz 10` both land in `scenarionet-10hz`. `routes.json` carries
+no timing at all — `{name, start_lane, end_lane}` and the identity block — so the *same* routes
+file feeds both builds, and picking a rate is a convert-time decision, never a route.
+
+Three consequences worth not re-deriving:
+
+- **The sweep is now per rate**, which is what it should be: a route dropped from `routes.json`
+  is cleaned out of that rate's directory and the other rate's dataset is untouched.
+- **`reports/scenario-conversion-<rate>hz.json` follows the same rule**, because the report
+  carries each written file's sha256 and size — one report over two live datasets would
+  describe the other one's bytes. `check_dataset.py`'s `--png` default is
+  `stage-6-map-<rate>hz.png` for the same reason. `manifest["stage_6"]` stays a single object
+  and gains `step_hz`, `dataset_dir` and `report`, naming which build it describes.
+- **`_common.sh:resolve_dataset` is what `drive.sh` and `sensor-survey.sh` select with**, from
+  a `--step-hz` in their own passthrough args first and `STEP_HZ` second — one way to say the
+  rate, so `-- --step-hz 100` picks the 100 Hz dataset rather than pointing a 100 Hz simulator
+  at the 10 Hz one and being refused. A bare `<ws>/scenarionet` from before the rename still
+  drives, but **only while the workspace has no rate-named dataset at all**; once it has one,
+  the bare directory is a stale build and not an answer to which rate was asked for.
+
 **And no new metadata key.** `metadata.ts` spacing *is* the rate, exactly — an integer step
 index times the interval — so `metadata.dt` would move the bytes of every scenario ever
 converted without one, for information already in the file. Everything reads it back off `ts`.
@@ -833,6 +858,85 @@ are ten times as many. **3D tops out at 60 fps either way** (5 frames per 83.4 m
 0.60x real time rather than 1.20x. It is usable, and it is slower than the clock on the wall.
 The light tape is a Python list of colour *strings* per lane per step, so it grows linearly:
 about 5.1 B per lane per step, which a 20-lane plan at 100 Hz turns into ~370 KB a scenario.
+
+### What a step costs is measured now, not quoted (2026-08-20)
+
+`tools/step_timing.py` / `scripts/step-timing.sh` drives every rate a workspace holds and
+reports wall-clock against simulated time. Re-measure with it rather than quoting a number
+from this file.
+
+**And it does not reproduce the four hand-measured `env.step` figures in the table above.**
+Same route, same `--render none`, same replay policy: **2.357 ms at 10 Hz against the 1.094
+recorded, and 2.181 at 100 Hz against 0.848** — about 2.2x both, with the direction preserved
+(100 Hz still cheaper than 10 Hz, because it is one physics tick against five). Not heat: the
+cores were at 773 MHz mean and 63 C when this was taken. The likeliest difference is what the
+older figure timed - `env.step` includes `_get_step_return`, which builds the observation and
+evaluates reward and termination, and a measurement around `_step_simulator` alone would come
+out roughly here. Unresolved, and recorded so the older numbers are not trusted as a baseline.
+
+**The default is two rows that differ only in who drives** — `replay`, which writes the car's
+position from the file and decides nothing, and `idm`, which computes. `--rows 3 --policy-url`
+puts a hosted model in the same seat. Both default rows are `--render offscreen`, because a
+camera cannot exist without one.
+
+**Read `policy_ms`, not the difference between the rows, and that was the plan being wrong
+rather than a preference.** Measured three times over on `junction-1`'s 100 Hz dataset: row 1
+at 8.90 / 8.99 / 10.07 ms a step, row 2 at 9.35 / 10.35 / 8.99, so the subtraction read +0.45,
++1.36 and **−1.08** ms while `policy_ms` held 0.37–0.43 ms throughout. About a millisecond of
+run-to-run spread swamps it, and the two rows do not drive quite the same route anyway — a
+replayed car follows the tape, an IDM car its own line, and it ends early. `policy_ms` is timed
+around the policy call and is the answer; the replay row is the reference for whether the
+simulator keeps up with nothing deciding at all.
+
+**And the machine's state is worth more than the code's.** The same configuration measured
+8 ms a step early in a session and 17 ms after twenty minutes of back-to-back sweeps. Absolute
+figures are only as good as the box was quiet; ratios within one run are what compares.
+
+Six things not to re-derive:
+
+- **The camera readback is inside `env.step` and must not be timed twice.** With
+  `image_observation=True`, `ImageStateObservation.observe` calls `perceive()` and rolls the
+  3-frame stack while building the return value (`image_obs.py:85`) — no parent node, so it is
+  the cheap buffer read. `sensor_ms` here is therefore the *numeric* sensors only. An earlier
+  version of the plan had a row isolating "the readback" by not reading it, which is not a
+  thing that can be arranged.
+- **`--physics-hz` exists because `--step-hz` derives both keys from one number.** 10 Hz gives
+  `(0.02, 5)` — **50 Hz of physics, not 10** — and 100 Hz gives `(0.01, 1)`, so one step at
+  100 Hz is *cheaper* and `ms/step` is not comparable across rates. `--physics-hz 100
+  --step-hz 10` is 100 Hz integration with 10 Hz decisions: CARLA's own default shape
+  (`fixed_delta_seconds` 0.1, `max_substep_delta_time` 0.01, `max_substeps` 10), and the only
+  pairing whose number means anything beside a CARLA figure. A rate that does not divide the
+  step is refused, never rounded.
+- **The per-step overhead is what a higher rate multiplies, not the physics.** Measured with
+  no graphics on `junction-1`: 2.14 / 2.44 / 2.87 ms a step at 5 / 10 / 20 ticks, so about
+  **1.90 ms fixed plus 0.049 ms a tick**. Per simulated second, 10 Hz → 100 Hz is 10x the
+  overhead and only 2x the integration.
+- **With a camera the camera is the budget** — 16.80 ms a step at 10 Hz against 16.11 at
+  100 Hz on one run, identical to within the noise, because one frame is drawn per `env.step`
+  whatever the rate (`base_engine.py:458`, unconditional). So the image rate *is* the step
+  rate, a camera costs a full 10x more per simulated second at 100 Hz, and that is the whole
+  of the difference in real-time factor: **5.79x at 10 Hz against 0.61x at 100 Hz** on the same
+  drive. The decision rate is the only one that separates, and it separates in the caller's
+  loop rather than in any config key.
+- **The first env of a process is dearer than the ones after it**, so `prime` builds and
+  throws one away before anything is measured. Without it the first row carried the graphics
+  driver's shader compilation and cache filling, and since the rows are meant to be compared
+  with each other that is a bias rather than noise. `wall_seconds` also starts *after* the
+  warm-up steps rather than before them, for the same reason — an earlier version counted them
+  in and reported the floor as the dearer of the two rows.
+- **There is no unthrottled 3D row, and that was measured before it was dropped.** `ForceFPS`
+  looked like the thing to raise, but `force_render_fps=1000` gives 16.59 ms a frame against
+  16.67 stock at 100 Hz and 83.34 against 83.50 at 10 Hz, and loading `sync-video #f` into
+  panda3d before the window exists does not move it either. The ceiling is the compositor's
+  60 Hz. The row records `force_fps` — the engine's own state — instead of claiming a number
+  it does not have.
+
+**Every run writes its own CSV**, `<workspace>/reports/step-timing-<label>-<stamp>.csv`, never
+appending and never overwriting, with the machine (host, docker, CPU, GPU, GL ceiling,
+versions) repeated on every row so two machines' files concatenate. `STEP_HZ` is deliberately
+not read: the sweep drives *every* rate, each at the one it was written at, and picking one
+would be the opposite of the comparison. `--label` matters in a container, where the hostname
+is a random id.
 
 **Phase 1 makes 100 Hz *available*, which is narrower than it sounds.** The only things that
 *record* numeric sensors at that rate are `sensor_survey.py`'s per-step CSV and

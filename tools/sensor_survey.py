@@ -1,7 +1,7 @@
 """Drive a converted dataset and report every output MetaDrive can produce, with samples.
 
     <metadrive-checkout>/.venv/bin/python tools/sensor_survey.py \\
-        workspaces/junction-1/scenarionet --render offscreen
+        workspaces/junction-1/scenarionet-10hz --render offscreen
 
 Stage 7c. The question this answers is "what can a model actually see" - camera, lidar, IMU,
 GPS - which cannot be answered from `examples/drive_with_a_policy.py`, because the 161-float

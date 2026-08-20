@@ -1,6 +1,7 @@
 """Open a converted dataset the way MetaDrive opens it, in MetaDrive's own interpreter.
 
-    <metadrive-checkout>/.venv/bin/python tools/check_dataset.py workspaces/junction-1/scenarionet
+    <metadrive-checkout>/.venv/bin/python tools/check_dataset.py \
+        workspaces/junction-1/scenarionet-10hz
 
 This is not part of the package and imports nothing from it, because it does not run on the
 same Python. The repo targets 3.10 and numpy 2; both MetaDrive checkouts run 3.8 and numpy
@@ -122,9 +123,10 @@ def main() -> int:
     parser.add_argument(
         "--png",
         default=None,
-        help="Where to write the map image. Defaults to stage-6-map.png in the dataset's "
-        "parent directory - beside it rather than in it, because MetaDrive reads the "
-        "dataset directory and it must hold nothing but the dataset.",
+        help="Where to write the map image. Defaults to stage-6-map-<rate>hz.png in the "
+        "dataset's parent directory - beside it rather than in it, because MetaDrive reads "
+        "the dataset directory and it must hold nothing but the dataset, and named by rate "
+        "because a workspace holds one dataset per rate.",
     )
     arguments = parser.parse_args()
 
@@ -444,8 +446,12 @@ def main() -> int:
             failures += 1
 
         # Beside the dataset, never inside it: MetaDrive reads that directory, so it holds
-        # the dataset and nothing else.
-        png = arguments.png or os.path.join(os.path.dirname(dataset), "stage-6-map.png")
+        # the dataset and nothing else. Named by the rate this scenario was written at,
+        # because a workspace holds one dataset per rate and a single name would leave the
+        # 10 Hz build's map image showing the 100 Hz one.
+        png = arguments.png or os.path.join(
+            os.path.dirname(dataset), f"stage-6-map-{1.0 / step_s:g}hz.png"
+        )
         import matplotlib
 
         # No display in a container or over ssh. This is a file, not a window.

@@ -67,6 +67,106 @@ resolve_workspace() {
     [[ -f "$WS/source/map.osm" ]] || die "$WS has no source/map.osm."
 }
 
+# Resolve which of $WS's datasets to drive into $DATASET, and the rate it holds into
+# $DATASET_HZ. A workspace holds one dataset per rate -- `convert --step-hz 100` writes
+# `scenarionet-100hz` and no flag writes `scenarionet-10hz` -- because a dataset can only be
+# replayed at the rate it was written at, so the two cannot share a directory.
+#
+# The rate is read from the caller's own passthrough args first and from $STEP_HZ second, so
+# there is one way to say it: `-- --step-hz 100` picks the 100 Hz dataset rather than
+# pointing a 100 Hz simulator at the 10 Hz one and being refused by drive.py.
+#
+# Call after resolve_workspace, with the passthrough args: resolve_dataset "${PASSTHROUGH[@]}"
+resolve_dataset() {
+    DATASET_HZ="${STEP_HZ:-10}"
+    # Last wins, the same way argparse takes a repeated option.
+    local previous=""
+    local word
+    for word in "$@"; do
+        if [[ "$previous" == "--step-hz" ]]; then
+            DATASET_HZ="$word"
+        elif [[ "$word" == --step-hz=* ]]; then
+            DATASET_HZ="${word#--step-hz=}"
+        fi
+        previous="$word"
+    done
+
+    DATASET="$WS/scenarionet-${DATASET_HZ}hz"
+    if [[ -f "$DATASET/dataset_summary.pkl" ]]; then
+        return 0
+    fi
+
+    local have
+    have="$(find "$WS" -mindepth 1 -maxdepth 1 -type d -name 'scenarionet-*hz' -printf '%f ' 2>/dev/null)"
+    if [[ -n "$have" ]]; then
+        die "no ${DATASET_HZ} Hz dataset at $WS/scenarionet-${DATASET_HZ}hz (have: $have).
+  Drive one of those instead, or convert this rate:
+    ${CLI[*]} convert -w $WS --config $CONFIG \\
+      --routes $WS/routes/routes.json --step-hz $DATASET_HZ"
+    fi
+
+    # A dataset converted before the directory carried the rate. Left where it is rather
+    # than renamed, so an existing build keeps driving, and only reached when the workspace
+    # has no rate-named dataset at all -- once it has one, a bare `scenarionet` is a build
+    # from before the rename and not an answer to which rate was asked for. drive.py reads
+    # the rate off the pickle rather than the name, so a mismatch is still refused there.
+    if [[ -f "$WS/scenarionet/dataset_summary.pkl" ]]; then
+        DATASET="$WS/scenarionet"
+        return 0
+    fi
+
+    die "$WS has no dataset at all. Run ./scripts/run-stages-4-6.sh $WS first."
+}
+
+# Print every dataset in $WS, one path per line, ordered by rate. Where `resolve_dataset`
+# picks the one a drive asked for, this is for a tool that wants them all -- the whole point
+# of the step-timing sweep is comparing one rate against another in the same workspace.
+#
+# Falls back to a bare pre-rename `scenarionet` only when there is no rate-named dataset at
+# all, for the same reason `resolve_dataset` does: once a workspace has one, a bare directory
+# is a build from before the rename rather than an answer about a rate.
+list_datasets() {
+    local found=0
+    local name
+    while IFS= read -r name; do
+        [[ -f "$WS/$name/dataset_summary.pkl" ]] || continue
+        printf '%s\n' "$WS/$name"
+        found=1
+    done < <(
+        find "$WS" -mindepth 1 -maxdepth 1 -type d -name 'scenarionet-*hz' -printf '%f\n' \
+            2>/dev/null | sed 's/^scenarionet-//; s/hz$//' | sort -n \
+            | sed 's/^/scenarionet-/; s/$/hz/'
+    )
+
+    if [[ $found -eq 0 && -f "$WS/scenarionet/dataset_summary.pkl" ]]; then
+        printf '%s\n' "$WS/scenarionet"
+        found=1
+    fi
+
+    [[ $found -eq 1 ]] || die "$WS has no dataset at all. Run ./scripts/run-stages-4-6.sh $WS first."
+}
+
+# Decide which card renders into $USE_NVIDIA. It cannot be a flag on the python side: the GLX
+# loader settles it before the process exists, so it is two environment variables in front of
+# the command. drive.sh and sensor-survey.sh keep their own copies of this -- a working file is
+# not disturbed to save a duplicated composition, the same reason `agent_env` gives for not
+# rearranging `drive.py`.
+select_gpu() {
+    GPU="${GPU:-auto}"
+    USE_NVIDIA=0
+    case "$GPU" in
+        auto)
+            if [[ -e /usr/lib/x86_64-linux-gnu/libGLX_nvidia.so.0 ]] \
+                && nvidia-smi -L >/dev/null 2>&1; then
+                USE_NVIDIA=1
+            fi
+            ;;
+        nvidia) USE_NVIDIA=1 ;;
+        integrated) USE_NVIDIA=0 ;;
+        *) die "GPU must be auto, nvidia or integrated (got: $GPU)" ;;
+    esac
+}
+
 # Read a dotted key out of the workspace manifest. Prints nothing and returns 1 when
 # the key is absent, so callers can distinguish missing from empty.
 manifest_get() {

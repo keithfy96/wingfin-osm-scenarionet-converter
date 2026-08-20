@@ -69,6 +69,8 @@ run_stage "Stage 6 - convert to a ScenarioNet dataset" \
 
 banner "Stage 6 is yours"
 note "the dataset is map-only: MetaDrive can load and check it, but not drive it."
+note "it is in $WS/scenarionet-10hz: each rate gets its own directory, because a dataset"
+note "can only be replayed at the rate it was written at. --step-hz 100 makes another."
 note "routes    $WS/inspection/stage-6-route-builder.html   -> routes/routes.json"
 note "signals   $WS/inspection/stage-6-signal-builder.html  -> signals/signals.json"
 note "then      ${CLI[*]} convert -w $WS --config $CONFIG \\"
