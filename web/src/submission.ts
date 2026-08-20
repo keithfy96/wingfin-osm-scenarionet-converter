@@ -57,18 +57,27 @@ export function parseSubmission(raw: string): ReviewSubmission {
   return candidate as ReviewSubmission;
 }
 
-export type IdentityRelation = "same" | "regenerated" | "foreign";
+export type IdentityRelation = "same" | "regenerated" | "relocated" | "other-map";
 
 /**
  * How an imported submission relates to the map now open.
  *
- * `foreign` means a different workspace or a different source OSM — never
- * loadable. `regenerated` means the same source reviewed against an older
- * generation, which is the only case migration applies to.
+ * Nothing here refuses a load. What makes a decision safe to carry is its
+ * evidence checksum, enforced one layer down in `ReviewState.loadDecisions`:
+ * a decision lands only when this model asks a byte-identical question. A
+ * finding id is built from the rule plus OSM ids plus content-hashed feature
+ * ids and carries no workspace name, so the same junction mapped in two
+ * extracts produces the same id — which is what makes a cross-map load useful
+ * rather than merely permitted.
+ *
+ * The relation exists to tell the reader which of the four they are looking
+ * at, because the confidence differs: `same` is their own work restored,
+ * `regenerated` the same map at a moved fingerprint, `relocated` the same
+ * source OSM in another workspace, `other-map` a genuinely different extract.
  */
 export function compareIdentity(mine: ReviewIdentity, theirs: ReviewIdentity): IdentityRelation {
-  if (mine.workspace !== theirs.workspace) return "foreign";
-  if (mine.source_checksum !== theirs.source_checksum) return "foreign";
+  if (mine.source_checksum !== theirs.source_checksum) return "other-map";
+  if (mine.workspace !== theirs.workspace) return "relocated";
   if (mine.generation_fingerprint !== theirs.generation_fingerprint) return "regenerated";
   return "same";
 }

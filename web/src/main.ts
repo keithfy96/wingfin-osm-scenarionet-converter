@@ -133,21 +133,30 @@ function boot(): void {
     try {
       const submission = parseSubmission(await file.text());
       const relation = compareIdentity(payload.identity, submission.identity);
-      if (relation === "foreign") {
-        draftStatus.textContent =
-          "That review belongs to a different workspace or a different source OSM. Not loaded.";
-        return;
-      }
       const summary = state.loadDecisions(submission.decisions);
-      const prefix =
-        relation === "regenerated"
-          ? "Loaded against a regenerated model. "
-          : "Loaded. ";
+      // No relation is refused. A decision only lands where this model asks a
+      // byte-identical question, so a review from another map fills in what
+      // genuinely matches and drops the rest -- which is the whole reason
+      // migration belongs in Stage 3 rather than in Stage 4.
+      const from = submission.identity.workspace;
+      const prefix = {
+        same: "Loaded. ",
+        regenerated: "Loaded against a regenerated model. ",
+        relocated: `Loaded from workspace ${from}, the same source OSM. `,
+        "other-map": `Loaded from workspace ${from}, a different map. `,
+      }[relation];
+      const missing =
+        relation === "other-map"
+          ? `${summary.unknown} for findings this map does not have. `
+          : `${summary.unknown} for findings that no longer exist. `;
+      const caution =
+        relation === "other-map"
+          ? "Every decision carried over answers a byte-identical finding here; check them before exporting."
+          : "Invalidated findings are back to unresolved.";
       draftStatus.textContent =
         `${prefix}${summary.carried} decision(s) carried over, ` +
         `${summary.invalidated} invalidated by changed evidence, ` +
-        `${summary.unknown} for findings that no longer exist. ` +
-        `Invalidated findings are back to unresolved.`;
+        `${missing}${caution}`;
     } catch (caught) {
       draftStatus.textContent =
         caught instanceof SubmissionError ? caught.message : `Could not read that file: ${String(caught)}`;

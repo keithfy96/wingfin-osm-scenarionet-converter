@@ -79,9 +79,15 @@ describe("parsing a submission", () => {
 });
 
 describe("identity comparison", () => {
-  it("calls a different workspace or source foreign, never loadable", () => {
-    expect(compareIdentity(IDENTITY, { ...IDENTITY, workspace: "other" })).toBe("foreign");
-    expect(compareIdentity(IDENTITY, { ...IDENTITY, source_checksum: "other" })).toBe("foreign");
+  it("calls the same source OSM in another workspace relocated, not a different map", () => {
+    expect(compareIdentity(IDENTITY, { ...IDENTITY, workspace: "other" })).toBe("relocated");
+  });
+
+  it("calls a different source OSM other-map, whatever the workspace is called", () => {
+    expect(compareIdentity(IDENTITY, { ...IDENTITY, source_checksum: "other" })).toBe("other-map");
+    expect(
+      compareIdentity(IDENTITY, { ...IDENTITY, workspace: "other", source_checksum: "other" }),
+    ).toBe("other-map");
   });
 
   it("calls a changed generation fingerprint regenerated, the only migration case", () => {
