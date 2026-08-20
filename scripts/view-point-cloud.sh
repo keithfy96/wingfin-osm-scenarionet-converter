@@ -31,7 +31,7 @@ PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --) shift; PASSTHROUGH=("$@"); break ;;
-        -h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^#\s\?//'; exit 0 ;;
+        -h|--help) sed -n '2,24p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
         -*) die "unknown option: $1
   This script takes only a workspace. To pass $1 to view_point_cloud.py, put it after --:
     ./scripts/view-point-cloud.sh ${POSITIONAL:-<workspace>} -- $1" ;;

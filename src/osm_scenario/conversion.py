@@ -1618,6 +1618,7 @@ def _scenario(
     manifest: dict[str, Any],
     model_sha256: str,
     plan: SignalPlan | None,
+    time_step_s: float = TIME_STEP_S,
 ) -> tuple[
     dict[str, Any],
     dict[str, Any],
@@ -1675,7 +1676,7 @@ def _scenario(
         # `_with_route`, because `_check_object_state_dict` requires every state array to be
         # exactly as long as the scenario.
         "dynamic_map_states": (
-            light_states(plan, model=model, steps=1, time_step_s=TIME_STEP_S) if plan else {}
+            light_states(plan, model=model, steps=1, time_step_s=time_step_s) if plan else {}
         ),
         "map_features": features,
         "metadata": {
@@ -1781,7 +1782,7 @@ def _scenario(
             # phase plan that could not be told apart from a surveyed one is the thing this
             # field exists to prevent. `signal_plan.plan_metadata` writes it.
             **(
-                {"signals": plan_metadata(plan, model=model, time_step_s=TIME_STEP_S)}
+                {"signals": plan_metadata(plan, model=model, time_step_s=time_step_s)}
                 if plan
                 else {}
             ),
@@ -1896,6 +1897,7 @@ def _with_route(
     track: dict[str, Any],
     model: PreliminaryLaneModel,
     plan: SignalPlan | None,
+    time_step_s: float = TIME_STEP_S,
 ) -> dict[str, Any]:
     """The map-only scenario, plus the car that turns it into a drive.
 
@@ -1913,8 +1915,11 @@ def _with_route(
     metadata = {
         **base["metadata"],
         "scenario_id": scenario_id,
-        # `sanity_check` reads `.shape` on this and asserts it matches `length`.
-        "ts": np.arange(steps, dtype=np.float64) * TIME_STEP_S,
+        # `sanity_check` reads `.shape` on this and asserts it matches `length`. Its spacing
+        # *is* the rate the drive was written at, exactly, which is why no `dt` key is added
+        # beside it: a new metadata key would move the bytes of every scenario ever converted
+        # without one, and `tools/` can read the rate off this array as it stands.
+        "ts": np.arange(steps, dtype=np.float64) * time_step_s,
         "sdc_id": _EGO_ID,
         # No longer true, and the field exists so a reader does not have to infer it.
         "map_only": False,
@@ -1926,7 +1931,9 @@ def _with_route(
         "length": steps,
         "tracks": {_EGO_ID: track},
         "dynamic_map_states": (
-            light_states(plan, model=model, steps=steps, time_step_s=TIME_STEP_S) if plan else {}
+            light_states(plan, model=model, steps=steps, time_step_s=time_step_s)
+            if plan
+            else {}
         ),
         "metadata": metadata,
     }
@@ -1951,6 +1958,29 @@ def _read_signal_plan(
         raise ConversionError(str(error)) from error
 
 
+def _step_seconds(step_hz: float | None) -> float:
+    """The interval a `--step-hz` asks for, refused rather than rounded when it is not exact.
+
+    `metadata.ts` is built by multiplying an integer step index by this number, and every
+    consumer of the dataset reads the rate back off that array's spacing. A rate whose
+    reciprocal does not land on a whole microsecond - 3 Hz gives 0.0333... - makes every
+    timestamp in the file an approximation of a number nobody chose, so it is refused here
+    rather than silently absorbed.
+    """
+    if step_hz is None:
+        return TIME_STEP_S
+    if not math.isfinite(step_hz) or step_hz <= 0.0:
+        raise ConversionError(f"--step-hz must be a positive number of hertz, not {step_hz!r}")
+    seconds = 1.0 / float(step_hz)
+    if abs(seconds * 1e6 - round(seconds * 1e6)) > 1e-9:
+        raise ConversionError(
+            f"--step-hz {step_hz:g} gives a step of {seconds!r} s, which is not a whole "
+            "number of microseconds. Every timestamp in the dataset would be an "
+            "approximation. Use a rate whose reciprocal is exact, such as 10, 20, 50 or 100"
+        )
+    return seconds
+
+
 def convert_scenario(
     *,
     workspace: Path,
@@ -1958,6 +1988,7 @@ def convert_scenario(
     routes: Path | None = None,
     signals: Path | None = None,
     speed_kph: float | None = None,
+    step_hz: float | None = None,
 ) -> tuple[list[Path], Path, Path, Path, tuple[Path, Path, Path]]:
     """Convert WORKSPACE's validated lane model into a ScenarioNet dataset.
 
@@ -1983,12 +2014,25 @@ def convert_scenario(
     tuned. Passing a number here is the only way past that, and it is a per-dataset decision
     rather than a property of the map, which is why it is an argument and not a config field.
 
+    `step_hz` is how many times a second the drive is written down, and defaults to
+    MetaDrive's own 10. It changes only the density of the recording - the route, the speed
+    profile and the waits are all decided before the track is sampled, so a 100 Hz dataset is
+    the same drive as its 10 Hz twin with ten times the samples. It is an argument rather than
+    a config field for the same reason `speed_kph` is: `configuration_checksum` feeds the
+    generation fingerprint, so a field here would invalidate the Stage 3 lane-model review.
+
+    A dataset converted at one rate can only be *replayed* at that rate.
+    `ReplayEgoCarPolicy` consumes one recorded frame per `env.step` with no interpolation, and
+    `parse_object_state` hard-codes 0.1 s when it differentiates positions, so
+    `tools/drive.py` refuses a mismatch rather than driving the route at the wrong speed.
+
     `config` is accepted for symmetry with the other stage entry points; conversion is a
     faithful restatement of the reviewed model and has nothing left to configure. Signal
     timing deliberately does **not** live there: `configuration_checksum` is an input to the
     generation fingerprint, so a phase plan in the config would invalidate the lane model
     review the next time the map was generated.
     """
+    time_step_s = _step_seconds(step_hz)
     workspace = workspace.resolve()
     model_path = workspace / "lane-model" / "reviewed.json"
     manifest = _check_stage_5(workspace, model_path)
@@ -2006,6 +2050,7 @@ def convert_scenario(
         manifest=manifest,
         model_sha256=model_sha256,
         plan=plan,
+        time_step_s=time_step_s,
     )
 
     selections = (
@@ -2038,9 +2083,12 @@ def convert_scenario(
                 _with_route(
                     scenario,
                     route=route,
-                    track=ego_track(route=route, polyline=polyline),
+                    track=ego_track(
+                        route=route, polyline=polyline, time_step_s=time_step_s
+                    ),
                     model=model,
                     plan=plan,
+                    time_step_s=time_step_s,
                 )
             )
     except RouteError as error:

@@ -2,7 +2,15 @@
 
 ## Status
 
-**Not built.** Everything below is a plan, with the measurements marked as such.
+**Phase 1 is built and verified; Phase 2 is not started.** The simulator, the converter
+and every tool now take `--step-hz`, defaulting to MetaDrive's 10. Cameras still run at
+the step rate - decimating them to 20 Hz is Phase 2. Figures below are measured on
+`junction-1` unless they say otherwise.
+
+The invariant held: with no flag anywhere, `sha256sum -c` passes on a re-converted
+`junction-1` dataset, and `tools/drive.py` and `tools/check_dataset.py` print every
+number they printed before. The only textual changes are the three lines that now state
+the rate, which is the point of them.
 
 This is not a stage. It is an edit that cuts across the ones already built: a
 flag, defaulting to today's numbers, that changes how fast the simulator
@@ -115,47 +123,47 @@ Each step is commit-sized, leaves the tree green, and is safe to stop at. Three 
 worth stopping at deliberately: **after 1.2** a 100 Hz dataset exists and the 10 Hz one
 is provably unchanged; **after 1.3** it can be verified; **after 1.5** it can be driven.
 
-- [ ] **Phase 1 - everything runs at the step rate**
-  - [ ] **1.1** `ego_route`: `time_step_s` through `ego_track` and `_sample_in_time`,
+- [x] **Phase 1 - everything runs at the step rate**
+  - [x] **1.1** `ego_route`: `time_step_s` through `ego_track` and `_sample_in_time`,
         defaulting to `TIME_STEP_S`. Nothing else - not `plan_route`, not
         `speed_profile`, and **not `PROFILE_SAMPLE_M`**.
         *Done when* a 100 Hz track decimated `[::10]` matches the 10 Hz track to 1e-9
         on position and velocity, and `plan_route`'s `duration_s` does not move.
-  - [ ] **1.2** `convert_scenario(step_hz=)` and `--step-hz` on `cli.convert`, threaded
+  - [x] **1.2** `convert_scenario(step_hz=)` and `--step-hz` on `cli.convert`, threaded
         to `light_states`, `plan_metadata` and `ts`. No new metadata key -
         `metadata.ts` spacing already *is* the rate, and `metadata.dt` would move every
         unflagged scenario's bytes. Refuse `<= 0` and refuse a reciprocal that is not a
         whole number of microseconds.
         *Done when* `sha256sum -c` passes on an unflagged re-convert and a `--step-hz 100`
         run reports the same distance, duration and speed.
-  - [ ] **1.3** `check_dataset.py`: the 0.1 s window gate, and the same change to
+  - [x] **1.3** `check_dataset.py`: the 0.1 s window gate, and the same change to
         `test_no_route_on_the_real_map_turns_more_than_the_gate_allows`, so converter and
         checker apply one rule. **Blocking** - without it a 100 Hz dataset cannot be
         verified at all.
         *Done when* the 10 Hz output is textually identical to today's and the 100 Hz
         dataset reports the same worst swing with `snaps == 0`.
-  - [ ] **1.4** `drive.py`: `step_config` / `sim_step_seconds` / `data_step_seconds`, and
+  - [x] **1.4** `drive.py`: `step_config` / `sim_step_seconds` / `data_step_seconds`, and
         `--step-hz` folded into the env dict conditionally. `:838-839`'s `steps % 10`
         becomes `% max(1, round(0.1 / sim_dt))`.
         *Done when* an unflagged `--render none` run is byte-identical and `--step-hz 100`
         prints the resolved pair.
-  - [ ] **1.5** Budget in env steps rather than frames; refuse `--agent-policy replay`,
+  - [x] **1.5** Budget in env steps rather than frames; refuse `--agent-policy replay`,
         baked lights and non-ego tracks at a mismatched rate; warn on `idm`, `manual` and
         `--render 3D` above 10 Hz.
         *Done when* the three refusals fire with both rates named, and a matched-rate
         replay completes with `steps` about equal to `budget`.
-  - [ ] **1.6** `signal_control` takes its clock from the engine, not the plan. A
+  - [x] **1.6** `signal_control` takes its clock from the engine, not the plan. A
         correctness fix - say why in the docstring, or the next reader will fix it back.
-  - [ ] **1.7** The remaining hard-coded 0.1s: `sensor_survey.py:314,563`,
+  - [x] **1.7** The remaining hard-coded 0.1s: `sensor_survey.py:314,563`,
         `policy_client.py:303`, and `--step-hz` on the survey and the example.
         Everything here must parse on **3.8**.
-  - [ ] **1.8** `STEP_HZ` in `.env.example`, appended by `drive.sh` and
+  - [x] **1.8** `STEP_HZ` in `.env.example`, appended by `drive.sh` and
         `sensor-survey.sh` - and **bump their `-h` `sed` ranges** or the new help lines
         are silently cut off. **Deliberately not wired into `run-stages-4-6.sh`**: a
         dataset's rate is baked into bytes the Stage 3 review never re-checks, so
         picking it up from a machine-local file is how two workspaces end up at
         different rates with nobody having decided.
-  - [ ] **1.9** Measure, then document. Wall-clock per `env.step` at 100 Hz headless /
+  - [x] **1.9** Measure, then document. Wall-clock per `env.step` at 100 Hz headless /
         offscreen / 3D; whether 3D is usable at a 100 fps `ForceFPS` target; pickle size
         **with `--signals`**, since `light_states` builds a Python list of colour
         *strings* per lane per step. Then `CLAUDE.md` (the `PROFILE_SAMPLE_M` rejection,
@@ -181,6 +189,56 @@ is provably unchanged; **after 1.3** it can be verified; **after 1.5** it can be
         `--render offscreen` until measured, and `image_on_cuda` outright.
   - [ ] **2.5** `CAMERA_HZ` in `.env.example`, both scripts, README.
 
+## What Phase 1 measured
+
+Everything here was taken after the code was written, on `junction-1`'s 403.7 m `test`
+route. `env.step` timings exclude construction and the first 20 steps.
+
+| | 10 Hz | 100 Hz |
+|---|---|---|
+| `env.step`, headless | 1.094 ms | **0.848 ms** |
+| `env.step`, `--render offscreen` | 10.9 ms | 20.2 ms |
+| `env.step`, `--render 3D` (RTX 4050) | 83.4 ms | 16.6 ms |
+| 3D speed against wall-clock | 1.20x | **0.60x** |
+| a whole headless drive | 352 steps, 1.55 s | 3516 steps, 4.85 s |
+| scenario pickle, map + route | 791,940 B | 1,121,208 B (+41.6%) |
+| the same, + a 3-lane light plan | +6,666 B | +56,559 B (+5.0%) |
+| `convert` wall-clock, `junction-1` | 1.53 s | 1.54 s |
+| `convert` wall-clock, `mosque` | 2.1 s | 2.1 s |
+
+Four things worth not re-deriving:
+
+- **One `env.step` is cheaper at 100 Hz, not dearer.** `decision_repeat` is 1 rather
+  than 5, so it is one physics substep instead of five. A whole drive still costs about
+  **7.8x**, because there are ten times as many.
+- **3D tops out at 60 fps at either rate** - 5 frames per 83.4 ms, 1 per 16.6 ms, which
+  is the display's vsync. So `ForceFPS` asking for 100 is exactly why a 100 Hz drive runs
+  at 0.60x real time rather than 1.20x. Usable, and slower than the clock on the wall.
+- **The light tape grows linearly**, at about **5.1 B per lane per step** - it is a Python
+  list of colour *strings*. `junction-1`'s 3-lane plan is nothing; a 20-lane plan at
+  100 Hz would add roughly 370 KB a scenario.
+- **`convert` does not get slower.** The extra samples are an `np.interp` over a profile
+  that was already computed; the cost of a conversion is the map.
+
+Both extracts drive at 100 Hz: `junction-1` 3516 of 3695 steps at completion 0.950
+(against 352 of 370 and 0.953 at 10 Hz), `mosque` 1543 of 1605 at 0.951.
+
+## One departure from the plan, and why
+
+Step 1.3 said to make the same window change to
+`test_no_route_on_the_real_map_turns_more_than_the_gate_allows`. **It was left alone.**
+That test measures the turn at each vertex of the route *polyline*, and a polyline has no
+rate - `route_polyline` never sees one - so the test is already rate-invariant and there
+is nothing to make invariant. Rewriting its rule would only have moved a **known failure**
+that is Keith's to judge: 3 of 396 swept routes still turn more than 30 deg at a vertex,
+worst 50.92 deg, on two `MIN_TRIMMED_LANE_M`-clamped 2 m lanes (see `CLAUDE.md`). Making a
+standing finding stop being raised is the one thing that rule exists to prevent.
+
+What replaced it is `test_the_drivability_gate_reads_the_same_at_either_rate` in
+`tests/unit/test_ego_route.py`, which spells out the checker's window rule against a track
+built at both rates and asserts they agree - so converter and checker can be shown to apply
+one rule without MetaDrive being installed, and without touching the failing sweep.
+
 ## Known limits, stated rather than hidden
 
 **Phase 1 makes 100 Hz *available*, which is narrower than it sounds.** The only things
@@ -188,6 +246,12 @@ that *record* numeric sensors at that rate are `sensor_survey.py`'s per-step CSV
 `policy_client`'s wire. `drive.py --record` writes observations and actions only. 100 Hz
 IMU and GPS on disk from `drive.py` is separate work, named here so it is a decision
 rather than an omission.
+
+**`junction-1/signals/signals.json` no longer matches its lane model**, so the light-tape
+figures above were taken against a copy of it re-stamped with the current fingerprint, in
+the scratchpad. Keith's file was not touched. The three refusal branches were exercised
+directly against `drive.py._refuse_mismatch` under MetaDrive's own interpreter rather than
+through a dataset, for the same reason.
 
 **`--agent-policy idm` will drive differently at 100 Hz**, for the reasons in the facts
 above. It is warned about and left alone: patching a reference checkout is out of bounds,

@@ -372,8 +372,27 @@ the very lateral limit the profile was computed to keep. And **`MIN_SPEED_MPS` i
 and 2 m/s through it broke the 1.8 cap of the day; still 1.0 because the sharpest kinks measure
 0.36 m of radius, where 8.5 allows only 1.75 m/s and a floor of 2.0 would override it there.
 
-`tools/check_dataset.py` reports the worst per-step heading change in the ego track and
-**fails above 30°**, and reports the tightest radius the drive line turns through, which the
+**But `PROFILE_SAMPLE_M` must not follow `--step-hz`, and that was measured before it was
+decided.** The rule above was derived at 10 Hz, where "as fine as the track" and "fine enough
+to read the road's own 0.25 m junction arcs" happened to coincide at 0.1 m. At 100 Hz they stop
+coinciding, and the literal reading is the worse half. On `junction-1`'s 403.7 m `test` route:
+
+| profile spacing | step | samples | duration | mean | peak `turn/dt·v` |
+|---|---|---|---|---|---|
+| 0.1 m | 0.1 s (today) | 370 | 36.9 s | 39.3 km/h | 10.5 m/s² |
+| 0.1 m | **0.01 s** | 3695 | 36.9 s | 39.3 km/h | 43.7 m/s² |
+| 0.01 m | 0.1 s | 556 | 55.6 s | 26.2 km/h | 3.2 m/s² |
+| 0.01 m | 0.01 s | 5558 | 55.6 s | 26.2 km/h | 23.0 m/s² |
+
+Left at 0.1 m the rate gives exactly what it should — identical duration and speed, ten times
+the samples. Scaled with the rate it costs **a third of the pace** and still does not fix the
+artefact it exists for (43.7 → 23.0 m/s², still 2.7× the 8.5 cap), because densifying below the
+source geometry makes the estimator read `radius = span/turn` over a shorter span than the road
+really turns through. The coupling was tried and **rejected**; do not "fix" it later.
+
+`tools/check_dataset.py` reports the worst heading change over a **fixed 0.1 s window** of the
+ego track and **fails above 30°**, and reports the tightest radius the drive line turns through,
+which the
 heading rule hides — at walking pace a car can turn through anything. `sanity_check` checks
 shapes and lengths and never asks whether the drive is drivable.
 
@@ -431,7 +450,8 @@ every light green: the car still brakes for the red and pulls away from it.
 one thing — index `state["object_state"]` by `episode_step` and call `set_status` —
 and it is the only light manager in 0.4.3; procedurally generated maps carry no
 lights at all. A light in a dataset is therefore a **tape**: a colour spelled out for
-every 0.1 s step.
+every step — 0.1 s of them by default, `1 / --step-hz` otherwise, which is why a tape
+may only be replayed at the rate it was baked at.
 
 **OSM supplies presence, never timing.** `highway=traffic_signals` carries no cycle,
 no split and no offset, so every number is chosen by a person in
@@ -571,10 +591,11 @@ re-derive:
 ### Driving the ego with something other than the tape — the gym contract (2026-08-17)
 
 **The tick is the call.** MetaDrive is not a process ticking away with a queue or a listener
-waiting for input. `env.step(action)` advances exactly 0.1 s — 5 physics ticks of 0.02 s
-(`base_env.py:190, :462`) — and returns; between two calls nothing in the simulator moves.
-So simulated and wall-clock time are decoupled, and a policy taking 3 s freezes the simulator
-for 3 s and then advances the same 0.1 s. The only place MetaDrive deliberately spends
+waiting for input. `env.step(action)` advances `physics_world_step_size` × `decision_repeat` —
+0.1 s by default, 5 physics ticks of 0.02 s (`base_env.py:190, :462`), and whatever `--step-hz`
+asks for otherwise — and returns; between two calls nothing in the simulator moves. So simulated
+and wall-clock time are decoupled, and a policy taking 3 s freezes the simulator for 3 s and then
+advances the same one step. The only place MetaDrive deliberately spends
 wall-clock time is `ForceFPS.real_time_simulation`, which throttles the *display* and is off
 headless.
 
@@ -655,7 +676,8 @@ while the action is **[-1, 1]**, so a model matching output range to input range
 `(180, 320, 3|1)`; `PointCloudLidar(200, 64, ego_centric=True)` at `(64, 200, 3)` — a real 3-D
 cloud, unlike the ray ring; IMU assembled from the bullet body (`body.get_linear_velocity()`,
 `body.getAngularVelocity()`, `roll`/`pitch`/`heading_theta`, acceleration differenced over the
-0.1 s step) because **MetaDrive has no IMU sensor class**; and GPS below. Four traps:
+step — 0.1 s by default, 0.01 s under `--step-hz 100`, which is the whole point of that flag)
+because **MetaDrive has no IMU sensor class**; and GPS below. Four traps:
 
 - **A camera cannot be read without `image_observation=True`.** `base_env.py:343` deletes every
   `BaseCamera` from the sensor list when neither `use_render` nor `image_observation` is set, and
@@ -743,6 +765,81 @@ it from the handler deadlocks against the loop it is stopping.
 `zip(..., strict=)` (B905) in `policy_client.py` and that keyword does not exist on 3.8; the loop
 is indexed instead. Parse every new `tools/` or `examples/` file with MetaDrive's own interpreter
 before believing ruff.
+
+### The rate is `--step-hz`, and there are two clocks, not one (2026-08-19)
+
+**10 Hz was never MetaDrive's rate, only its default.** `env.step` advances
+`physics_world_step_size` x `decision_repeat` — 0.02 x 5 — and both keys are ordinary config.
+`drive.py`'s `step_config(hz)` derives them: `repeat = max(1, ceil(dt / 0.02))`,
+`physics = dt / repeat`, so the physics tick is never *coarser* than MetaDrive's own and
+**10 Hz returns exactly (0.02, 5)** — which is what makes `--step-hz 10` and no flag the same
+run. 100 Hz gives (0.01, 1). The pair is deliberately not exposed: the rate is their product,
+and `decision_repeat` also decides how many `taskMgr.step()`s run per `env.step`, each of which
+redraws every camera buffer.
+
+**Two clocks.** `sim_step_seconds(env)` is how far one `env.step` advances the simulator;
+`data_step_seconds(scenario)` is how far one recorded frame covers. They are equal only when the
+dataset was converted at the rate it is being driven at, and **two places in `tools/` were
+reading the wrong one** — right by coincidence rather than by construction:
+
+- `signal_control` converted an **engine** step count to seconds using the **plan's** rate.
+  Those lights are live precisely because the tape is not being used. It reads the engine now,
+  and the docstring says why so the next reader does not put it back.
+- `drive.py`'s `_longest_red` divided seconds by the **data** rate to produce a budget counted
+  in **env** steps. It returns seconds; the caller converts, because the caller is the one that
+  knows which clock it is counting in.
+
+**The rate is a convert-time argument, never a config field** — `configuration_checksum` feeds
+`generation_fingerprint`, so a field on `ConverterConfig` would invalidate the Stage 3 review.
+Same reason as `--speed-kph` and the render flags. `STEP_HZ` in `.env` reaches `drive.sh` and
+`sensor-survey.sh` and is **deliberately not wired into `run-stages-4-6.sh`**: a dataset's rate
+is baked into bytes the review never re-checks, and picking it up from a machine-local file is
+how two workspaces end up at different rates with nobody having decided.
+
+**And no new metadata key.** `metadata.ts` spacing *is* the rate, exactly — an integer step
+index times the interval — so `metadata.dt` would move the bytes of every scenario ever
+converted without one, for information already in the file. Everything reads it back off `ts`.
+
+**A dataset can only be *replayed* at the rate it was written at, and `drive.py` refuses the
+mismatch rather than warning.** Three things consume the recording one frame per `env.step` with
+no interpolation, so at a different rate they run the tape at the ratio of the two clocks:
+`ReplayEgoCarPolicy` (`replay_policy.py:41-65`), a baked light tape
+(`scenario_light_manager.py:68-75`), and any non-ego track. None *fails* — each simply drives
+something other than what the dataset says, which is why it is a refusal.
+
+Three more couplings are **MetaDrive's own and are warned about, never patched** — a reference
+checkout is not edited here. `PIDController` (`PID_controller.py:1-22`) has **no dt at all**, so
+both its gains scale with the rate and `--agent-policy idm` will not drive identically;
+`LANE_CHANGE_FREQ = 50` and `IDM_ACT_BATCH_SIZE = 5` are counted in steps; `STEERING_INCREMENT`
+is applied per `env.step`, so the keyboard feels 10x slower at 100 Hz; and `ForceFPS` takes its
+interval from `physics_world_step_size`, so 3D asks the display for 100 fps.
+
+**Measured on `junction-1` (403.7 m `test` route), because none of it was guessable:**
+
+| | 10 Hz | 100 Hz |
+|---|---|---|
+| `env.step`, headless | 1.094 ms | **0.848 ms** |
+| `env.step`, `--render offscreen` | 10.9 ms | 20.2 ms |
+| `env.step`, `--render 3D` (RTX) | 83.4 ms | 16.6 ms |
+| 3D speed against wall-clock | 1.20x | **0.60x** |
+| scenario pickle, map + route | 791,940 B | 1,121,208 B (+41.6%) |
+| the same, + a 3-lane light plan | +6,666 B | +56,559 B (+5.0%) |
+| `convert` wall-clock | 1.53 s | 1.54 s |
+
+**One `env.step` is *cheaper* at 100 Hz, not dearer** — `decision_repeat` is 1 rather than 5, so
+it is one physics substep instead of five. A whole drive still costs about 7.8x, because there
+are ten times as many. **3D tops out at 60 fps either way** (5 frames per 83.4 ms; 1 per
+16.6 ms — the display's vsync), so asking `ForceFPS` for 100 is what makes a 100 Hz drive run at
+0.60x real time rather than 1.20x. It is usable, and it is slower than the clock on the wall.
+The light tape is a Python list of colour *strings* per lane per step, so it grows linearly:
+about 5.1 B per lane per step, which a 20-lane plan at 100 Hz turns into ~370 KB a scenario.
+
+**Phase 1 makes 100 Hz *available*, which is narrower than it sounds.** The only things that
+*record* numeric sensors at that rate are `sensor_survey.py`'s per-step CSV and
+`policy_client`'s wire. `drive.py --record` writes observations and actions only. 100 Hz IMU and
+GPS on disk from `drive.py` is separate work, named here so it is a decision rather than an
+omission — as are the 20 Hz cameras, which are Phase 2 of
+`docs/implementation-plan/adjustable-simulation-sample-rate.md`.
 
 ### A junction is bare inside and kerbed outside, and both halves are deliberate
 

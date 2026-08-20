@@ -39,7 +39,9 @@ while `mosque` runs to the 400-step cap.
 | `semantic_camera.png` | `(180, 320, 3)` | **one frame**, step 40 |
 | `point-cloud.npy` | `(64, 200, 3)` | **one frame**, step 40 |
 
-One step is 0.1 s of simulated time, so `mosque`'s 400 steps are 40 s of driving.
+One step is 0.1 s of simulated time by default, so `mosque`'s 400 steps are 40 s of
+driving. Every figure in this document was taken at that default; `--step-hz` changes it,
+and every "0.1 s" below should be read as "one step".
 The sampled step is `--sample-at`, default 40.
 
 ---
@@ -78,14 +80,14 @@ all three camera PNGs.
 
 | columns | what it is | units / frame |
 |---|---|---|
-| `step` | `env.step` index; × 0.1 s = simulated time | — |
+| `step` | `env.step` index; × the step (0.1 s by default) = simulated time | — |
 | `x, y, z` | `env.agent.origin.getPos()` — MetaDrive world position | m, **scenario-recentred**: row 0 is exactly `0.0, 0.0`. `z` is **ride height** (0.000–0.539 m on both workspaces), not altitude |
 | `projected_x, projected_y` | `x, y` minus `metadata.old_origin_in_current_coordinate` — undoes the recentring | m in **Stage 1's projection**. `mosque` shift `+208.698, +397.412`; `junction-1` `−55.725, +75.469` |
 | `latitude, longitude` | `geodesy.aeqd_inverse` of the above | WGS 84 degrees, **exact** — 0.000000 m against `pyproj` |
 | `speed_mps` | `env.agent.speed` | m/s, and **planar** — exactly `hypot(vx, vy)` to 1.8e-15; `vz` is excluded |
 | `vx, vy, vz` | `body.get_linear_velocity()` | m/s, **world axes** — see §5 |
 | `wx, wy, wz` | `body.getAngularVelocity()` | rad/s, world axes — but see §4, `wz` is usable as-is |
-| `ax, ay, az` | velocity differenced over the 0.1 s step | m/s², **world axes**, **no gravity** — see §5 |
+| `ax, ay, az` | velocity differenced over one step, 0.1 s by default | m/s², **world axes**, **no gravity** — see §5 |
 | `roll, pitch` | `env.agent.roll` / `.pitch` | rad. MetaDrive deliberately swaps panda3d's P and R here (`base_object.py:402-417`), so these are already in car convention |
 | `heading` | `heading_theta` | rad, wrapped to ±π |
 | `steering, throttle` | the action **requested** on that step | nominally [−1, 1], **not enforced** — see §5 |
@@ -167,7 +169,7 @@ is. Treating them as IMU output makes the data look better than it is.
 `heading` it correlates **0.9519** on `junction-1` and **0.7507** on `mosque` (whose
 drive is mostly straight, so there is little signal to correlate), with a mean absolute
 difference of **0.026 rad/s**. The residual is expected rather than a discrepancy:
-`heading` is sampled once per 0.1 s step while `wz` is the instantaneous rate at that
+`heading` is sampled once per step — 0.1 s by default — while `wz` is the instantaneous rate at that
 instant, with five physics substeps in between.
 
 ---
@@ -211,17 +213,21 @@ becomes **+7.44 to +18.09 m/s²**, the shape a real sensor produces. Strictly yo
 rotate gravity by roll and pitch first, but at ≤2.38° of tilt that changes nothing
 measurable.
 
-**Two things are not correctable.**
+**One thing is not correctable, and one has since been built.**
 
 - **There is no sensor error at all** — no bias, drift, scale factor, noise,
   quantisation or temperature response. That is not a mistake in MetaDrive; it simply
   is not modelled. Making it realistic means *choosing and injecting* an error model,
   which is a modelling decision someone makes, not a correction someone applies.
   Nothing in the data tells you what the numbers should be.
-- **It is a 10 Hz signal.** Differenced over the 0.1 s step, where real IMUs run
-  100–1000 Hz. Bandwidth cannot be post-processed back into a signal that never had
-  it — the only route is running the simulator faster, via
-  `physics_world_step_size` and `decision_repeat`.
+- **It was a 10 Hz signal, and no longer has to be.** Differenced over the 0.1 s step,
+  where real IMUs run 100–1000 Hz. Bandwidth cannot be post-processed back into a
+  signal that never had it, and the only route was running the simulator faster, via
+  `physics_world_step_size` and `decision_repeat`. That is what `--step-hz` now does:
+  `tools/sensor_survey.py --step-hz 100` differences the same IMU over 0.01 s, and
+  `tools/drive.py --step-hz 100` calls a policy at 100 Hz. The tables in this document
+  were all taken at 10 Hz, which is still the default and still what an unflagged run
+  produces. See `docs/implementation-plan/adjustable-simulation-sample-rate.md`.
 
 ### 5.3 The action columns record what was requested, not what was applied
 
@@ -278,7 +284,7 @@ have to work out for itself. **It is not sensor data.**
 | `14` | 1 | Current steering angle |
 | `15` | 1 | Last step's throttle |
 | `16` | 1 | Last step's steering |
-| `17` | 1 | Yaw rate — angle turned in the last 0.1 s, ÷ 0.1 |
+| `17` | 1 | Yaw rate — angle turned in the last step, ÷ that step (0.1 s by default) |
 | `18` | 1 | Sideways offset from the lane centre |
 | `19:37` | 18 | **The route.** The next **9** waypoints along the Stage 6 route, each as *(how far ahead, how far right)* in the car's own frame, clipped at 30 m |
 | `37` | 1 | Sideways distance from the route line, ÷ `max_lateral_dist` (4 m) |

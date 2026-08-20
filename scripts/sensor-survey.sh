@@ -6,6 +6,7 @@
 #   ./scripts/sensor-survey.sh junction-1            # override the workspace for this run
 #   ./scripts/sensor-survey.sh -- --policy straight  # everything after -- goes to the tool
 #   ./scripts/sensor-survey.sh -- --camera-width 640 --camera-height 360
+#   ./scripts/sensor-survey.sh -- --step-hz 100      # every numeric sensor at 100 Hz
 #   GPU=integrated ./scripts/sensor-survey.sh        # force the built-in graphics
 #
 #   # a multi-camera rig, in place of the single forward camera and the point cloud
@@ -23,6 +24,10 @@
 # Read from .env, all optional:
 #   METADRIVE_PYTHON  the MetaDrive checkout's interpreter
 #   GPU               auto (default), nvidia, or integrated
+#   STEP_HZ           how many times a second the simulator advances; MetaDrive's own 10
+#                     applies when unset. It is what the IMU is differenced over, so it is
+#                     what makes the recorded acceleration a 100 Hz signal rather than a 10 Hz
+#                     one -- and it is the rate the policy is called at
 
 # shellcheck source=scripts/_common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
@@ -32,7 +37,7 @@ PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --) shift; PASSTHROUGH=("$@"); break ;;
-        -h|--help) sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^#\s\?//'; exit 0 ;;
+        -h|--help) sed -n '2,31p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
         -*) die "unknown option: $1
   This script takes only a workspace. To pass $1 to sensor_survey.py, put it after --:
     ./scripts/sensor-survey.sh ${POSITIONAL:-<workspace>} -- $1" ;;
@@ -86,6 +91,9 @@ case "$GPU" in
 esac
 
 ARGS=(tools/sensor_survey.py "$DATASET" --render offscreen)
+if [[ -n "${STEP_HZ:-}" ]]; then
+    ARGS+=(--step-hz "$STEP_HZ")
+fi
 # Last wins in argparse, so anything repeated after -- overrides what this script chose.
 ARGS+=(${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"})
 

@@ -7,6 +7,14 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# The absolute path of the script that sourced this one, resolved *before* the cd below.
+# Every script's -h handler prints its own header with `sed` over this path, and
+# `${BASH_SOURCE[0]}` there is relative to the directory the user was standing in -- which
+# stops resolving the moment we leave it. That broke `-h` for all five scripts run from
+# inside `scripts/`, which is where they are normally run from.
+SELF="$(cd "$(dirname "${BASH_SOURCE[1]}")" && pwd)/$(basename "${BASH_SOURCE[1]}")"
+
 cd "$REPO_ROOT"
 
 # .env is per-machine and gitignored; .env.example is the committed template.

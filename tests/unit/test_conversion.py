@@ -42,6 +42,7 @@ from osm_scenario.conversion import (
     _reachability,
     _road_union,
     _scenario,
+    _step_seconds,
     convert_scenario,
     scenario_file_name,
 )
@@ -1485,6 +1486,205 @@ def test_our_feature_types_are_the_ones_metadrive_defines() -> None:
     assert MetaDriveType.LINE_BROKEN_SINGLE_WHITE == "ROAD_LINE_BROKEN_SINGLE_WHITE"
     assert MetaDriveType.is_road_line("ROAD_LINE_BROKEN_SINGLE_WHITE")
     assert MetaDriveType.is_broken_line("ROAD_LINE_BROKEN_SINGLE_WHITE")
+
+
+# --- the step rate -------------------------------------------------------------------------
+#
+# The rate changes how densely the drive is written down and nothing else. What these check is
+# that claim: an unflagged conversion is byte-for-byte what it was, and a faster one is the
+# same drive with more samples in it.
+
+
+def _routes_file(workspace: Path, *, name: str = "r") -> Path:
+    """A `routes.json` for `_model()`, carrying the identity block the converter demands."""
+    path = workspace / "routes.json"
+    path.write_text(
+        json.dumps(
+            {
+                "routes_version": 1,
+                "identity": {
+                    "generation_fingerprint": "fingerprint",
+                    "reviewed_lane_model_sha256": _sha256(
+                        workspace / "lane-model" / "reviewed.json"
+                    ),
+                },
+                "routes": [{"name": name, "start_lane": "a", "end_lane": "d"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_the_default_rate_and_asking_for_it_convert_to_the_same_bytes(tmp_path: Path) -> None:
+    """The invariant the whole flag rests on: unflagged is what it was.
+
+    Compared as pickled bytes rather than as dicts, because that is what a reader loads and
+    what `sha256sum -c` sees. `_PortablePickler` writes deterministically, so two conversions
+    of one workspace differ only if something in the scenario differs.
+    """
+    unflagged = _workspace(tmp_path / "one", _model())
+    asked = _workspace(tmp_path / "two", _model())
+    left, *_ = convert_scenario(
+        workspace=unflagged,
+        config=ConverterConfig(config_version=1),
+        routes=_routes_file(unflagged),
+    )
+    right, *_ = convert_scenario(
+        workspace=asked,
+        config=ConverterConfig(config_version=1),
+        routes=_routes_file(asked),
+        step_hz=10.0,
+    )
+    assert [path.read_bytes() for path in left] == [path.read_bytes() for path in right]
+
+
+def test_a_faster_rate_writes_the_same_drive_with_ten_times_the_samples(tmp_path: Path) -> None:
+    slow_ws = _workspace(tmp_path / "slow", _model())
+    fast_ws = _workspace(tmp_path / "fast", _model())
+    slow_paths, *_ = convert_scenario(
+        workspace=slow_ws,
+        config=ConverterConfig(config_version=1),
+        routes=_routes_file(slow_ws),
+    )
+    fast_paths, _, _, report_path, _ = convert_scenario(
+        workspace=fast_ws,
+        config=ConverterConfig(config_version=1),
+        routes=_routes_file(fast_ws),
+        step_hz=100.0,
+    )
+    slow = pickle.loads(slow_paths[0].read_bytes())
+    fast = pickle.loads(fast_paths[0].read_bytes())
+
+    # `ts` spacing *is* the rate - there is no `dt` key, and none is wanted.
+    assert fast["metadata"]["ts"][1] - fast["metadata"]["ts"][0] == pytest.approx(0.01)
+    assert fast["length"] == len(fast["metadata"]["ts"])
+    assert fast["length"] == len(fast["tracks"]["ego"]["state"]["position"])
+    assert fast["length"] >= (slow["length"] - 1) * 10 + 1
+
+    # The same drive: same distance, same duration, same speeds. Only the density moved.
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    slow_report = json.loads(
+        (slow_ws / "reports" / "scenario-conversion.json").read_text(encoding="utf-8")
+    )
+    for key in ("distance_m", "duration_s", "speed_kph", "slowest_kph"):
+        assert report["routes"][0][key] == pytest.approx(slow_report["routes"][0][key], abs=1e-9)
+
+
+def test_every_light_state_array_is_as_long_as_the_faster_scenario(tmp_path: Path) -> None:
+    """`_check_object_state_dict` length-checks every array in a light's `state`.
+
+    The tape is rebuilt at the scenario's length, so a rate that reached `ts` but not
+    `light_states` would fail only on a dataset that has signals - which is most of them.
+    """
+    workspace = _workspace(tmp_path, _model())
+    plan_path = workspace / "signals.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "signals_version": 1,
+                "identity": {
+                    "generation_fingerprint": "fingerprint",
+                    "reviewed_lane_model_sha256": _sha256(
+                        workspace / "lane-model" / "reviewed.json"
+                    ),
+                },
+                "cycle_seconds": 60,
+                "groups": [
+                    {
+                        "name": "phase-a",
+                        "lanes": ["a"],
+                        "green_seconds": 27,
+                        "yellow_seconds": 3,
+                        "offset_seconds": 0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    paths, *_ = convert_scenario(
+        workspace=workspace,
+        config=ConverterConfig(config_version=1),
+        routes=_routes_file(workspace),
+        signals=plan_path,
+        step_hz=100.0,
+    )
+    scenario = pickle.loads(paths[0].read_bytes())
+    light = scenario["dynamic_map_states"]["a"]
+    for key, value in light["state"].items():
+        assert len(value) == scenario["length"], key
+    # And the plan's own numbers are seconds, so they do not move with the rate.
+    assert scenario["metadata"]["signals"]["cycle_seconds"] == 60
+
+
+def test_the_light_says_the_same_colour_at_the_same_second_at_either_rate(
+    tmp_path: Path,
+) -> None:
+    """A tape is indexed by step, so the colours only agree once the second is worked out."""
+    slow_ws = _workspace(tmp_path / "slow", _model())
+    fast_ws = _workspace(tmp_path / "fast", _model())
+
+    def plan_for(workspace: Path) -> Path:
+        path = workspace / "signals.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "signals_version": 1,
+                    "identity": {
+                        "generation_fingerprint": "fingerprint",
+                        "reviewed_lane_model_sha256": _sha256(
+                            workspace / "lane-model" / "reviewed.json"
+                        ),
+                    },
+                    "cycle_seconds": 60,
+                    "groups": [
+                        {
+                            "name": "phase-a",
+                            "lanes": ["a"],
+                            "green_seconds": 27,
+                            "yellow_seconds": 3,
+                            "offset_seconds": 0,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    slow_paths, *_ = convert_scenario(
+        workspace=slow_ws,
+        config=ConverterConfig(config_version=1),
+        routes=_routes_file(slow_ws),
+        signals=plan_for(slow_ws),
+    )
+    fast_paths, *_ = convert_scenario(
+        workspace=fast_ws,
+        config=ConverterConfig(config_version=1),
+        routes=_routes_file(fast_ws),
+        signals=plan_for(fast_ws),
+        step_hz=100.0,
+    )
+    slow = pickle.loads(slow_paths[0].read_bytes())["dynamic_map_states"]["a"]
+    fast = pickle.loads(fast_paths[0].read_bytes())["dynamic_map_states"]["a"]
+    shared = min(len(slow["state"]["object_state"]), len(fast["state"]["object_state"]) // 10)
+    assert shared > 1
+    assert (
+        list(slow["state"]["object_state"][:shared])
+        == list(fast["state"]["object_state"][:: 10][:shared])
+    )
+
+
+def test_a_rate_that_cannot_be_written_down_exactly_is_refused() -> None:
+    """Refused rather than rounded: `ts` is an integer index times this number."""
+    assert _step_seconds(None) == 0.1
+    assert _step_seconds(100.0) == 0.01
+    with pytest.raises(ConversionError, match="whole number of microseconds"):
+        _step_seconds(3.0)
+    for bad in (0.0, -10.0, float("nan"), float("inf")):
+        with pytest.raises(ConversionError, match="positive number of hertz"):
+            _step_seconds(bad)
 
 
 # --- readable by the numpy the reader has, not the one we have ----------------------------

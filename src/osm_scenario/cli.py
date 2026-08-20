@@ -242,6 +242,17 @@ def convert(
             "road allows.",
         ),
     ] = None,
+    step_hz: Annotated[
+        float | None,
+        typer.Option(
+            "--step-hz",
+            min=1.0,
+            help="How many times a second the drive is written down. Default 10, which is "
+            "MetaDrive's own step. It changes the density of the recording and nothing else - "
+            "the same route at the same speeds. A dataset written at any other rate must be "
+            "driven at that rate, so tools/drive.py needs the same --step-hz.",
+        ),
+    ] = None,
 ) -> None:
     """Convert WORKSPACE's validated lane model into a ScenarioNet dataset."""
     try:
@@ -256,11 +267,15 @@ def convert(
             routes=routes_path,
             signals=signals_path,
             speed_kph=speed_kph,
+            step_hz=step_hz,
         )
     except (ConversionError, ValueError, KeyError) as error:
         typer.echo(f"Stage 6 failed: {error}", err=True)
         raise typer.Exit(code=1) from error
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    # Echoed only when it was asked for, so an unflagged run's stdout does not move.
+    if step_hz is not None:
+        typer.echo(f"Stage 6 step rate: {step_hz:g} Hz ({1.0 / step_hz:g} s per step)")
     typer.echo(
         f"Stage 6 complete: {report['map_features']} map features, "
         f"{len(scenario_paths)} scenario(s) -> {scenario_paths[0].parent}"

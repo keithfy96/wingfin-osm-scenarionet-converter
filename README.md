@@ -192,8 +192,9 @@ cycle, no split, no offset — so the dataset marks the plan `synthesised` in
 fingerprint, so a phase plan in `config/default.yaml` would invalidate the lane-model
 review the next time the map was generated.
 
-A light in a MetaDrive dataset is a **tape** — a colour spelled out for every 0.1 s
-step — because MetaDrive has no light controller of its own. The recorded car's stops
+A light in a MetaDrive dataset is a **tape** — a colour spelled out for every step, 0.1 s
+of them unless `--step-hz` says otherwise — because MetaDrive has no light controller of
+its own. The recorded car's stops
 are baked into its positions to match, since a replayed car drives through a red
 however correct the tape is. `tools/drive.py --lights live` re-drives the same lights
 from `metadata.signals` with a fresh offset each episode, so an agent can't learn the
@@ -227,14 +228,44 @@ Measured on `junction-1`'s 808 m `test` route: **64.8 s** at the posted 50 km/h,
 **48.1 s** at `--speed-kph 100` — 60.5 km/h average, twice the drive this repo
 produced before the profile was retuned — and both still pass the drivability check
 in `tools/check_dataset.py`, which fails any track whose car turns more than 30° in a
-single 0.1 s step. It is off by default; nothing changes unless you pass it.
+0.1 s window. It is off by default; nothing changes unless you pass it.
 
 The car still slows for corners at any speed. How hard it may corner is
 `LATERAL_ACCEL_MPS2` in `src/osm_scenario/ego_route.py`, and that constant is pinned
-to the 30°-per-step check rather than to a comfort figure — degrees per step rise with
-speed while the road's shape does not, so that check is what really caps the pace.
+to the 30°-per-window check rather than to a comfort figure — degrees per second rise
+with speed while the road's shape does not, so that check is what really caps the pace.
 Raising it without re-running the route sweep will produce datasets that fail.
 
+### Stage 6, rate — how often the drive is written down
+
+MetaDrive's `env.step` advances 0.1 s by default, so 10 Hz is the control rate, the
+sensor rate and the recording rate all at once. `--step-hz` changes how densely the
+drive is written down, and nothing else — the same route, at the same speeds, with ten
+times the samples:
+
+```bash
+uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yaml \
+  --routes workspaces/junction-1/routes/routes.json --step-hz 100
+```
+
+Measured on `junction-1`'s `test` route: 370 samples over 36.9 s at the default,
+3,695 over the same 36.9 s at `--step-hz 100`, with the distance, the mean speed and
+the slowest corner all identical to nine decimal places. The pickle grows from 792 KB
+to 1,121 KB; conversion itself does not get slower (1.53 s against 1.54 s), because
+the extra samples are an interpolation over a speed profile that was already computed.
+
+`--step-hz 10` and no flag are the same run, byte for byte — `sha256sum -c` passes on
+a re-convert. Like `--speed-kph`, it is an argument rather than a config field:
+`configuration_checksum` feeds the generation fingerprint, so putting it in
+`config/default.yaml` would invalidate the Stage 3 review the next time the map was
+generated. And unlike the rendering flags it is **not** read from `.env` at convert
+time — a dataset's rate is baked into bytes the review never re-checks, so picking it
+up from a machine-local file is how two workspaces end up at different rates with
+nobody having decided.
+
+**A dataset can only be driven at the rate it was written at**, and `tools/drive.py`
+refuses the mismatch rather than driving the route at 10× speed. That half is under
+[Simulate](#simulate), below.
 ### Simulate
 
 MetaDrive runs on Python 3.8 / numpy 1.24; this repo runs 3.10 / numpy 2.2. So the
@@ -268,6 +299,51 @@ the floor, so a big map cannot go as thin as a small one — 0.125 m is `mosque`
 limit, and the tool says so rather than rounding quietly. `--line-width-m 0` restores
 MetaDrive's own. Set `LINE_WIDTH_M` in `.env` to stop typing it.
 
+**The step rate is `--step-hz`, default 10** — MetaDrive's own. `env.step` advances
+`physics_world_step_size` × `decision_repeat`, and `--step-hz` sets both: 10 gives
+exactly MetaDrive's (0.02, 5), so passing it and omitting it are the same run; 100
+gives (0.01, 1). It is the rate a policy is called at as much as the rate the drive is
+recorded at. Set `STEP_HZ` in `.env` to stop typing it.
+
+```bash
+./drive.sh junction-1 -- --step-hz 100                   # 3D window
+./drive.sh junction-1 -- --render none --step-hz 100     # headless, just the numbers
+./sensor-survey.sh junction-1 -- --step-hz 100           # the IMU at 100 Hz
+```
+
+**A dataset can only be driven at the rate it was written at.** Three things consume the
+recording one frame per `env.step` with no interpolation: `--agent-policy replay`, a
+baked light tape under `--lights tape`, and any non-ego track. At a different rate none
+of them *fails* — each simply drives something other than what the dataset says — so
+`drive.py` refuses, naming both rates and both ways to fix it. Convert at the rate you
+mean to drive at, or drive at the rate the dataset carries.
+
+Three more couplings are MetaDrive's own and are **warned** about rather than fixed —
+patching a reference checkout is out of bounds, and each is a real difference rather
+than a data fault. `--agent-policy idm` will not drive identically, because
+`PIDController` has no timestep in it at all and both its gains scale with the rate;
+`--agent-policy manual` feels ten times slower at 100 Hz, because `STEERING_INCREMENT`
+is applied per `env.step`; and `--render 3D` above 10 Hz runs slower than the clock on
+the wall, because `ForceFPS` takes its interval from `physics_world_step_size`.
+
+Measured on `junction-1`, so the cost is a number rather than a guess:
+
+| | 10 Hz | 100 Hz |
+|---|---|---|
+| `env.step`, headless | 1.094 ms | **0.848 ms** |
+| `env.step`, `--render offscreen` | 10.9 ms | 20.2 ms |
+| `env.step`, `--render 3D` (RTX 4050) | 83.4 ms | 16.6 ms |
+| 3D speed against wall-clock | 1.20× | **0.60×** |
+| a whole headless drive | 352 steps, 1.55 s | 3,516 steps, 4.85 s |
+| scenario pickle | 792 KB | 1,121 KB |
+
+One `env.step` is *cheaper* at 100 Hz, not dearer — `decision_repeat` drops from 5 to 1,
+so it is one physics substep instead of five. A whole drive still costs about 7.8×,
+because there are ten times as many. And 3D tops out at **60 fps either way** (five
+frames per 83.4 ms, one per 16.6 ms — the display's vsync), which is why asking
+`ForceFPS` for 100 makes the window run at 0.60× real time rather than 1.20×. It is
+usable, and it is slower than real time.
+
 The underlying commands, for anything the script does not cover:
 
 ```bash
@@ -292,6 +368,44 @@ sized for short Waymo clips, not for a road network — and none of the settings
 fix it are reachable from that entry point. `drive.py` measures each scenario and
 picks a terrain size and texture resolution that fit. `--render` also accepts
 `none`, `offscreen`, `2D` and `semantic`.
+
+#### Trying the step rate end to end
+
+Runs straight through, and puts `junction-1` back at 10 Hz where it started. `convert`
+is typed from the repo root, because it takes workspace paths relative to it; the two
+scripts are typed from inside `scripts/`, which they cd out of themselves.
+
+```bash
+# 1. no flag changes nothing - the invariant the whole thing rests on
+sha256sum workspaces/junction-1/scenarionet/*.pkl > /tmp/before.txt
+uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yaml \
+  --routes workspaces/junction-1/routes/routes.json
+sha256sum -c /tmp/before.txt                                   # all three OK
+
+# 2. the same drive at 100 Hz
+uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yaml \
+  --routes workspaces/junction-1/routes/routes.json --step-hz 100
+
+# 3. check it. The drivability gate measures a fixed 0.1 s window rather than one
+#    step, so it reports the same worst swing it reported at 10 Hz
+/home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
+  tools/check_dataset.py workspaces/junction-1/scenarionet
+
+# 4. drive and survey it, from inside scripts/
+cd scripts
+./drive.sh junction-1 -- --render none --step-hz 100           # 3516 of 3695 steps
+./sensor-survey.sh junction-1 -- --step-hz 100                 # IMU differenced over 0.01 s
+
+# 5. the refusal: a 10 Hz dataset driven at 100 Hz names both rates and both fixes
+cd .. && uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yaml \
+  --routes workspaces/junction-1/routes/routes.json
+cd scripts && ./drive.sh junction-1 -- --render none --step-hz 100      # REFUSED
+```
+
+Step 3 reports `step 0.01 s (100 Hz)` and `worst turn 27.9 deg per 0.1 s window (10
+step(s) of 0.01 s), 0 window(s) over 30 deg` — against `24.7 deg per 0.1 s window (1
+step(s) of 0.1 s)` at the default. Step 4's drive reaches completion 0.950, against
+0.953 for the same route at 10 Hz.
 
 ### Drive it yourself
 
@@ -352,6 +466,11 @@ It ships driving with MetaDrive's own IDM, and the only line a model replaces is
 `policy = IdmDriver(env)`. A policy is anything callable taking the observation and
 returning `[steering, throttle]`; nothing registers it and MetaDrive never learns it exists.
 
+**`--step-hz` is the control rate here**, since the policy is called once per `env.step`
+— `--step-hz 100` calls it every 0.01 s instead of every 0.1 s. It is on the example as
+well as on `drive.sh`, and the dataset has to have been converted at the same rate, for
+the reason under [Simulate](#simulate).
+
 The IDM baseline is there to prove the wiring rather than to drive well: `drive.sh -- --agent-policy
 idm` runs the same class *inside* the simulator, where the action is ignored, so the two must
 produce the same drive — measured, and they agree exactly on both extracts.
@@ -382,11 +501,19 @@ and writes samples you can look at:
 ```bash
 ./sensor-survey.sh junction-1
 ./sensor-survey.sh junction-1 -- --policy straight     # a constant action instead of the IDM
+./sensor-survey.sh junction-1 -- --step-hz 100         # every numeric sensor at 100 Hz
 ```
 
 Samples land in `workspaces/<workspace>/sensor-survey/`: a PNG per camera, the point cloud as
 `.npy`, the observation as `.npy`, and `track.csv` with position, latitude/longitude, IMU and
 the action, one row per step.
+
+**The step rate is what makes the IMU an IMU.** Acceleration is velocity differenced over
+one `env.step`, so at the default it is a 10 Hz signal where a real unit runs 100–1000 Hz;
+`--step-hz 100` differences it over 0.01 s instead, and the report header says which it
+used. Every figure in this section was measured at the default 10 Hz. The cameras are not
+decimated yet — they still run at the step rate, so `--step-hz 100` renders ten times as
+many frames as it needs.
 
 All four modalities are there. Measured on `junction-1`:
 
@@ -516,7 +643,12 @@ Then drive against it, either headless or watching in 3D:
 ```
 
 `--sensors` takes any of `imu, gps, camera, depth, semantic, point-cloud`; the observation is
-always sent. In a training loop use the example instead, which needs no window at all:
+always sent. `/spec` tells the server the real `step_seconds` for the run — the two MetaDrive
+keys multiplied out, not a literal 0.1 — so a model integrating anything is in the right units
+whether or not `--step-hz` was passed. `remote` is the same code path as `manual`, so it has no
+step budget and neither rate warning applies to it.
+
+In a training loop use the example instead, which needs no window at all:
 
 ```bash
 /home/keith/Desktop/work/wingfin/metadrive/.venv/bin/python \
@@ -769,8 +901,9 @@ written; two copies would dash out of phase and render as a solid line. On
 `junction-1`: 285 lanes, 93 dividers, 392 edges, 85 second copies merged.
 
 With `--routes`, each route is re-planned in Python (Dijkstra over the lane graph,
-splicing connector centrelines for junction hops), resampled at 10 Hz, and written as
-a synthetic ego car at `tracks["ego"]["state"]["position"]`. **MetaDrive never reads
+splicing connector centrelines for junction hops), resampled at 10 Hz — or at whatever
+`--step-hz` asks for — and written as a synthetic ego car at
+`tracks["ego"]["state"]["position"]`. **MetaDrive never reads
 `routes.json`** — it reads the pickles, and the route *is* those positions.
 
 The route builder page previews the same geometry in the browser; Python re-derives

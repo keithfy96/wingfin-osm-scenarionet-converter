@@ -13,7 +13,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 POSITIONAL=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -h|--help) sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^#\s\?//'; exit 0 ;;
+        -h|--help) sed -n '2,8p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
         -*) die "unknown option: $1" ;;
         *) POSITIONAL="$1" ;;
     esac

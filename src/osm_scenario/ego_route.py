@@ -55,9 +55,12 @@ from osm_scenario.lane_model import LaneFeature, Point2D, PreliminaryLaneModel
 from osm_scenario.signal_plan import LIGHT_RED, colour_at, seconds_until_green
 from osm_scenario.topology import BEND_FILLET_MIN_DEGREES
 
-# MetaDrive steps physics at 0.1 s and `parse_object_state` assumes the same interval when it
-# differentiates positions into an angular velocity. Sampling anywhere else would make the
-# recorded speed disagree with the speed the simulator infers.
+# MetaDrive's *default* step: `physics_world_step_size` 0.02 x `decision_repeat` 5. It is a
+# default rather than a constant of the simulator - both keys are configurable, and
+# `tools/drive.py`'s `step_config` derives them from a requested rate. What is not
+# configurable is `parse_object_state`, which hard-codes 0.1 s when it differentiates
+# positions into an angular velocity, so a track written at any other spacing must be driven
+# at that spacing too rather than replayed at MetaDrive's default.
 TIME_STEP_S = 0.1
 
 # A default vehicle's box. MetaDrive warns when width exceeds length, and `ScenarioEnv`
@@ -1126,12 +1129,17 @@ def _time_at(
     return float(np.interp(at, travelled, _arrival_times(travelled, speed)))
 
 
-def ego_track(*, route: Route, polyline: np.ndarray) -> dict[str, Any]:
-    """The recorded car, resampled at MetaDrive's own step.
+def ego_track(
+    *, route: Route, polyline: np.ndarray, time_step_s: float = TIME_STEP_S
+) -> dict[str, Any]:
+    """The recorded car, resampled at the step the simulator will be run at.
 
     Shape read off `ScenarioDescription._check_object_state_dict`: every state array is the
     scenario's length, 2-D arrays may not be empty in their second axis, and the metadata's
     `object_id` has to equal the key the track is stored under.
+
+    `time_step_s` changes only how densely the drive is written down. The route, the speed
+    profile and the waits are all decided before this point and do not move with it.
     """
     if route.distance_m < MIN_ROUTE_M:
         raise RouteError(
@@ -1140,7 +1148,7 @@ def ego_track(*, route: Route, polyline: np.ndarray) -> dict[str, Any]:
             "succeeds on its first frame"
         )
     samples, sampled_speed = _sample_in_time(
-        polyline, cruise_mps=route.speed_mps, waits=route.waits
+        polyline, cruise_mps=route.speed_mps, waits=route.waits, time_step_s=time_step_s
     )
     if len(samples) < 2:
         raise RouteError(f"route {route.name!r} is too short to drive: {route.distance_m:.1f} m")
@@ -1205,15 +1213,22 @@ def _headings(samples: np.ndarray) -> np.ndarray:
 
 
 def _sample_in_time(
-    polyline: np.ndarray, *, cruise_mps: float, waits: Sequence[Wait] = ()
+    polyline: np.ndarray,
+    *,
+    cruise_mps: float,
+    waits: Sequence[Wait] = (),
+    time_step_s: float = TIME_STEP_S,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Where the car is every 0.1 s, and how fast it is going, along the whole drive.
+    """Where the car is every `time_step_s`, and how fast it is going, along the whole drive.
 
     Sampled in *time* rather than at a fixed spacing, which is what makes the speed profile
     visible: a slower stretch simply gets more samples per metre. The last step is dropped
-    rather than stretched - MetaDrive assumes exactly 0.1 s between samples when it
+    rather than stretched - the simulator assumes an even interval between samples when it
     differentiates positions, so the alternative is a final step of the wrong length - which
     leaves the recorded car up to one step short of the end of the line.
+
+    This is the only seconds-to-steps conversion in `src/`; everything else that needs a rate
+    is handed one.
 
     A wait is a vertex written twice, at the moment the car arrives and at the moment it
     leaves. Adding the wait to every later time instead would spread the standing still over
@@ -1228,7 +1243,7 @@ def _sample_in_time(
     duration = float(times[-1])
     if duration <= 0.0:
         return polyline, np.full(len(polyline), cruise_mps, dtype=np.float64)
-    wanted = np.arange(int(math.floor(duration / TIME_STEP_S)) + 1) * TIME_STEP_S
+    wanted = np.arange(int(math.floor(duration / time_step_s)) + 1) * time_step_s
     samples = np.stack(
         [np.interp(wanted, times, dense[:, 0]), np.interp(wanted, times, dense[:, 1])], axis=1
     )

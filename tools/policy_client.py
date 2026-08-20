@@ -219,7 +219,7 @@ class RemotePolicy:
     `tools/drive.py --agent-policy remote` uses.
     """
 
-    def __init__(self, url, pack=None, timeout=30.0):
+    def __init__(self, url, pack=None, timeout=30.0, step_seconds=0.1):
         parsed = urllib.parse.urlsplit(url if "//" in url else "//" + url, scheme="http")
         if parsed.scheme != "http":
             raise PolicyError(f"only http:// is supported, got {url!r}")
@@ -228,6 +228,11 @@ class RemotePolicy:
         self.path = parsed.path.rstrip("/") or ""
         self._pack = pack
         self._timeout = timeout
+        # What one `env.step` advances the simulator by, sent to the server in `/spec` so a
+        # model integrating anything - a velocity, an accumulated error - is working in the
+        # right units. Passed in rather than assumed: MetaDrive's 0.1 s is a default and
+        # `tools/drive.py --step-hz` moves it.
+        self._step_seconds = float(step_seconds)
         self._connection = None
         self.calls = 0
         self.seconds = 0.0
@@ -300,7 +305,7 @@ class RemotePolicy:
                 "observation replaces the vector entirely",
             },
             "action": {"names": ["steering", "throttle_brake"], "range": [-1.0, 1.0]},
-            "step_seconds": 0.1,
+            "step_seconds": self._step_seconds,
         }
         if self._pack is not None:
             payload.update(self._pack.describe())

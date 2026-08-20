@@ -38,7 +38,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from agent_env import IdmDriver, make_env  # noqa: E402
+from agent_env import IdmDriver, make_env, sim_step_seconds, step_config  # noqa: E402
 from camera_rig import MAX_IMAGE_BUFFERS, RigError, load_rig  # noqa: E402
 from geodesy import aeqd_inverse, projection_origin  # noqa: E402
 
@@ -128,6 +128,15 @@ def main() -> int:
     )
     parser.add_argument("--scenario", type=int, default=0, help="Which scenario to drive")
     parser.add_argument("--steps", type=int, default=400, help="Cap on steps")
+    parser.add_argument(
+        "--step-hz",
+        type=float,
+        default=None,
+        help="How many times a second the simulator advances. MetaDrive's own rate is 10, "
+        "which is what an unflagged run uses. Every per-step figure below - the acceleration "
+        "especially - is differenced over this interval, so it is what makes the recorded IMU "
+        "a 100 Hz signal rather than a 10 Hz one.",
+    )
     parser.add_argument(
         "--sample-at",
         type=int,
@@ -254,12 +263,20 @@ def main() -> int:
         verbose=True,
         max_lateral_dist=lateral,
         sensors=sensors,
+        # MetaDrive config keys, so they go through `**overrides` like any other. Empty when
+        # the flag was not given, which leaves the config unchanged key-for-key.
+        **({} if arguments.step_hz is None else step_config(arguments.step_hz)),
         # `image_observation` reads `config["sensors"][image_source]` (`image_obs.py:68`) and
         # the name defaults to `rgb_camera`, which a rig run has just removed. It lives in
         # `vehicle_config`; passed at the top level MetaDrive dies at construction with
         # `KeyError: "'{'image_source'}' does not exist in existing config"`.
         vehicle_config=dict(image_source=rig.image_source() if rig else "rgb_camera"),
     )
+
+    # How far one `env.step` advances the simulator, read back from the engine rather than
+    # from the flag - so it is right whether or not the flag was given, and stays right if
+    # MetaDrive's own default ever moves. Everything differenced per step below uses it.
+    step_s = sim_step_seconds(env)
 
     policy = IdmDriver(env) if arguments.policy == "idm" else _straight_driver()
     observation, _ = env.reset(seed=arguments.scenario)
@@ -311,7 +328,7 @@ def main() -> int:
         linear = [float(v) for v in body.get_linear_velocity()]
         angular = [float(v) for v in body.getAngularVelocity()]
         acceleration = (
-            [(linear[i] - previous_velocity[i]) / 0.1 for i in range(3)]
+            [(linear[i] - previous_velocity[i]) / step_s for i in range(3)]
             if previous_velocity is not None
             else [0.0, 0.0, 0.0]
         )
@@ -560,8 +577,9 @@ def main() -> int:
         "z [{:+.2f}, {:+.2f}]".format(*span("vx"), *span("vy"), *span("vz")))
     add("  angular vel    3-D, rad/s    x [{:+.3f}, {:+.3f}]  y [{:+.3f}, {:+.3f}]  "
         "z [{:+.3f}, {:+.3f}]".format(*span("wx"), *span("wy"), *span("wz")))
-    add("  acceleration   differenced over the 0.1 s step, m/s^2   "
-        "x [{:+.2f}, {:+.2f}]  y [{:+.2f}, {:+.2f}]".format(*span("ax"), *span("ay")))
+    add("  acceleration   differenced over the {:g} s step, m/s^2 "
+        "x [{:+.2f}, {:+.2f}]  y [{:+.2f}, {:+.2f}]".format(
+            step_s, *span("ax"), *span("ay")))
     add("  attitude       rad          roll [{:+.4f}, {:+.4f}]  pitch [{:+.4f}, {:+.4f}]  "
         "heading [{:+.3f}, {:+.3f}]".format(*span("roll"), *span("pitch"), *span("heading")))
 

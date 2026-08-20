@@ -21,6 +21,7 @@ from osm_scenario.conversion import _lane_change_moves, _lane_neighbours
 from osm_scenario.ego_route import (
     ACCEL_MPS2,
     BRAKE_MPS2,
+    COINCIDENT_M,
     LATERAL_ACCEL_MPS2,
     MAX_CROSSING_M,
     MAX_JOIN_M,
@@ -370,7 +371,7 @@ def test_a_lane_change_is_spread_over_enough_road_to_take_at_speed() -> None:
 
 
 def test_the_track_is_sampled_at_metadrives_own_step() -> None:
-    """0.1 s is what `parse_object_state` assumes when it differentiates positions.
+    """0.1 s is MetaDrive's default step, and what an unflagged conversion writes.
 
     Sampled in time rather than at a fixed spacing, which is what makes the speed profile
     visible at all: a slower stretch simply gets more samples per metre. So the count comes
@@ -384,6 +385,74 @@ def test_the_track_is_sampled_at_metadrives_own_step() -> None:
     # 36 kph is 10 m/s, so 0.1 s is at most 1 m. Corners shorten the chord slightly.
     assert steps.max() <= route.speed_mps * TIME_STEP_S + 1e-9
     assert len(track["state"]["position"]) == math.floor(route.duration_s / TIME_STEP_S) + 1
+
+
+def test_the_default_step_is_the_same_run_as_asking_for_it() -> None:
+    """`--step-hz 10` and no flag have to be one run, or the invariant is not testable."""
+    model = _chain()
+    route = _plan(model, "a", "d")
+    line = route_polyline(model=model, route_lanes=route.lanes, lane_changes=route.lane_changes)
+    default = ego_track(route=route, polyline=line)["state"]
+    asked = ego_track(route=route, polyline=line, time_step_s=TIME_STEP_S)["state"]
+    for key in default:
+        assert np.array_equal(default[key], asked[key]), key
+
+
+def test_a_faster_step_writes_the_same_drive_ten_times_more_densely() -> None:
+    """The rate changes how densely the drive is written down, never where the car goes.
+
+    Decimating a 100 Hz track back to 10 Hz has to land on the 10 Hz track exactly: both are
+    read off one speed profile at multiples of the same clock, so any drift would mean the
+    rate had leaked into the geometry.
+    """
+    model = _chain()
+    route = _plan(model, "a", "d")
+    line = route_polyline(model=model, route_lanes=route.lanes, lane_changes=route.lane_changes)
+    slow = ego_track(route=route, polyline=line)["state"]
+    fast = ego_track(route=route, polyline=line, time_step_s=TIME_STEP_S / 10.0)["state"]
+
+    count = len(slow["position"])
+    assert len(fast["position"]) >= (count - 1) * 10 + 1
+    decimated = fast["position"][:: 10][:count]
+    assert np.abs(decimated - slow["position"]).max() < 1e-9
+    assert np.abs(fast["velocity"][:: 10][:count] - slow["velocity"]).max() < 1e-9
+
+
+def test_the_route_and_its_duration_do_not_move_with_the_step() -> None:
+    """The guard against anyone later threading the rate into `speed_profile`.
+
+    `PROFILE_SAMPLE_M` is deliberately left at 0.1 m whatever the rate: scaled with it, the
+    curvature estimator reads a radius over a shorter span than the road really turns
+    through and over-brakes, costing a third of the pace without fixing the artefact.
+    """
+    model = _chain()
+    route = _plan(model, "a", "d")
+    line = route_polyline(model=model, route_lanes=route.lanes, lane_changes=route.lane_changes)
+    slow = ego_track(route=route, polyline=line)["state"]
+    fast = ego_track(route=route, polyline=line, time_step_s=TIME_STEP_S / 10.0)["state"]
+
+    # Same drive, so the same duration to within one step of the coarser clock, and the same
+    # top speed - not a slower drive sampled more often.
+    assert abs(len(fast["position"]) * 0.01 - len(slow["position"]) * TIME_STEP_S) <= TIME_STEP_S
+    assert abs(
+        np.linalg.norm(fast["velocity"], axis=1).max()
+        - np.linalg.norm(slow["velocity"], axis=1).max()
+    ) < 1e-9
+
+
+def test_a_faster_step_does_not_push_the_track_onto_the_carried_heading_path() -> None:
+    """At 0.01 s a cruising step is 0.01 m - ten times `COINCIDENT_M`, so still a direction.
+
+    `_headings` carries the previous heading across any step too short to have one of its
+    own. That is for a car standing at a red light; a step this rule started catching while
+    the car was *moving* would freeze the heading through a corner.
+    """
+    model = _chain()
+    route = _plan(model, "a", "d")
+    line = route_polyline(model=model, route_lanes=route.lanes, lane_changes=route.lane_changes)
+    state = ego_track(route=route, polyline=line, time_step_s=TIME_STEP_S / 10.0)["state"]
+    moved = np.linalg.norm(np.diff(state["position"][:, :2], axis=0), axis=1)
+    assert moved.min() > COINCIDENT_M
 
 
 def test_the_track_carries_every_array_metadrive_checks() -> None:
@@ -823,6 +892,51 @@ def test_the_stopped_car_stands_still_and_keeps_facing_the_way_it_was_going() ->
     # And the track is still drivable by the gate's own rule.
     swing = np.abs((np.diff(state["heading"]) + np.pi) % (2 * np.pi) - np.pi)
     assert np.degrees(swing).max() < 30.0
+
+
+def test_the_drivability_gate_reads_the_same_at_either_rate() -> None:
+    """`tools/check_dataset.py`'s rule, applied here so the two cannot drift apart.
+
+    The gate is the only drivability check in the repo, and `LATERAL_ACCEL_MPS2` was tuned
+    directly against it. A per-*step* rule would fail a 100 Hz recording of a drive that
+    passes at 10 Hz - not because the car turns any harder, but because turning is
+    concentrated at the polyline's vertices, so once a step is shorter than the vertex
+    spacing one step absorbs a whole vertex's turn whatever the step is. Measured over a
+    fixed 0.1 s the answer is a property of the drive rather than of how it was written down.
+
+    Spelled out rather than imported: `tools/` runs on MetaDrive's 3.8 interpreter and this
+    file runs on 3.10, so the rule is written twice on purpose - as the signal clock is.
+    """
+
+    def worst_swing(state: dict[str, Any], step_s: float) -> float:
+        window = max(1, int(round(0.1 / step_s)))
+        heading = np.asarray(state["heading"]).reshape(-1)
+        swung = heading[window:] - heading[:-window]
+        return float(np.degrees(np.abs((swung + np.pi) % (2 * np.pi) - np.pi)).max())
+
+    # A 90 degree turn, not the straight chain: a drive that never turns reads 0 at any rate
+    # and would not tell the two rules apart.
+    model = _corner()
+    route = _plan(model, "n", "e")
+    line = route_polyline(model=model, route_lanes=route.lanes, lane_changes=route.lane_changes)
+    slow = ego_track(route=route, polyline=line)["state"]
+    fast = ego_track(route=route, polyline=line, time_step_s=TIME_STEP_S / 10.0)["state"]
+
+    # At the default rate the window is one step, so this is the number the gate has always
+    # printed - and the faster recording of the same drive has to agree with it.
+    assert worst_swing(slow, TIME_STEP_S) < 30.0
+    assert worst_swing(fast, TIME_STEP_S / 10.0) == pytest.approx(
+        worst_swing(slow, TIME_STEP_S), abs=0.5
+    )
+
+    # And the per-step reading, which is what a naive gate would use, disagrees with itself:
+    # the denser recording reports a smaller number for the identical drive.
+    per_step_fast = float(
+        np.degrees(
+            np.abs((np.diff(np.asarray(fast["heading"])) + np.pi) % (2 * np.pi) - np.pi)
+        ).max()
+    )
+    assert per_step_fast < worst_swing(slow, TIME_STEP_S)
 
 
 def test_the_track_grows_by_exactly_the_time_spent_waiting() -> None:

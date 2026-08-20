@@ -21,7 +21,7 @@ POSITIONAL=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --skip-fetch) SKIP_FETCH=1 ;;
-        -h|--help) sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^#\s\?//'; exit 0 ;;
+        -h|--help) sed -n '2,15p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
         -*) die "unknown option: $1" ;;
         *) POSITIONAL="$1" ;;
     esac

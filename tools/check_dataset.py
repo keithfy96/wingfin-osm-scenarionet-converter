@@ -34,6 +34,38 @@ def _polyline_length(polyline) -> float:
     return total
 
 
+# The window every per-step drivability figure is measured over, in seconds. It is a fixed
+# span rather than one step on purpose: a step is whatever the dataset was written at, and a
+# 100 Hz recording of a drive that passes at 10 Hz would fail a per-step rule for no reason
+# but its own density. Turning is concentrated at the polyline's vertices, so once a step is
+# shorter than the vertex spacing one step absorbs a whole vertex's turn whatever the step
+# is - the identical drive reads 24.7 deg/step at 10 Hz and 12.3 at 100 Hz. Measured over a
+# fixed 0.1 s the answer is the same at either rate, and at 10 Hz the window is one step, so
+# every number this script has ever printed is unchanged.
+GATE_WINDOW_S = 0.1
+GATE_TURN_DEG = 30.0
+
+
+def _step_seconds(metadata) -> float:
+    """How long one recorded step of this scenario lasts.
+
+    `metadata.ts` spacing *is* the rate - it is built by multiplying an integer step index by
+    the interval, so there is no separate `dt` key and none is wanted. A map-only scenario has
+    one timestamp and no spacing, and a plan carries the rate it was baked at, so both are
+    read in turn before falling back to MetaDrive's default.
+    """
+    stamps = metadata.get("ts")
+    if stamps is not None and len(stamps) > 1:
+        step = float(stamps[1]) - float(stamps[0])
+        if step > 0.0:
+            return step
+    plan = metadata.get("signals") or {}
+    step = plan.get("time_step_s")
+    if step:
+        return float(step)
+    return 0.1
+
+
 def _paint_on_tarmac(map_features) -> tuple[float, str]:
     """The longest run of a painted line lying inside a lane surface it does not belong to.
 
@@ -141,9 +173,20 @@ def main() -> int:
             for feature in scenario["map_features"].values()
             if feature.get("type") == "LANE_SURFACE_STREET"
         )
+        # The rate this scenario was written at, which every per-step figure below is measured
+        # against. It also decides what `tools/drive.py --step-hz` has to be given: a replayed
+        # track is consumed one frame per env.step with no interpolation, so a mismatch drives
+        # the route at the wrong speed rather than failing.
+        step_s = _step_seconds(scenario["metadata"])
         print(
-            "content      {} map features ({} lanes), {} tracks, length {}".format(
-                len(scenario["map_features"]), lanes, len(scenario["tracks"]), scenario["length"]
+            "content      {} map features ({} lanes), {} tracks, length {}, "
+            "step {:g} s ({:g} Hz)".format(
+                len(scenario["map_features"]),
+                lanes,
+                len(scenario["tracks"]),
+                scenario["length"],
+                step_s,
+                1.0 / step_s,
             )
         )
 
@@ -311,9 +354,13 @@ def main() -> int:
             state = scenario["tracks"][sdc_id]["state"]
             heading = numpy.asarray(state["heading"]).reshape(-1)
             speed = numpy.linalg.norm(numpy.asarray(state["velocity"])[:, :2], axis=1)
-            turn = numpy.abs((numpy.diff(heading) + numpy.pi) % (2 * numpy.pi) - numpy.pi)
-            snaps = int((numpy.degrees(turn) > 30).sum())
-            lateral = float((turn / 0.1 * speed[:-1]).max()) if len(turn) else 0.0
+            # How many recorded steps make up the fixed window. 1 at MetaDrive's own rate.
+            window = max(1, int(round(GATE_WINDOW_S / step_s)))
+            span = window * step_s
+            swung = heading[window:] - heading[:-window] if len(heading) > window else heading[:0]
+            turn = numpy.abs((swung + numpy.pi) % (2 * numpy.pi) - numpy.pi)
+            snaps = int((numpy.degrees(turn) > GATE_TURN_DEG).sum())
+            lateral = float((turn / span * speed[: len(turn)]).max()) if len(turn) else 0.0
             worst_turn = float(numpy.degrees(turn).max()) if len(turn) else 0.0
             slowest, fastest = speed.min() * 3.6, speed.max() * 3.6
             # The radius the drive line actually turns through, which the heading change alone
@@ -321,13 +368,25 @@ def main() -> int:
             # 30 degree rule and still describe a corner no car could take at any speed. A
             # small car needs about 5 m.
             track = numpy.asarray(state["position"])[:, :2]
+            # The arc that turn is spread along. A heading is a property of a step, so the
+            # swing from step i to step i+w happens between the middle of one and the middle
+            # of the other - hence the half-step correction at each end. At window 1 this is
+            # exactly `(moved[i] + moved[i+1]) / 2`, which is what it has always been.
             moved = numpy.linalg.norm(numpy.diff(track, axis=0), axis=1)
-            spans = (moved[:-1] + moved[1:]) / 2.0 if len(moved) > 1 else numpy.zeros(0)
+            along = numpy.concatenate([[0.0], numpy.cumsum(moved)])
+            if len(moved) > window:
+                spans = (along[window:-1] - along[: -window - 1]) + (
+                    moved[window:] - moved[:-window]
+                ) / 2.0
+            else:
+                spans = numpy.zeros(0)
+            spans = spans[: len(turn)]
             turning = turn[: len(spans)] > numpy.radians(0.05)
             radius = spans[turning] / turn[: len(spans)][turning] if turning.any() else None
             print(
-                f"drivability  worst turn {worst_turn:.1f} deg per 0.1 s step, {snaps} "
-                f"step(s) over 30 deg; speed {slowest:.0f}-{fastest:.0f} km/h; "
+                f"drivability  worst turn {worst_turn:.1f} deg per {span:g} s window "
+                f"({window} step(s) of {step_s:g} s), {snaps} window(s) over "
+                f"{GATE_TURN_DEG:.0f} deg; speed {slowest:.0f}-{fastest:.0f} km/h; "
                 f"peak lateral {lateral:.1f} m/s^2"
             )
             if radius is not None and len(radius):
@@ -338,8 +397,9 @@ def main() -> int:
                 )
             if snaps:
                 print(
-                    f"             FAILED: the recorded car turns more than 30 deg in a "
-                    f"single 0.1 s step {snaps} time(s). Replayed, it spins on the spot."
+                    f"             FAILED: the recorded car turns more than "
+                    f"{GATE_TURN_DEG:.0f} deg in {span:g} s {snaps} time(s). Replayed, it "
+                    f"spins on the spot."
                 )
                 failures += 1
 
@@ -356,8 +416,8 @@ def main() -> int:
                     )
                     failures += 1
                     continue
-                arrived = int(round(stop["arrived_s"] / 0.1))
-                left = int(round((stop["arrived_s"] + stop["waited_s"]) / 0.1))
+                arrived = int(round(stop["arrived_s"] / step_s))
+                left = int(round((stop["arrived_s"] + stop["waited_s"]) / step_s))
                 held, moved = tape[min(arrived, len(tape) - 1)], tape[min(left, len(tape) - 1)]
                 print(
                     "             stops {:.0f} s at {} for {:.1f} s; the tape reads {} on "

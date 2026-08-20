@@ -63,7 +63,22 @@ from drive import (  # noqa: E402
     _region_for,
     _set_line_width,
     _set_semantic_detail,
+    data_step_seconds,
+    sim_step_seconds,
+    step_config,
 )
+
+# Re-exported rather than re-derived, so `drive.py`, `sensor_survey.py` and anything built on
+# `make_env` share one definition of the two clocks. `step_config` returns MetaDrive config
+# keys, so it can be splatted straight into `make_env(**step_config(hz))`.
+__all__ = [
+    "ActionRecorder",
+    "IdmDriver",
+    "data_step_seconds",
+    "make_env",
+    "sim_step_seconds",
+    "step_config",
+]
 
 
 def make_env(

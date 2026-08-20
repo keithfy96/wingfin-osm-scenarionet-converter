@@ -6,6 +6,7 @@
 #   ./scripts/drive.sh junction-1               # override the workspace for this run
 #   ./scripts/drive.sh -- --render 2D           # everything after -- goes to tools/drive.py
 #   ./scripts/drive.sh -- --line-width-m 0.1    # thinner lane lines, this run only
+#   ./scripts/drive.sh -- --step-hz 100         # 100 Hz; the dataset must match
 #   GPU=integrated ./scripts/drive.sh           # force the built-in graphics
 #
 # Why a script rather than a command: MetaDrive runs on its own interpreter (3.8 / numpy 1.24,
@@ -19,6 +20,9 @@
 #   LINE_WIDTH_M      painted lane-line width in metres; drive.py's own default applies
 #   LINE_INTERVAL_M   how finely a painted line is sampled; 2.0 restores MetaDrive's dashes
 #                     when unset, and a --line-width-m after -- still wins over this
+#   STEP_HZ           how many times a second the simulator advances; MetaDrive's own 10
+#                     applies when unset. A dataset converted at another rate must be driven
+#                     at that rate -- drive.py refuses a mismatch rather than driving it wrong
 
 # shellcheck source=scripts/_common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
@@ -28,7 +32,7 @@ PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --) shift; PASSTHROUGH=("$@"); break ;;
-        -h|--help) sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^#\s\?//'; exit 0 ;;
+        -h|--help) sed -n '2,25p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
         -*) die "unknown option: $1
   This script takes only a workspace. To pass $1 to drive.py, put it after --:
     ./scripts/drive.sh ${POSITIONAL:-<workspace>} -- $1" ;;
@@ -90,6 +94,9 @@ if [[ -n "${LINE_WIDTH_M:-}" ]]; then
 fi
 if [[ -n "${LINE_INTERVAL_M:-}" ]]; then
     ARGS+=(--line-interval-m "$LINE_INTERVAL_M")
+fi
+if [[ -n "${STEP_HZ:-}" ]]; then
+    ARGS+=(--step-hz "$STEP_HZ")
 fi
 # Last wins in argparse, so anything repeated after -- overrides what this script chose.
 ARGS+=(${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"})

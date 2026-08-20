@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import os
 import sys
 
@@ -156,23 +157,138 @@ def _region_for(dataset: str) -> tuple[int, float, str]:
     return _next_power_of_two(2 * furthest), furthest, where
 
 
-def _longest_red(scenario) -> int:
-    """How many steps the longest red in this scenario's plan lasts.
+# MetaDrive's own physics tick, and the floor on how fine `step_config` will make one. Both
+# keys are configurable; this is only the default `physics_world_step_size`.
+PHYSICS_TICK_S = 0.02
+
+
+def step_config(step_hz):
+    """The two MetaDrive keys that make one `env.step` last `1 / step_hz` seconds.
+
+    `env.step` advances `physics_world_step_size` x `decision_repeat` and nothing else - the
+    chain is `base_env.py:435,462-466` -> `base_engine.py:431-441` -> `engine_core.py:385-387`,
+    where `doPhysics(dt, 1, dt)` takes one fixed substep, so both keys are genuinely honoured.
+
+    `ceil` on the repeat keeps the physics tick from ever being *coarser* than MetaDrive's own
+    0.02 s: a slower rate is served by repeating a fine tick, never by taking a coarse one.
+    **10 Hz returns exactly (0.02, 5)**, which is what makes `--step-hz 10` and no flag the
+    same run; 100 Hz gives (0.01, 1). The pair is not exposed directly, because the rate is
+    their product and `decision_repeat` is load-bearing in ways a caller should not have to
+    know - onscreen it also decides how many times `taskMgr.step()` runs per `env.step`, and
+    every camera buffer is redrawn on each of those.
+    """
+    dt = 1.0 / float(step_hz)
+    repeat = max(1, int(math.ceil(dt / PHYSICS_TICK_S - 1e-9)))
+    return {"physics_world_step_size": dt / repeat, "decision_repeat": repeat}
+
+
+def sim_step_seconds(env) -> float:
+    """How long one `env.step` advances the simulator. MetaDrive's own derivation.
+
+    `waypoint_policy.py:61-65` computes it exactly this way. One of the *two clocks* this
+    script has to keep apart: this is the engine's, and `data_step_seconds` is the tape's.
+    They are equal only when the dataset was converted at the rate the drive is running at.
+
+    The engine does not exist until the first `reset`, so the env's own config stands in
+    before then. It holds the same two keys - `BaseEngine.global_config` is built from it -
+    and asking the engine once it exists keeps this the authority rather than a copy.
+    """
+    engine = getattr(env, "engine", None)
+    config = env.config if engine is None else engine.global_config
+    return float(config["physics_world_step_size"]) * int(config["decision_repeat"])
+
+
+def data_step_seconds(scenario) -> float:
+    """How long one recorded frame of this scenario covers. The other clock.
+
+    `metadata.ts` spacing *is* the rate the dataset was written at - it is an integer step
+    index times the interval - so there is no `dt` key to read and none is wanted. A map-only
+    scenario has a single timestamp and no spacing, and a signal plan records the step it was
+    baked against, so both are tried before falling back to MetaDrive's default.
+    """
+    metadata = scenario.get("metadata") or {}
+    stamps = metadata.get("ts")
+    if stamps is not None and len(stamps) > 1:
+        step = float(stamps[1]) - float(stamps[0])
+        if step > 0.0:
+            return step
+    plan = metadata.get("signals") or {}
+    if plan.get("time_step_s"):
+        return float(plan["time_step_s"])
+    return 0.1
+
+
+def _longest_red(scenario) -> float:
+    """How many **seconds** the longest red in this scenario's plan lasts.
 
     The headroom a self-driving policy needs on top of the recording: a car that stops has to
     wait out a whole red in the worst case, and the recording is only as long as a drive that
     never stopped. Zero when the scenario carries no plan, which is most of them.
+
+    Seconds rather than steps, and that is the fix rather than a tidy-up. This used to divide
+    by the *plan's* step to produce a number the loop then counted in *env* steps - two
+    different clocks, equal only by today's coincidence. The caller converts, because the
+    caller is the one that knows which clock it is counting in.
     """
     plan = (scenario.get("metadata") or {}).get("signals")
     if not plan:
-        return 0
+        return 0.0
     cycle = float(plan["cycle_seconds"])
-    step = float(plan["time_step_s"])
     longest = max(
         cycle - float(group["green_seconds"]) - float(group["yellow_seconds"])
         for group in plan["groups"]
     )
-    return int(round(max(longest, 0.0) / step))
+    return max(longest, 0.0)
+
+
+def _refuse_mismatch(scenario, *, policy, lights, sim_dt, data_dt):
+    """Why this scenario cannot be driven at a rate other than the one it was written at.
+
+    Returns the message, or `""` when the mismatch is harmless. Three things consume the
+    recording one frame per `env.step` with no interpolation, so at a different rate they run
+    the tape at the ratio of the two clocks rather than at the speed it records:
+
+    - `ReplayEgoCarPolicy` (`replay_policy.py:41-65`) sets the ego's position from frame
+      `episode_step`. At 100 Hz against a 10 Hz tape the car flies the route at 10x. And
+      `parse_object_state` hard-codes 0.1 s when it differentiates positions into an angular
+      velocity, so even a matched-length tape would spin at the wrong rate.
+    - `ScenarioLightManager.after_step` (`scenario_light_manager.py:68-75`) indexes
+      `object_state[episode_step]` the same way, so a baked tape changes colour at the wrong
+      moment.
+    - any non-ego track, for the first reason. Nothing generates those here yet; written now
+      so it is right when Stage 8 does.
+
+    Refused rather than warned about, because none of the three fails - each simply drives
+    something other than what the dataset says.
+    """
+    rates = (
+        f"the simulator is running at {sim_dt:g} s per step and this dataset was written "
+        f"at {data_dt:g} s ({1.0 / sim_dt:g} Hz against {1.0 / data_dt:g} Hz)"
+    )
+    fix = (
+        f"Either re-run with --step-hz {1.0 / data_dt:g} to match the dataset, or "
+        f"re-convert it with --step-hz {1.0 / sim_dt:g} to match this run."
+    )
+    if policy == "replay":
+        return (
+            "REFUSED: --agent-policy replay consumes one recorded frame per env.step with "
+            f"no interpolation, and {rates}. The car would drive the route at "
+            f"{data_dt / sim_dt:.2g}x speed.\n             {fix}"
+        )
+    if lights == "tape" and scenario.get("dynamic_map_states"):
+        return (
+            "REFUSED: a baked light tape is indexed by env.step the same way a replayed "
+            f"track is, and {rates}. Every light would change colour at the wrong "
+            f"moment.\n             {fix} Or drive the lights live with --lights live."
+        )
+    sdc = (scenario.get("metadata") or {}).get("sdc_id")
+    others = [key for key in (scenario.get("tracks") or {}) if key != sdc]
+    if others:
+        return (
+            f"REFUSED: {len(others)} non-ego track(s) are replayed one recorded frame per "
+            f"env.step, and {rates}.\n             {fix}"
+        )
+    return ""
 
 
 def _baked_stops(scenario) -> list[dict]:
@@ -409,6 +525,17 @@ def main() -> int:
         help="How finely a painted line is sampled before it is drawn, in metres. MetaDrive's "
         f"own value is 2.0, which sags inside every curve. Default {LINE_INTERVAL_M}. Anything "
         "under 1.5 also makes broken lines 3 m / 3 m instead of 2 m / 2 m; 2.0 restores both.",
+    )
+    parser.add_argument(
+        "--step-hz",
+        type=float,
+        default=None,
+        help="How many times a second the simulator advances. MetaDrive's own rate is 10, "
+        "which is what an unflagged run uses. Set from the two keys env.step multiplies "
+        "together, so 100 gives a 0.01 s physics tick with one substep. A dataset carries "
+        "the rate it was converted at, and a replayed track is consumed one recorded frame "
+        "per step with no interpolation - so a mismatch is refused rather than driven at the "
+        "wrong speed.",
     )
     parser.add_argument("--height-scale", type=int, default=HEIGHT_SCALE)
     parser.add_argument("--drivable-area-extension", type=int, default=DRIVABLE_AREA_EXTENSION_M)
@@ -675,12 +802,49 @@ def main() -> int:
             merged.update(registered)
             offscreen["sensors"] = merged
 
+    # Folded in only when it was asked for, so an unflagged run's config is unchanged
+    # key-for-key rather than merely equal by arithmetic.
+    rate = {} if arguments.step_hz is None else step_config(arguments.step_hz)
+    if rate:
+        print(
+            "step rate    {:g} Hz: physics_world_step_size={:g}, decision_repeat={}".format(
+                arguments.step_hz, rate["physics_world_step_size"], rate["decision_repeat"]
+            )
+        )
+        # Three things inside MetaDrive are written in steps rather than in seconds. None is
+        # a fault in the dataset and none is ours to patch - a reference checkout is not
+        # edited here - so each is said out loud and left alone.
+        for condition, warning in (
+            (
+                arguments.agent_policy == "idm",
+                "TrajectoryIDMPolicy will not drive identically at this rate: "
+                "`PIDController` has no timestep in it at all (`PID_controller.py:1-22`), so "
+                "both its gains scale with the rate, and `LANE_CHANGE_FREQ = 50` and "
+                "`IDM_ACT_BATCH_SIZE = 5` are counted in steps.",
+            ),
+            (
+                arguments.agent_policy == "manual" and arguments.step_hz > 10.0,
+                f"the keyboard will feel {arguments.step_hz / 10.0:.0f}x slower: "
+                "`STEERING_INCREMENT` is applied per env.step, so the wheel takes that "
+                "many more steps to reach full lock.",
+            ),
+            (
+                arguments.render == "3D" and arguments.step_hz > 10.0,
+                "the display targets {:.0f} fps: `ForceFPS` takes its interval from "
+                "`physics_world_step_size`, so the drive will run slower than wall-clock."
+                "".format(1.0 / rate["physics_world_step_size"]),
+            ),
+        ):
+            if condition:
+                print("             note: " + warning)
+
     env = environment_class(
         {
             "data_directory": dataset,
             "num_scenarios": count,
             "use_render": arguments.render == "3D",
             "agent_policy": policy,
+            **rate,
             **offscreen,
             # The one key that selects `ManualControlPolicy`; see the comment on `policy` above.
             "manual_control": arguments.agent_policy == "manual",
@@ -713,7 +877,11 @@ def main() -> int:
     if arguments.agent_policy == "remote":
         from policy_client import RemotePolicy, SensorPack
 
-        remote = RemotePolicy(arguments.policy_url, pack=SensorPack(env, sensor_names))
+        remote = RemotePolicy(
+            arguments.policy_url,
+            pack=SensorPack(env, sensor_names),
+            step_seconds=sim_step_seconds(env),
+        )
         remote.spec({"dataset": dataset})
         print(
             "sensors      {}".format(
@@ -753,6 +921,13 @@ def main() -> int:
             length = env.engine.data_manager.current_scenario_length
             scenario = env.engine.data_manager.current_scenario
             scenario_id = scenario["id"]
+            # The two clocks. `sim_dt` is how far one `env.step` advances the simulator;
+            # `data_dt` is how far one recorded frame covers. Equal only when the dataset was
+            # converted at the rate this run is driving at, which is what `_refuse_mismatch`
+            # below is about.
+            sim_dt = sim_step_seconds(env)
+            data_dt = data_step_seconds(scenario)
+            path_every = max(1, int(round(0.1 / sim_dt)))
             lights = getattr(env.engine, "light_manager", None)
             if recorder is not None:
                 recorder.start_episode(scenario_id)
@@ -773,6 +948,19 @@ def main() -> int:
             # A hosted model is in exactly the same position, and for the same reason: it is
             # not following the tape, so the tape's length is not a bound on how long its drive
             # legitimately takes.
+            mismatch = abs(sim_dt - data_dt) > 1e-9
+            if mismatch:
+                refusal = _refuse_mismatch(
+                    scenario,
+                    policy=arguments.agent_policy,
+                    lights=arguments.lights,
+                    sim_dt=sim_dt,
+                    data_dt=data_dt,
+                )
+                if refusal:
+                    print(refusal)
+                    return 1
+
             if arguments.agent_policy in ("manual", "remote"):
                 allowance, budget = None, None
                 # Not a detail: `ScenarioEnv` puts the ego on the tape's first position *with
@@ -784,8 +972,15 @@ def main() -> int:
                     "recorded speed, not a standstill; `p` pauses"
                 )
             else:
-                allowance = 0 if arguments.agent_policy == "replay" else _longest_red(scenario)
-                budget = length + allowance
+                # Steps of *this run*, not frames of the recording. The recording covers
+                # `length * data_dt` seconds; how many `env.step`s that is depends on the sim
+                # clock, and the red the car may have to sit out is seconds of its own. At
+                # matched rates both terms are today's integers.
+                allowance_s = (
+                    0.0 if arguments.agent_policy == "replay" else _longest_red(scenario)
+                )
+                allowance = int(round(allowance_s / sim_dt))
+                budget = int(round(length * data_dt / sim_dt)) + allowance
 
             # A baked stop is computed against the plan's written offsets, so it is right
             # under `--lights tape` and wrong under `--lights live`, which draws a fresh
@@ -835,8 +1030,9 @@ def main() -> int:
                             if was is not None:
                                 changes.setdefault(light.id, []).append((now, light.status))
                             previous[light.id] = light.status
-                # Every tenth step is plenty: the windows overlap heavily at 0.1 s spacing.
-                if steps % 10 == 0:
+                # Every 0.1 s is plenty: the windows overlap heavily at that spacing. Counted
+                # from the sim clock, so the trace stays the same shape whatever the rate.
+                if steps % path_every == 0:
                     path.append(tuple(env.agent.position))
                 steps += 1
                 if arguments.render == "3D":
@@ -885,12 +1081,14 @@ def main() -> int:
             # height for the whole drive. A z far from there is the terrain and the physics
             # disagreeing, which is the failure this script exists to make visible.
             print(
-                "scenario {:<3} {}: {} of {} steps, arrive_dest={}, completion {:.3f}, "
-                "vehicle z {:.3f}..{:.3f} m".format(
+                "scenario {:<3} {}: {} of {} steps ({} recorded frames at {:g} s), "
+                "arrive_dest={}, completion {:.3f}, vehicle z {:.3f}..{:.3f} m".format(
                     index,
                     scenario_id,
                     steps,
+                    "?" if budget is None else budget,
                     length,
+                    data_dt,
                     bool(info.get("arrive_dest", False)),
                     float(info.get("route_completion", float("nan"))),
                     min(heights) if heights else float("nan"),

@@ -28,7 +28,13 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "tools"))
 
-from agent_env import ActionRecorder, IdmDriver, make_env  # noqa: E402
+from agent_env import (  # noqa: E402
+    ActionRecorder,
+    IdmDriver,
+    make_env,
+    sim_step_seconds,
+    step_config,
+)
 from policy_client import SENSORS, RemotePolicy, SensorPack, sensor_config  # noqa: E402
 
 
@@ -59,6 +65,13 @@ def main() -> int:
         "examples/policy_server.py. e.g. http://127.0.0.1:8642",
     )
     parser.add_argument(
+        "--step-hz",
+        type=float,
+        default=None,
+        help="How many times a second the simulator advances. MetaDrive's own rate is 10. It "
+        "is the rate the policy is called at, so it is also the control rate.",
+    )
+    parser.add_argument(
         "--sensors",
         default="",
         help="Comma-separated extras to send alongside the observation, for --policy-url: "
@@ -78,10 +91,16 @@ def main() -> int:
     registered = sensor_config(names) if names else {}
     if registered:
         overrides["sensors"] = registered
+    if arguments.step_hz is not None:
+        overrides.update(step_config(arguments.step_hz))
 
     env = make_env(arguments.dataset, render=arguments.render, verbose=True, **overrides)
     if arguments.policy_url:
-        policy = RemotePolicy(arguments.policy_url, pack=SensorPack(env, names))
+        policy = RemotePolicy(
+            arguments.policy_url,
+            pack=SensorPack(env, names),
+            step_seconds=sim_step_seconds(env),
+        )
         policy.spec({"dataset": arguments.dataset})
     else:
         policy = IdmDriver(env)

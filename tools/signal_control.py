@@ -90,6 +90,8 @@ def build_manager(seed=None):
             self._groups = []
             self._lane_to_group = {}
             self._episode_offset = 0.0
+            # Replaced from the engine in `before_reset`; only a placeholder for the window
+            # before the first reset, when there is no engine config to read.
             self._time_step = 0.1
             self._rng = numpy.random.RandomState(seed)
 
@@ -98,9 +100,21 @@ def build_manager(seed=None):
             plan = _plan_of(self.current_scenario)
             self._groups = []
             self._lane_to_group = {}
+            # From the **engine**, not from the plan. `colour_at` below is handed
+            # `episode_step * self._time_step`, and `episode_step` counts `env.step`s - so the
+            # denominator has to be how long an `env.step` lasts in *this* run, which is
+            # `physics_world_step_size x decision_repeat` and nothing else
+            # (`waypoint_policy.py:61-65` derives it the same way). `plan["time_step_s"]` is
+            # the rate the *tape* was baked at, which is a different clock and equal to this
+            # one only when the dataset was converted at the rate it is being driven at. These
+            # lights are live precisely because the tape is not being used, so reading the
+            # tape's rate here was right only by coincidence. Do not put it back.
+            config = self.engine.global_config
+            self._time_step = float(config["physics_world_step_size"]) * int(
+                config["decision_repeat"]
+            )
             if not plan:
                 return
-            self._time_step = plan.get("time_step_s", 0.1)
             cycle = plan["cycle_seconds"]
             # One delta for the whole plan; see the module docstring for why it must not be
             # per group.
