@@ -1,0 +1,100 @@
+sensors:
+  - type: rgb_camera
+    name: cam_front
+    transform:
+      x: 1
+      y: 0.0
+      z: 2
+      pitch: 0.0
+      yaw: 0.0
+      roll: 0.0
+    width: 512
+    height: 288
+    fov: 70
+    tick_rate: 0.1
+
+  - type: rgb_camera
+    name: cam_left
+    transform:
+      x: 1
+      y: 0.0
+      z: 2
+      pitch: 0.0
+      yaw: -55.0
+      roll: 0.0
+    width: 512
+    height: 288
+    fov: 70
+    tick_rate: 0.1
+
+  - type: rgb_camera
+    name: cam_right
+    transform:
+      x: 1
+      y: 0.0
+      z: 2
+      pitch: 0.0
+      yaw: 55.0
+      roll: 0.0
+    width: 512
+    height: 288
+    fov: 70
+    tick_rate: 0.1
+
+  - type: rgb_camera
+    name: cam_back
+    transform:
+      x: -1
+      y: 0.0
+      z: 2
+      pitch: 0.0
+      yaw: 180.0
+      roll: 0.0
+    width: 512
+    height: 288
+    fov: 70
+    tick_rate: 0.1
+
+  - type: rgb_camera
+    name: cam_back_left
+    transform:
+      x: -1
+      y: 0.0
+      z: 2
+      pitch: 0.0
+      yaw: 125.0
+      roll: 0.0
+    width: 512
+    height: 288
+    fov: 70
+    tick_rate: 0.1
+
+  - type: rgb_camera
+    name: cam_back_right
+    transform:
+      x: -1
+      y: 0.0
+      z: 2
+      pitch: 0.0
+      yaw: -125.0
+      roll: 0.0
+    width: 512
+    height: 288
+    fov: 70
+    tick_rate: 0.1
+
+  - type: rgb_camera
+    name: cam_front_wide
+    transform:
+      x: 1
+      y: 0.0
+      z: 2
+      pitch: 0.0
+      yaw: 0.0
+      roll: 0.0
+    width: 1280
+    height: 720
+    fov: 120
+    tick_rate: 0.1
+
+

@@ -8,7 +8,7 @@
 #   ./scripts/step-timing.sh junction-1 -- --rows 2,6         # the pair that prices the camera
 #   ./scripts/step-timing.sh junction-1 -- --physics-hz 100   # pin the integrator
 #   ./scripts/step-timing.sh mosque -- --label rig-container  # name the machine in the CSV
-#   ./scripts/step-timing.sh mosque -- --camera-rig ~/Desktop/work/wingfin/data/cams.txt
+#   ./scripts/step-timing.sh mosque -- --camera-rig rigs/cams.txt
 #   GPU=integrated ./scripts/step-timing.sh        # force the built-in graphics
 #
 # The default is rows 1-6; row 7 opens a window, so it is one --rows 7 away. Rows 1 and 2 differ

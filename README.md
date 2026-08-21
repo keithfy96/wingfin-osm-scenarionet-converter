@@ -560,20 +560,20 @@ From inside `scripts/`:
 
 ```bash
 # one frame per camera, to workspaces/junction-1/sensor-survey/rig-<camera>.png
-./sensor-survey.sh junction-1 -- --camera-rig ~/Desktop/work/wingfin/data/cams.txt
+./sensor-survey.sh junction-1 -- --camera-rig rigs/cams.txt
 
 # every step as arrays, to workspaces/junction-1/sensor-survey/rig/<camera>.npy
-./sensor-survey.sh junction-1 -- --camera-rig ~/Desktop/work/wingfin/data/cams.txt \
+./sensor-survey.sh junction-1 -- --camera-rig rigs/cams.txt \
     --rig-record --steps 60
 
-./sensor-survey.sh mosque -- --camera-rig ~/Desktop/work/wingfin/data/cams.txt
+./sensor-survey.sh mosque -- --camera-rig rigs/cams.txt
 ```
 
 and from the **repo root**, to resolve a spec without starting a simulator — mounts, aims and
 the per-step size, in a second:
 
 ```bash
-python tools/camera_rig.py ~/Desktop/work/wingfin/data/cams.txt
+python tools/camera_rig.py rigs/cams.txt
 ```
 
 `--camera-rig` writes one PNG per view, plus the usual `survey.txt`, `track.csv` and
@@ -616,7 +616,7 @@ out along the way.
 ./step-timing.sh -- --list-rows                      # what each row measures, and exit
 
 # price the vehicle's own cameras instead of the single one this tool invents
-./step-timing.sh mosque -- --camera-rig ~/Desktop/work/wingfin/data/cams.txt
+./step-timing.sh mosque -- --camera-rig rigs/cams.txt
 ```
 
 **`docs/step-timing-rows.md` is the reference** for what every row, printed column and CSV
@@ -713,6 +713,72 @@ integration, a tenth of the rendering.
 
 A rate that does not divide the step is refused rather than rounded, because a decision cannot
 be finer than a physics tick.
+
+### Time it on another machine: the container
+
+```bash
+./container-check.sh mosque                  # build, gpu check, tests, full sweep
+./container-check.sh mosque -- --camera-rig rigs/cams.txt
+
+./step-timing-docker.sh mosque               # just the sweep
+./step-timing-docker.sh mosque -- --rows 2,6 # the pair that prices the camera
+```
+
+**`docs/container.md` is the reference** for building it, running it and moving it to another
+machine. What follows is why it exists and what it measured.
+
+Every row of a step-timing CSV carries the host, CPU, GPU, GL ceiling and the python / numpy /
+MetaDrive versions, so two machines' files concatenate into one spreadsheet. That only means
+anything if both machines are provably running the same simulator, and reproducing a venv by hand
+on each box is not provable. `uv.lock` plus a pinned MetaDrive commit is — which is what the image
+is for. The rig needs Docker, the NVIDIA container toolkit and this repo; nothing else.
+
+**There is one interpreter in the container, not two.** MetaDrive has always run here on its own
+3.8 venv (numpy 1.24) beside this repo's 3.10 (numpy 2.2), which is why `drive.sh`,
+`sensor-survey.sh` and `step-timing.sh` shell out through `METADRIVE_PYTHON`. It turns out to run
+on 3.10 — no `python_requires` cap, no `ext_modules`, no numpy-2-removed aliases — so the image
+installs it into the same venv as the converter, via an **opt-in `sim` dependency group**:
+
+```bash
+uv sync --group sim      # the same arrangement on the host, if you want it there too
+```
+
+The group is pinned to a commit, not to `==0.4.3`. The reference checkout is 32 commits past that
+tag and `metadrive.constants.EDITION` reports `MetaDrive v0.4.3` either way, so a version pin
+would let two machines run different simulators while every CSV claimed they were the same.
+
+**It renders on the real GPU with no X server, and the trap there is silent.** panda3d ships
+`libp3headlessgl.so` (EGL) and lists it as the fallback after GLX; the image makes it the first
+choice. But libglvnd picks a driver by reading the manifests in
+`/usr/share/glvnd/egl_vendor.d/`, and the NVIDIA container toolkit installs `libEGL_nvidia.so.0`
+**without installing the manifest that points at it** — so out of the box every context lands on
+`llvmpipe`, which does not fail. It runs the whole benchmark on the CPU and reports plausible
+numbers. The image writes that file itself. **Check `gl_renderer` in the CSV**: it must name the
+card, never Mesa or llvmpipe.
+
+Measured on this laptop, `mosque`, 200 steps, same rows either side:
+
+| | host, python 3.8 / numpy 1.24 | container, 3.10 / numpy 2.2 |
+|---|---|---|
+| row 1, offscreen replay | 3.78 ms/step, 25.91x real | 4.05 ms/step, 24.23x real |
+| row 6, no graphics | 0.99 ms/step, 86.35x real | 1.03 ms/step, 82.26x real |
+
+Within a few percent — well inside the run-to-run spread — so neither the container nor 3.10
+costs anything measurable. The seven-camera rig runs in there too, at 22.74 ms a step and 3.97x
+real on the same drive.
+
+`compose.yaml` mounts the repo at `/work` and works from there, so reports land in
+`<workspace>/reports/` on the host exactly as they do outside, owned by you rather than by root —
+and **`--camera-rig rigs/cams.txt` is the same string inside and out**, because the spec is in the
+repo and `scripts/_common.sh` cds to its root before anything runs. Nothing about a run is written
+differently in here. A spec deliberately kept *outside* the repo is the other case: set `RIG_DIR`
+in `.env` to the directory holding it and it is `/rig/<name>.txt` inside.
+
+Two things it does not do. **Row 7 needs a display** and there is none, so it is the one row the
+container cannot run. And `network_mode: host` is deliberate rather than lazy — row 3 times a
+round trip to `--policy-url` at 0.126 ms, and a bridge network in front of a number that small
+would corrupt the row it exists to produce; it also means `examples/policy_server.py` can run
+inside the container or outside it and `127.0.0.1` reaches it either way.
 
 ### Look at the point cloud
 

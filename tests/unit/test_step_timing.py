@@ -11,6 +11,8 @@ for. `step_timing.py` imports MetaDrive lazily, inside the functions that need i
 so this import works.
 """
 
+import csv
+import io
 import subprocess
 import sys
 from pathlib import Path
@@ -24,6 +26,7 @@ from step_timing import (  # noqa: E402
     DEFAULT_ROWS,
     FIELDS,
     ROWS,
+    RowWriter,
     camera_label,
     carried,
     percentiles,
@@ -239,3 +242,68 @@ def test_the_doc_covers_every_csv_field():
     doc = DOC.read_text(encoding="utf-8")
     missing = [field for field in FIELDS if f"`{field}`" not in doc]
     assert not missing, f"docs/step-timing-rows.md does not describe: {missing}"
+
+
+# -- the CSV, written as the run goes --------------------------------------------------
+
+
+def _record(number):
+    """A record with every field the writer expects, distinguishable by `row`."""
+    return {field: "" for field in FIELDS} | {"row": number}
+
+
+def test_a_row_is_on_disk_before_the_run_finishes(tmp_path):
+    """The property the writer exists for. It used to collect rows in a list and write once at
+    the end, so a sweep interrupted at row 11 of 12 left nothing at all - minutes of GPU time
+    discarded for want of reaching the last line. Read back with the handle still open."""
+    def rows_on_disk():
+        return [row["row"] for row in csv.DictReader(io.StringIO(writer.path.read_text()))]
+
+    writer = RowWriter(tmp_path / "reports" / "step-timing-x-2026-01-01-00:00:00.csv")
+    writer.write(_record(1))
+    assert rows_on_disk() == ["1"]
+
+    writer.write(_record(2))
+    assert rows_on_disk() == ["1", "2"]
+    writer.close()
+
+
+def test_the_header_is_written_once_and_holds_every_field(tmp_path):
+    """Two rows, one header - a reader concatenates these files across machines."""
+    writer = RowWriter(tmp_path / "out.csv")
+    writer.write(_record(1))
+    writer.write(_record(2))
+    writer.close()
+
+    lines = writer.path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 3
+    assert lines[0].split(",") == list(FIELDS)
+
+
+def test_the_path_is_still_reported_after_the_file_is_closed(tmp_path):
+    """`main` prints the `csv <path>` line *after* closing, and that line is what the docs tell
+    a reader to look at. Reading the open handle to answer "did anything get written" made it
+    disappear from every run - the closing nulls the handle."""
+    writer = RowWriter(tmp_path / "out.csv")
+    writer.write(_record(1))
+    writer.close()
+    assert writer.wrote_anything
+
+
+def test_a_run_that_measures_nothing_leaves_no_file(tmp_path):
+    """Opened on the first row rather than up front, so an empty sweep does not litter the
+    reports directory with a header nobody asked for."""
+    writer = RowWriter(tmp_path / "out.csv")
+    writer.close()
+    assert not writer.path.exists()
+    assert not writer.wrote_anything
+
+
+def test_no_csv_writes_nothing_however_many_rows_arrive(tmp_path):
+    """`--no-csv` is "print the table and write nothing", and it reaches the writer as a flag
+    rather than as a branch at every call site."""
+    writer = RowWriter(tmp_path / "out.csv", enabled=False)
+    writer.write(_record(1))
+    writer.write(_record(2))
+    writer.close()
+    assert not writer.path.exists()

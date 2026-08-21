@@ -731,132 +731,164 @@ def main():
             for line in rig.describe():
                 print(f"  {line}" if line.startswith(" ") else f"  rig  {line}")
     print("")
+
+    # Before `prime`, not after the sweep. The only way to collide is a hand-named `--csv`
+    # (the stamp is per-second otherwise), and spending six minutes of measuring and *then*
+    # declining to write it is the wrong order to find that out in.
+    writer = RowWriter(csv_path(arguments, label, stamp), enabled=not arguments.no_csv)
+    if writer.enabled and os.path.exists(writer.path):
+        print(f"result       FAILED: {writer.path} already exists; nothing was measured")
+        return 1
+
     print(HEADER)
 
     prime(arguments, wanted, rig)
 
     records = []
     measured = 0
-    for dataset in arguments.dataset:
-        dataset = os.path.abspath(dataset)
-        try:
-            native_hz = dataset_step_hz(dataset, arguments.scenario_index)
-        except Exception as error:  # noqa: BLE001 - reported per dataset, never fatal
-            print(f"  {dataset} could not be read: {error}")
-            continue
+    # Ctrl-C during a sweep is ordinary - a twelve-row run with a real rig is minutes of
+    # GPU time, and a reader who has seen enough should not have to hunt for what it
+    # measured. Every row is already flushed; this only names the file and says it is short.
+    try:
+        for dataset in arguments.dataset:
+            dataset = os.path.abspath(dataset)
+            try:
+                native_hz = dataset_step_hz(dataset, arguments.scenario_index)
+            except Exception as error:  # noqa: BLE001 - reported per dataset, never fatal
+                print(f"  {dataset} could not be read: {error}")
+                continue
 
-        # Said rather than refused. `load_rig` rejects a spec whose `tick_rate` is not
-        # `camera_rig.STEP_S`, because nothing there resamples - but this sweep drives every
-        # rate a workspace holds, and what a rig costs at 100 Hz is one of the most useful
-        # numbers in the table. So the cameras draw at whatever the dataset's rate is, and the
-        # run says so instead of quietly delivering ten frames where the spec asked for one.
-        # Resampling a rig to its own tick is Phase 2 of the adjustable-sample-rate plan.
-        if rig is not None:
-            drawn_hz = arguments.step_hz or native_hz
-            if abs(drawn_hz - 1.0 / rig_tick_s) > 1e-9:
-                name = os.path.basename(os.path.normpath(dataset))
-                print(
-                    f"  rig  {name}: the spec ticks at {rig_tick_s:g} s "
-                    f"({1.0 / rig_tick_s:g} Hz) and these cameras draw every step, so at "
-                    f"{drawn_hz:g} Hz they draw {drawn_hz * rig_tick_s:g}x that. "
-                    "Nothing resamples."
-                )
-
-        for number in wanted:
-            row = ROWS[number]
-            step_hz = arguments.step_hz or native_hz
-            physics_hz = arguments.physics_hz or row.get("physics_hz")
-            offscreen = row["render"] == "offscreen"
-            record = dict(
-                (field, "") for field in FIELDS
-            )
-            record.update(facts)
-            record.update(
-                label=label, timestamp=stamp, gl_max_texture=ceiling or "",
-                dataset=os.path.basename(os.path.normpath(dataset)),
-                row=number, render=row["render"] or "none", policy=row["policy"],
-                # Declared, so a row that never gets as far as an env still says what it
-                # would have carried. A row that runs overwrites all four from its own env.
-                sensors=",".join(carried(row, len(rig) if rig else 1)),
-                # MetaDrive draws the camera and reads it inside `env.step` when
-                # `image_observation` is on (`image_obs.py:85`), so the image costs what it
-                # costs there on every offscreen row. No row reads one in the timing loop as
-                # well: that forces a second render pass and would charge the benchmark for a
-                # frame no training loop draws.
-                camera_read_mode="observation" if offscreen else "none",
-                camera_rig=os.path.basename(rig.path) if rig is not None else "",
-                camera_count=(len(rig) if rig else 1) if offscreen else 0,
-                camera_size=(
-                    "x".join(str(one) for one in (
-                        (rig.cameras[0].width, rig.cameras[0].height) if rig else CAMERA_SIZE))
-                    if offscreen else ""),
-                camera_mb_per_step=round(rig.megabytes, 3) if rig and offscreen else "",
-                # The rate the cameras really draw at, which is the step rate: MetaDrive
-                # redraws every buffer once per `env.step` (`base_engine.py:458`), whatever a
-                # spec's `tick_rate` says. Recorded because a rig declaring 0.1 s is driven at
-                # 0.01 s on a 100 Hz dataset and nothing here resamples.
-                camera_hz=step_hz if offscreen else "",
-                stack_size=3 if offscreen else "", norm_pixel="True" if offscreen else "",
-                observation_kind="image+state41" if offscreen else "lidarstate161",
-                max_lateral_m=arguments.max_lateral_m,
-                step_hz=step_hz, physics_hz=physics_hz or (1.0 / step_config(step_hz)[
-                    "physics_world_step_size"]),
-                status="skipped",
-            )
-
-            reason = ""
-            if row["render"] in ("offscreen", "3D") and ceiling is None:
-                reason = "no GL context, so no camera can be built here"
-            elif row["render"] == "3D" and not has_display:
-                reason = "no display ($DISPLAY and $WAYLAND_DISPLAY unset)"
-            elif row["policy"] == "remote" and not arguments.policy_url:
-                reason = "needs --policy-url"
-
-            env = None
-            if not reason:
-                try:
-                    env = build_env(
-                        dataset, row, step_hz, physics_hz, rig=rig,
-                        max_lateral_m=arguments.max_lateral_m,
+            # Said rather than refused. `load_rig` rejects a spec whose `tick_rate` is not
+            # `camera_rig.STEP_S`, because nothing there resamples - but this sweep drives every
+            # rate a workspace holds, and what a rig costs at 100 Hz is one of the most useful
+            # numbers in the table. So the cameras draw at whatever the dataset's rate is, and the
+            # run says so instead of quietly delivering ten frames where the spec asked for one.
+            # Resampling a rig to its own tick is Phase 2 of the adjustable-sample-rate plan.
+            if rig is not None:
+                drawn_hz = arguments.step_hz or native_hz
+                if abs(drawn_hz - 1.0 / rig_tick_s) > 1e-9:
+                    name = os.path.basename(os.path.normpath(dataset))
+                    print(
+                        f"  rig  {name}: the spec ticks at {rig_tick_s:g} s "
+                        f"({1.0 / rig_tick_s:g} Hz) and these cameras draw every step, so at "
+                        f"{drawn_hz:g} Hz they draw {drawn_hz * rig_tick_s:g}x that. "
+                        "Nothing resamples."
                     )
-                    result = drive(env, row, arguments, url=arguments.policy_url, rig=rig)
-                    reason = result.pop("skip_reason", "")
-                except Exception as error:  # noqa: BLE001 - one row failing is not the run
-                    reason = f"{type(error).__name__}: {error}"
-                finally:
-                    if env is not None:
-                        env.close()
 
-            if reason:
-                record["skip_reason"] = reason.replace("\n", " ")[:200]
-            else:
-                record.update(
-                    status="ok", skip_reason="",
-                    physics_ticks_per_sim_second=(
-                        result["decision_repeat"] / result["sim_dt_s"]),
-                    step_ms_mean=result["step"]["mean"],
-                    step_ms_median=result["step"]["median"],
-                    step_ms_p95=result["step"]["p95"],
-                    step_ms_p99=result["step"]["p99"],
-                    step_ms_max=result["step"]["max"],
-                    policy_ms_median=result["policy"]["median"],
-                    sensor_ms_median=result["sensor"]["median"],
-                    rig_ms_median=result["rig"]["median"],
+            for number in wanted:
+                row = ROWS[number]
+                step_hz = arguments.step_hz or native_hz
+                physics_hz = arguments.physics_hz or row.get("physics_hz")
+                offscreen = row["render"] == "offscreen"
+                record = dict(
+                    (field, "") for field in FIELDS
                 )
-                for key in (
-                    "sensors", "camera_count", "camera_size", "camera_mb_per_step",
-                    "stack_size", "observation_kind",
-                    "gl_renderer", "force_fps", "scenario_id", "sim_dt_s", "physics_dt_s",
-                    "decision_repeat", "steps", "measured_steps", "warmup_steps", "sim_seconds",
-                    "wall_seconds", "realtime_factor", "reset_seconds", "arrive_dest",
-                    "ended_by",
-                ):
-                    record[key] = result[key]
-                record["physics_hz"] = 1.0 / result["physics_dt_s"]
-                measured += 1
+                record.update(facts)
+                record.update(
+                    label=label, timestamp=stamp, gl_max_texture=ceiling or "",
+                    dataset=os.path.basename(os.path.normpath(dataset)),
+                    row=number, render=row["render"] or "none", policy=row["policy"],
+                    # Declared, so a row that never gets as far as an env still says what it
+                    # would have carried. A row that runs overwrites all four from its own env.
+                    sensors=",".join(carried(row, len(rig) if rig else 1)),
+                    # MetaDrive draws the camera and reads it inside `env.step` when
+                    # `image_observation` is on (`image_obs.py:85`), so the image costs what it
+                    # costs there on every offscreen row. No row reads one in the timing loop as
+                    # well: that forces a second render pass and would charge the benchmark for a
+                    # frame no training loop draws.
+                    camera_read_mode="observation" if offscreen else "none",
+                    camera_rig=os.path.basename(rig.path) if rig is not None else "",
+                    camera_count=(len(rig) if rig else 1) if offscreen else 0,
+                    camera_size=(
+                        "x".join(str(one) for one in (
+                            (rig.cameras[0].width, rig.cameras[0].height) if rig else CAMERA_SIZE))
+                        if offscreen else ""),
+                    camera_mb_per_step=round(rig.megabytes, 3) if rig and offscreen else "",
+                    # The rate the cameras really draw at, which is the step rate: MetaDrive
+                    # redraws every buffer once per `env.step` (`base_engine.py:458`), whatever a
+                    # spec's `tick_rate` says. Recorded because a rig declaring 0.1 s is driven at
+                    # 0.01 s on a 100 Hz dataset and nothing here resamples.
+                    camera_hz=step_hz if offscreen else "",
+                    stack_size=3 if offscreen else "", norm_pixel="True" if offscreen else "",
+                    observation_kind="image+state41" if offscreen else "lidarstate161",
+                    max_lateral_m=arguments.max_lateral_m,
+                    step_hz=step_hz, physics_hz=physics_hz or (1.0 / step_config(step_hz)[
+                        "physics_world_step_size"]),
+                    status="skipped",
+                )
 
-            records.append(record)
-            print(table_line(record))
+                reason = ""
+                if row["render"] in ("offscreen", "3D") and ceiling is None:
+                    reason = "no GL context, so no camera can be built here"
+                elif row["render"] == "3D" and not has_display:
+                    reason = "no display ($DISPLAY and $WAYLAND_DISPLAY unset)"
+                elif row["policy"] == "remote" and not arguments.policy_url:
+                    reason = "needs --policy-url"
+
+                env = None
+                if not reason:
+                    try:
+                        env = build_env(
+                            dataset, row, step_hz, physics_hz, rig=rig,
+                            max_lateral_m=arguments.max_lateral_m,
+                        )
+                        result = drive(env, row, arguments, url=arguments.policy_url, rig=rig)
+                        reason = result.pop("skip_reason", "")
+                    except Exception as error:  # noqa: BLE001 - one row failing is not the run
+                        reason = f"{type(error).__name__}: {error}"
+                    finally:
+                        if env is not None:
+                            env.close()
+
+                if reason:
+                    record["skip_reason"] = reason.replace("\n", " ")[:200]
+                else:
+                    record.update(
+                        status="ok", skip_reason="",
+                        physics_ticks_per_sim_second=(
+                            result["decision_repeat"] / result["sim_dt_s"]),
+                        step_ms_mean=result["step"]["mean"],
+                        step_ms_median=result["step"]["median"],
+                        step_ms_p95=result["step"]["p95"],
+                        step_ms_p99=result["step"]["p99"],
+                        step_ms_max=result["step"]["max"],
+                        policy_ms_median=result["policy"]["median"],
+                        sensor_ms_median=result["sensor"]["median"],
+                        rig_ms_median=result["rig"]["median"],
+                    )
+                    for key in (
+                        "sensors", "camera_count", "camera_size", "camera_mb_per_step",
+                        "stack_size", "observation_kind",
+                        "gl_renderer", "force_fps", "scenario_id", "sim_dt_s", "physics_dt_s",
+                        "decision_repeat", "steps", "measured_steps", "warmup_steps", "sim_seconds",
+                        "wall_seconds", "realtime_factor", "reset_seconds", "arrive_dest",
+                        "ended_by",
+                    ):
+                        record[key] = result[key]
+                    record["physics_hz"] = 1.0 / result["physics_dt_s"]
+                    measured += 1
+
+                records.append(record)
+                writer.write(record)
+                print(table_line(record))
+    except KeyboardInterrupt:
+        print("")
+        writer.close()
+        if writer.wrote_anything:
+            print(f"  csv  {writer.path}")
+        print(
+            f"result       INTERRUPTED after {len(records)} row(s); "
+            "what was measured is in the CSV above"
+        )
+        # `os._exit`, not `return 130`: panda3d segfaults tearing an engine down out from
+        # under a KeyboardInterrupt, so the process died with 139 and the exit status stopped
+        # meaning anything. Everything that had to reach disk already has - the CSV was
+        # flushed row by row and closed just above - so there is nothing left for a normal
+        # shutdown to do except crash. stdout is block-buffered when redirected to a file,
+        # hence the explicit flush.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(130)
 
     print("")
     left = [number for number in sorted(ROWS) if number not in wanted]
@@ -877,20 +909,11 @@ def main():
         print("  not a second render; the drawing of them is inside ms/step with everything else.")
     print(f"  what every row and column means: {ROWS_DOC}  (or --list-rows)")
 
-    if not arguments.no_csv and records:
-        path = csv_path(arguments, records[0]["dataset"], label, stamp)
-        if os.path.exists(path):
-            print(f"  csv  NOT written: {path} already exists")
-            return 1
-        directory = os.path.dirname(os.path.abspath(path))
-        if directory:
-            os.makedirs(directory, exist_ok=True)
-        with open(path, "w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=FIELDS)
-            writer.writeheader()
-            for record in records:
-                writer.writerow(record)
-        print(f"  csv  {path}")
+    # Every row is already on disk, flushed as it was measured. This only closes the handle
+    # and names the file, so the last line still means "this run finished".
+    writer.close()
+    if writer.wrote_anything:
+        print(f"  csv  {writer.path}")
 
     print("result       {}".format("OK" if measured else "FAILED: nothing was measured"))
     return 0 if measured else 1
@@ -934,8 +957,12 @@ def prime(arguments, wanted, rig=None):
             env.close()
 
 
-def csv_path(arguments, dataset_name, label, stamp):
-    """Where this run's file goes. Stamped, so a second run never takes the first one's."""
+def csv_path(arguments, label, stamp):
+    """Where this run's file goes. Stamped, so a second run never takes the first one's.
+
+    Settled before anything is measured, which is what lets `RowWriter` write as it goes: the
+    path depends on the *arguments*, never on a result.
+    """
     if arguments.csv:
         return arguments.csv
     name = f"step-timing-{label}-{stamp}.csv"
@@ -944,6 +971,56 @@ def csv_path(arguments, dataset_name, label, stamp):
     # Beside the workspace's other reports, found from the dataset rather than assumed.
     workspace = os.path.dirname(os.path.abspath(arguments.dataset[0]))
     return os.path.join(workspace, "reports", name)
+
+
+class RowWriter:
+    """The CSV, written a row at a time as each one is measured.
+
+    It used to be written once at the end, out of a list every row had been appended to - so a
+    sweep that did not reach its last line left **nothing**, however much it had measured. A
+    full twelve-row run with a seven-camera rig is several minutes of GPU time, and one
+    interrupt discarded eleven finished rows of it.
+
+    Opened lazily, on the first row rather than up front, because a run that measures nothing
+    must still leave no file behind - the same thing `--no-csv` asks for, and the reason
+    `main` can hold a writer it may never use. Flushed every row, which is what makes the file
+    readable *during* a run: a flush is microseconds against rows that are tens of seconds, so
+    it costs nothing measurable and it is the whole point.
+
+    Refusing an existing path is the caller's job, before any of this - see `main`.
+    """
+
+    def __init__(self, path, enabled=True):
+        self.path = path
+        self.enabled = enabled
+        # Separate from `_handle`, which `close` nulls: whether a file was ever opened has to
+        # survive closing it, because the line naming the file is printed after the close.
+        self.wrote_anything = False
+        self._handle = None
+        self._writer = None
+
+    def write(self, record):
+        if not self.enabled:
+            return
+        if self._handle is None:
+            directory = os.path.dirname(os.path.abspath(self.path))
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            # Not a context manager, which is the whole point: the handle has to outlive
+            # this call so the next row can be appended to it. `close` is the other half.
+            self._handle = open(  # noqa: SIM115
+                self.path, "w", newline="", encoding="utf-8"
+            )
+            self._writer = csv.DictWriter(self._handle, fieldnames=FIELDS)
+            self._writer.writeheader()
+            self.wrote_anything = True
+        self._writer.writerow(record)
+        self._handle.flush()
+
+    def close(self):
+        if self._handle is not None:
+            self._handle.close()
+            self._handle = None
 
 
 if __name__ == "__main__":

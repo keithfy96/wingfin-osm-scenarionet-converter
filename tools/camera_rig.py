@@ -2,7 +2,7 @@
 
     from camera_rig import load_rig
 
-    rig = load_rig("/home/keith/Desktop/work/wingfin/data/cams.txt")
+    rig = load_rig("rigs/cams.txt")
     env = make_env(dataset, render="offscreen", sensors=rig.sensors(),
                    vehicle_config=dict(image_source=rig.image_source()))
     env.reset()

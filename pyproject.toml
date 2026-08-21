@@ -25,6 +25,17 @@ dev = [
   "pytest>=8,<9",
   "ruff>=0.12,<1",
 ]
+# MetaDrive, for the tools in `tools/` -- the sweep, the drive runner, the sensor survey.
+# Opt-in: `uv sync` installs only the default and dev groups, so the checkout-plus-3.8-venv
+# arrangement keeps working until `uv sync --group sim` is run deliberately.
+#
+# Pinned to a commit, not to `==0.4.3`. The reference checkout is 32 commits past that tag
+# (`git describe` -> MetaDrive-0.4.3-32-g85e5dadc) and `metadrive.constants.EDITION` reports
+# "MetaDrive v0.4.3" either way, so a version pin would let two machines run different
+# simulators while every step-timing CSV claimed they were the same.
+sim = [
+  "metadrive-simulator @ git+https://github.com/metadriverse/metadrive.git@85e5dadc",
+]
 
 [build-system]
 requires = ["hatchling"]

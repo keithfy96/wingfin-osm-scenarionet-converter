@@ -1,0 +1,4 @@
+# A camera-rig spec dropped in here is a per-machine file, like .env. Only the note is tracked.
+*
+!.gitignore
+!README.md

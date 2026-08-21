@@ -440,9 +440,9 @@ vehicle carries several, and the spec for a rig is a file rather than an argumen
 
 ```bash
 ./scripts/sensor-survey.sh junction-1 -- \
-    --camera-rig ~/Desktop/work/wingfin/data/cams.txt
+    --camera-rig rigs/cams.txt
 ./scripts/sensor-survey.sh junction-1 -- \
-    --camera-rig ~/Desktop/work/wingfin/data/cams.txt --rig-record --steps 60
+    --camera-rig rigs/cams.txt --rig-record --steps 60
 ```
 
 `tools/camera_rig.py --check-frame <dataset>` re-measures the conversion below against a

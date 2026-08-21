@@ -1,0 +1,15 @@
+# The build context is the repo root, and only pyproject.toml, uv.lock, README.md and src/ are
+# COPYed. Everything else is bind-mounted at run time, so sending it to the daemon is pure cost --
+# .venv alone is larger than the image.
+.git
+.venv
+node_modules
+workspaces
+graphify-out
+web/node_modules
+web/dist
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+*.pyc
+.env

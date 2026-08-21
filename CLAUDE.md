@@ -1008,6 +1008,116 @@ is a random id.
 GPS on disk from `drive.py` is separate work, named here so it is a decision rather than an
 omission — as are the 20 Hz cameras, which are Phase 2 of
 `docs/implementation-plan/adjustable-simulation-sample-rate.md`.
+### MetaDrive runs on 3.10, and the container is one environment, not two (2026-08-21)
+
+**The two-interpreter split was never a MetaDrive requirement, only how it was installed here.**
+`scripts/drive.sh`, `sensor-survey.sh` and `step-timing.sh` shell out through `METADRIVE_PYTHON`
+to a 3.8.20 / numpy 1.24.4 venv because that is what the reference checkout has. MetaDrive
+0.4.3 has **no `python_requires` cap** (its extras are keyed `:python_version >= '3.8'` with
+`numpy>=1.21.6` unbounded), **no `ext_modules`** — the wheel is `py3-none-any`, so no compiler
+and no 3.8 ABI tie — **zero numpy-2-removed aliases** in `metadrive/`, no `numpy.core` imports,
+and its ten `copy=False` call sites are all `.astype()` / `np.nan_to_num()`, neither of which
+numpy 2 changed; the one that did is `np.array(copy=False)`, which does not appear. It resolves
+and runs on this repo's 3.10 / numpy 2.2.6 with **no version in `uv.lock` moved** — the lock
+gained 543 lines and changed nothing that was already in it.
+
+Installed as an **opt-in `sim` dependency group**, so `uv sync` on the host still installs only
+the default and `dev` groups and the checkout-plus-3.8-venv arrangement keeps working until
+`uv sync --group sim` is run deliberately.
+
+**The group pins a commit, not `==0.4.3`, and that is not fussiness.** `git describe` on the
+checkout says `MetaDrive-0.4.3-32-g85e5dadc` — 32 commits past the tag, on public `origin/main` —
+and `metadrive.constants.EDITION` reports `MetaDrive v0.4.3` for both. A version pin would let
+two machines run different simulators while every step-timing CSV claimed they were the same,
+which is the one thing a cross-machine benchmark must not allow. Nothing in the CSV can tell
+them apart, so the lock is what does.
+
+Measured, `mosque`, 200 steps, same rows either side:
+
+| | host, 3.8 / numpy 1.24 | container, 3.10 / numpy 2.2 |
+|---|---|---|
+| row 1, offscreen replay | 3.78 ms/step, 25.91x | 4.05 ms/step, 24.23x |
+| row 6, no graphics | 0.99 ms/step, 86.35x | 1.03 ms/step, 82.26x |
+
+Six things not to re-derive:
+
+- **The NVIDIA container toolkit does not install the glvnd EGL manifest, and without it the
+  benchmark silently runs on the CPU.** `NVIDIA_DRIVER_CAPABILITIES=graphics` injects
+  `libEGL_nvidia.so.0` and `libGLX_nvidia.so.0`, but leaves `/usr/share/glvnd/egl_vendor.d/`
+  holding nothing but Mesa's `50_mesa.json` — so libglvnd never sees the driver. Measured before
+  the image wrote its own `10_nvidia.json`: `getDriverRenderer()` reported
+  `llvmpipe (LLVM 15.0.7, 256 bits)` at 16384 max texture, against the RTX's 32768. It does not
+  error and the table looks ordinary. `gl_renderer` in the CSV is the check.
+- **`utility` in that same variable is what injects `nvidia-smi`**, which `step_timing.py:275`
+  reads the `gpu_name` column out of. `graphics,compute,utility`, all three.
+- **panda3d already declares the fallback.** Its own `Config.prc` ships `load-display pandagl` /
+  `aux-display p3headlessgl`, so EGL would be found eventually anyway; the image swaps the two
+  lines so it is the first choice rather than the result of a failed GLX attempt, and leaves
+  `pandagl` as the aux so an X socket still gets the 3D row. Measured on the host with `DISPLAY`
+  unset: GLX lands on the **integrated** card at 16384, EGL on the discrete one at 32768.
+- **`UV_PYTHON_INSTALL_DIR` is a permissions fix, not tidiness.** uv puts its managed CPython in
+  `$HOME/.local/share/uv/python`, which at build time is `/root` at mode 700, and the venv's
+  `python` is a symlink into it. The container runs as the host's uid — so reports written into
+  the mounted workspace are not owned by root — and that user cannot read `/root`: the
+  interpreter dies before it starts with `sys.executable = ''` and
+  `ModuleNotFoundError: No module named 'encodings'`, which reads as a broken image rather than
+  as a permissions problem.
+- **The venv lives outside `/work`.** The repo is bind-mounted there and the host's own `.venv`
+  is in it; `UV_PROJECT_ENVIRONMENT=/opt/venv` plus `UV_NO_SYNC=1` is what stops a `uv run`
+  inside the container reaching into — or resyncing — the host's environment. The image is built
+  in `/work` for the opposite reason: the editable install of `osm_scenario` then points at
+  `/work/src`, which the mount replaces with the live source rather than a stale copy.
+- **`network_mode: host` is a measurement decision.** Row 3 times a round trip to `--policy-url`
+  at 0.126 ms with `TCP_NODELAY`; a bridge network in front of a number that small would corrupt
+  the row it exists to produce.
+- **`/etc/localtime` is mounted because the image has no clock of its own.** No `/etc/localtime`
+  and no `/usr/share/zoneinfo`, so glibc falls back to UTC — and a step-timing CSV, whose whole
+  index is the stamp in its name, came out **8 hours** adrift of a run made outside the container
+  on the same machine (host `Asia/Singapore` +0800 against container UTC). A `TZ` variable is not
+  a substitute: resolving a zone *name* needs the zoneinfo database the image does not carry,
+  while the mounted TZif file is all glibc needs when `TZ` is unset.
+
+**Two tests were `skipif` on paths that do not exist in a container, and a gate that stops
+running is worse than one that fails.** `test_conversion._metadrive_src` now falls back from the
+checkout to the installed package — it reads MetaDrive's *files* rather than importing them, so
+either directory does, and it finds it with `importlib.util.find_spec` rather than an import
+because importing `metadrive` pulls in panda3d, which is the whole reason that module reads
+files. `test_camera_rig` reads `rigs/cams.txt` out of the repo and is no longer conditional at
+all. Both were silently skipping in the container; both run now.
+
+**Row 7 is the one row the container cannot run** — it opens a window and there is no display.
+Everything else works in there, including `run-stages-*.sh` and `pytest`, because there is one
+interpreter.
+
+**The camera-rig spec is `rigs/cams.txt`, in the repo, and that is what makes `--camera-rig` the
+same string everywhere (2026-08-22).** It used to live at `~/Desktop/work/wingfin/data/cams.txt`,
+reached in the container only through a second bind mount (`RIG_DIR` → `/rig`), so one run was
+`--camera-rig ~/Desktop/.../cams.txt` outside and `--camera-rig /rig/cams.txt` inside — and Keith
+went looking for a `/rig` that exists only in there. `scripts/_common.sh:18` cds to the repo root
+before a script does anything and the container works from `/work`, so a repo-relative path is
+correct from `scripts/`, from the root and inside. **Not `config/`**, which is where the file
+whose checksum feeds `generation_fingerprint` lives — the checksum is over the parsed
+`ConverterConfig` (`generation.py:4007`) and a neighbouring file cannot move it, but putting a
+vehicle spec there invites the question every time. **Not `docker/rig/`**, whose `.gitignore`
+excludes everything but the note, so a spec there never travels to another machine; it stays as
+the escape hatch for a spec deliberately kept out of the repo, which is what `RIG_DIR` is for.
+
+**The sweep writes each row as it measures it, and that is not a nicety.** It used to collect
+records in a list and open the CSV once at `main`'s last statement, so a twelve-row run with the
+seven-camera rig — minutes of GPU time — left **nothing** when it was interrupted at row 11.
+`step_timing.RowWriter` opens on the first row (so `--no-csv` and a sweep that measures nothing
+still leave no file), flushes every row (microseconds against rows that are tens of seconds), and
+the `KeyboardInterrupt` guard round the dataset loop names the file and says how many rows are in
+it. `csv_path` took a `dataset_name` argument it never read — the path comes from
+`arguments.dataset[0]` — which is what let the whole thing be settled, and the already-exists
+refusal moved, **before** `prime` rather than after the sweep. Three things not to re-derive:
+`wrote_anything` is a flag rather than `self._handle is not None`, because the line naming the
+file is printed *after* the close and reading the handle silently removed it from every run;
+the interrupt leaves through `os._exit(130)` after an explicit flush, because panda3d segfaults
+tearing an engine down out from under a `KeyboardInterrupt` and the process was exiting 139;
+and **`cmd &` in a non-interactive shell sets SIGINT to `SIG_IGN` in the child** (POSIX), so
+five attempts to test the interrupt with `kill -INT` measured the shell rather than the code —
+`( trap - INT; exec ... ) &` is what puts the default disposition back.
 
 ### A junction is bare inside and kerbed outside, and both halves are deliberate
 

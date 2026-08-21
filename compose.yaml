@@ -1,0 +1,49 @@
+# The sweep, the drive runner and the sensor survey, in one environment that can be carried to
+# another machine. `docker/Dockerfile` has the reasoning; this file has the wiring.
+#
+#   cd scripts && ./step-timing-docker.sh mosque -- --rows 2,6
+#   docker compose run --rm sim uv run pytest -q
+#   docker compose run --rm sim bash
+services:
+  sim:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: wingfin-sim
+    gpus: all
+    working_dir: /work
+
+    # The host's uid, or every CSV this writes into the mounted workspace belongs to root. There
+    # is no matching entry in the image's /etc/passwd, which is why the image sets HOME=/tmp.
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
+
+    # Not convenience: row 3 of the sweep times a round trip to --policy-url, and that trip is
+    # 0.126 ms with TCP_NODELAY set on both ends against 41.0 ms without it. A bridge network in
+    # front of a number that small would corrupt the row it exists to produce. It also means
+    # examples/policy_server.py can run inside the container or outside it and 127.0.0.1 reaches
+    # it either way.
+    network_mode: host
+
+    volumes:
+      # The repo, live. /opt/venv is outside it, so this does not shadow the environment and a
+      # `uv run` in here cannot resync the host's own .venv.
+      - .:/work
+      # Where a camera-rig spec lives. Set RIG_DIR in .env to the directory holding it; the
+      # fallback is docker/rig/, which exists so an unset RIG_DIR cannot make docker create a
+      # root-owned directory in $HOME.
+      - "${RIG_DIR:-./docker/rig}:/rig:ro"
+      # The host's clock. Without this the image has no /etc/localtime and no zoneinfo, so glibc
+      # falls back to UTC -- and a step-timing CSV, whose whole index is the stamp in its name,
+      # comes out 8 hours adrift of a run made outside the container on the same machine. Docker
+      # resolves the host's symlink and mounts the TZif file itself, which is all glibc needs when
+      # TZ is unset. A TZ variable would not do: resolving "Asia/Singapore" needs
+      # /usr/share/zoneinfo, which the image does not carry.
+      - /etc/localtime:/etc/localtime:ro
+
+    environment:
+      # Names the machine in every row of a step-timing CSV and in the file name. The hostname is
+      # a random id in a container, so this matters more here than anywhere else.
+      STEP_TIMING_LABEL: "${STEP_TIMING_LABEL:-container}"
+
+    stdin_open: true
+    tty: true

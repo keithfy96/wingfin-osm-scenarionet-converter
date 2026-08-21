@@ -18,7 +18,8 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "tools"))
 
 from camera_rig import RigError, _parse  # noqa: E402
 
@@ -132,11 +133,28 @@ def test_something_that_is_not_a_spec_is_refused():
         _parse("# a comment and nothing else\n")
 
 
-def test_the_real_spec_parses_if_it_is_on_this_machine():
-    """`cams.txt` lives outside the repo, so this skips rather than fails when it is absent."""
-    path = Path("/home/keith/Desktop/work/wingfin/data/cams.txt")
-    if not path.exists():
-        pytest.skip("no cams.txt on this machine")
+def test_the_real_spec_parses():
+    """`rigs/cams.txt` is in the repo, so this is an unconditional gate rather than a skip.
+
+    It used to look outside the repo and at `/rig`, and skipped on any machine that had
+    neither - a gate that quietly stops running is worse than one that fails, the reason
+    `test_conversion._metadrive_src` gives for its own fallback. `/rig` is still looked in
+    after, for a spec deliberately kept outside the repo; `pytest.skip` is now reachable only
+    if someone deletes the tracked file.
+    """
+    path = next(
+        (
+            one
+            for one in (
+                REPO / "rigs" / "cams.txt",
+                Path("/rig/cams.txt"),
+            )
+            if one.exists()
+        ),
+        None,
+    )
+    if path is None:
+        pytest.skip("rigs/cams.txt has been removed from the repo")
     rig = _parse(path.read_text())
     assert len(rig) == 7
     assert rig.names[0] == "cam_front"

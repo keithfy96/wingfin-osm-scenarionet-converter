@@ -1336,7 +1336,30 @@ def test_neighbours_are_lists_even_when_there_is_no_neighbour() -> None:
 
 # --- MetaDrive's own schema -----------------------------------------------------------------
 
-METADRIVE_SRC = Path("/home/keith/Desktop/work/wingfin/metadrive/metadrive")
+def _metadrive_src() -> Path:
+    """Where MetaDrive's source tree is, checkout first and installed package second.
+
+    `_load_metadrive_schema` reads the files rather than importing the package, so what it needs
+    is a directory, not an interpreter that can `import metadrive` -- and either directory does.
+    The reference checkout is the answer on this machine. The installed package is the answer in
+    the container, where `uv sync --group sim` puts MetaDrive in the same venv as the converter
+    and there is no checkout at all.
+
+    Both are needed because the alternative is worse than a wrong path: every test below is
+    `skipif` on this directory, so a machine with neither **silently loses the schema gate**
+    rather than failing. Found by way of `importlib` rather than an import, because importing
+    `metadrive` pulls in panda3d -- which is the whole reason this module reads files.
+    """
+    checkout = Path("/home/keith/Desktop/work/wingfin/metadrive/metadrive")
+    if checkout.is_dir():
+        return checkout
+    found = importlib.util.find_spec("metadrive")
+    if found is not None and found.submodule_search_locations:
+        return Path(next(iter(found.submodule_search_locations)))
+    return checkout
+
+
+METADRIVE_SRC = _metadrive_src()
 
 
 def _load_metadrive_schema() -> Any:

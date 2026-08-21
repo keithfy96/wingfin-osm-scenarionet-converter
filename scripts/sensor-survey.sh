@@ -10,8 +10,8 @@
 #   GPU=integrated ./scripts/sensor-survey.sh        # force the built-in graphics
 #
 #   # a multi-camera rig, in place of the single forward camera and the point cloud
-#   ./scripts/sensor-survey.sh -- --camera-rig ~/Desktop/work/wingfin/data/cams.txt
-#   ./scripts/sensor-survey.sh -- --camera-rig ~/Desktop/work/wingfin/data/cams.txt \
+#   ./scripts/sensor-survey.sh -- --camera-rig rigs/cams.txt
+#   ./scripts/sensor-survey.sh -- --camera-rig rigs/cams.txt \
 #       --rig-record --steps 60     # every step to <workspace>/sensor-survey/rig/*.npy
 #
 # Answers "what can a model actually see": camera, lidar, IMU, GPS. Writes PNGs, the point

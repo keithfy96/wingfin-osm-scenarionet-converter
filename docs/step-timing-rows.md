@@ -11,7 +11,7 @@ The same row table, shorter, is one command away:
 ./scripts/step-timing.sh mosque                      # rows 1-6, every rate the workspace holds
 ./scripts/step-timing.sh mosque -- --rows 5          # one row on its own
 ./scripts/step-timing.sh mosque -- --rows 2,6        # what the camera costs
-./scripts/step-timing.sh mosque -- --camera-rig ~/Desktop/work/wingfin/data/cams.txt
+./scripts/step-timing.sh mosque -- --camera-rig rigs/cams.txt
 ```
 
 > This describes MetaDrive's behaviour and our measurements of it. It is not a converter
@@ -318,7 +318,24 @@ stopped claiming to price imu/gps and why `policy` is timed around the call inst
 
 One row per measurement, written to
 `<workspace>/reports/step-timing-<label>-<YYYY-MM-DD-HH:MM:SS>.csv`. Every run writes its
-own file; nothing is appended to and nothing is overwritten.
+own file; nothing is appended to and nothing is overwritten. The stamp is when the run
+started, in local time — the container mounts the host's `/etc/localtime` so its files sort
+next to a host run's rather than eight hours away.
+
+**A row lands on disk as it is measured, not at the end.** A twelve-row sweep with a real rig
+is minutes of GPU time, and it used to hold every row in memory until the last one finished —
+so an interrupt at row 11 left no file at all. Each row is now written and flushed as it
+completes, `Ctrl-C` names the file and says how many rows are in it, and the closing
+`csv <path>` line still means the run finished. Read that line for the path; it is the last
+thing printed.
+
+An interrupted run exits **130**, and it gets there through `os._exit` rather than a normal
+return: panda3d segfaults tearing an engine down out from under a `KeyboardInterrupt`, so the
+process used to die with 139 and the status stopped meaning anything. Nothing is lost by
+skipping the shutdown — the CSV was flushed row by row and closed before the exit.
+
+A path that already exists is refused **before** anything is measured rather than after, which
+only a hand-named `--csv` can reach — the stamp is per-second otherwise.
 
 ### The machine — repeated on every row, so two files concatenate
 
@@ -331,7 +348,7 @@ own file; nothing is appended to and nothing is overwritten.
 | `cpu_threads` | `os.cpu_count()` |
 | `gpu_name` | `nvidia-smi --query-gpu=name`, empty when there is no NVIDIA card |
 | `gl_max_texture` | the GL ceiling a throwaway context reports. Empty means no GL context, and every row but 6 was skipped |
-| `gl_renderer` | the driver string the live window reported. Empty under `--render none` |
+| `gl_renderer` | the driver string the live window reported. Empty under `--render none`. **Check it in a container**: it must name the card, and `llvmpipe` or `Mesa` means the run was on the CPU |
 | `os`, `python`, `numpy`, `metadrive` | versions the drive ran under |
 | `timestamp` | when the sweep started. The same stamp is in the file name |
 
@@ -417,3 +434,13 @@ Four things to check before believing a comparison:
   and 17 ms after twenty minutes of back-to-back sweeps, which is thermal rather than
   anything in the code. Ratios within one run compare; absolute figures are worth what the
   machine's state was worth.
+- **`gl_renderer` names a card on both.** A container whose EGL setup is incomplete falls back
+  to `llvmpipe` — software rendering, on the CPU — and does not fail while doing it, so the row
+  looks ordinary and is roughly four times too slow for reasons that have nothing to do with the
+  hardware being compared.
+
+`scripts/step-timing-docker.sh` is what makes the two files comparable in the first place: it
+runs this sweep inside an image that pins the interpreter, the locked package set and MetaDrive's
+own commit, so the machine columns are the only thing that differs. `python`, `numpy` and
+`metadrive` in the CSV are what catch it when they are not — except that `metadrive` holds
+`EDITION`, which cannot tell two commits of the same version apart. The lock file is what does.
