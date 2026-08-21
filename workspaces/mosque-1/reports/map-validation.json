@@ -1,0 +1,76 @@
+{
+  "boundary": {
+    "lane_ids_at_the_extract_edge": [
+      "02462c6a994a4362",
+      "1400eb4bb07faf9e",
+      "1b95dab75ec72e94",
+      "228b9b06db1be04d",
+      "2946f01897b099f8",
+      "3044748d433c8b33",
+      "398fc45bd2ae7f22",
+      "423792d84fb938a8",
+      "47f438223b5a26c2",
+      "4ad42af4a197d590",
+      "56b8fe7151084e18",
+      "63026db6d4e7a181",
+      "74cfd14585b4321d",
+      "81dbf1caa6ccc530",
+      "845da000e94a19e1",
+      "85ece6dffb7a3197",
+      "862c1bb7a55b4f10",
+      "96841f161339a60a",
+      "9ce5c81be1ac714a",
+      "9e1460c553a0dc79",
+      "a3099494dbea5f98",
+      "a4ebf22b789ca72f",
+      "ac95a7033607ee61",
+      "b01b09c10d78248e",
+      "d17ee3aecead31c2",
+      "e853e580b0bf2c78",
+      "eb6a59391f09339b",
+      "f13126b955e93042",
+      "f1854c1c5f01faf1",
+      "f701392262a9eb20",
+      "faffaa7cc9231ed7",
+      "fc4189b0b2acf30c"
+    ],
+    "lanes_at_the_extract_edge": 32,
+    "lanes_without_entry": 16,
+    "lanes_without_exit": 16,
+    "routing_components": [
+      349,
+      36,
+      20
+    ]
+  },
+  "checked": {
+    "checks": [
+      "geometry",
+      "references",
+      "connectors",
+      "restrictions",
+      "signals",
+      "boundary"
+    ],
+    "connectors": 200,
+    "lanes": 405,
+    "restrictions": 33,
+    "signals": 4,
+    "stop_lines": 14
+  },
+  "errors": [],
+  "generated_at": "2026-08-20T06:16:15.316247+00:00",
+  "inputs": {
+    "comparison_report": "reports/reviewed-comparison.json",
+    "reviewed_lane_model": "lane-model/reviewed.json",
+    "source_osm": "source/map.osm"
+  },
+  "report_version": 1,
+  "status": "passed",
+  "validated_lane_model": {
+    "generation_fingerprint": "b1fe3e0cc9bc58ec0e57cd4baeb81593f49752d50ac9b432823fcd495b7e1ab7",
+    "path": "lane-model/reviewed.json",
+    "sha256": "fd2e2a31b397549033b6a03ef530feb34a8c76cc1176d0b0ced7108be03facaf"
+  },
+  "warnings": []
+}

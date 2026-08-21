@@ -1,0 +1,85 @@
+{
+  "boundary": {
+    "lane_ids_at_the_extract_edge": [
+      "055a09556dd340b6",
+      "060c26be3761b4b9",
+      "075e8283910f91f6",
+      "07d1571e2cfd9036",
+      "0ecdaa02698407de",
+      "15d8d0f66b69c437",
+      "1b8102c3efc189ed",
+      "1cae945509380974",
+      "1db69401475140ee",
+      "1f06fd50af787f6f",
+      "1f39b9cd20831ad4",
+      "228b9b06db1be04d",
+      "283d8199e77c8e18",
+      "2fe4cf2f9371615f",
+      "3044748d433c8b33",
+      "34f42eb7a4fbf4e0",
+      "410d20d057856870",
+      "4628081f4cd9922f",
+      "4ad42af4a197d590",
+      "548cfe8c03717fba",
+      "54d61ab5121df0da",
+      "60444583932ec866",
+      "6b3dbbabdc13c0a6",
+      "6c65e0f749dfae79",
+      "74f40adb746ddee1",
+      "7ff90cfeb8d362e1",
+      "82b9f374cd39cd57",
+      "845da000e94a19e1",
+      "90d8ee15ddfe184a",
+      "96841f161339a60a",
+      "970b954652163ffc",
+      "9e1460c553a0dc79",
+      "a8e25e7c1ed4eceb",
+      "b9cc26585f026f95",
+      "bf2605f5edb4422d",
+      "e31ab46d7ded1751",
+      "e853e580b0bf2c78"
+    ],
+    "lanes_at_the_extract_edge": 37,
+    "lanes_without_entry": 19,
+    "lanes_without_exit": 18,
+    "routing_components": [
+      121,
+      63,
+      26,
+      25,
+      22,
+      19,
+      9
+    ]
+  },
+  "checked": {
+    "checks": [
+      "geometry",
+      "references",
+      "connectors",
+      "restrictions",
+      "signals",
+      "boundary"
+    ],
+    "connectors": 116,
+    "lanes": 285,
+    "restrictions": 8,
+    "signals": 1,
+    "stop_lines": 0
+  },
+  "errors": [],
+  "generated_at": "2026-08-15T17:38:47.249453+00:00",
+  "inputs": {
+    "comparison_report": "reports/reviewed-comparison.json",
+    "reviewed_lane_model": "lane-model/reviewed.json",
+    "source_osm": "source/map.osm"
+  },
+  "report_version": 1,
+  "status": "passed",
+  "validated_lane_model": {
+    "generation_fingerprint": "57dcd345d17e5a862f9f38c97916fefe1799873c72b1e280407bb69b2e1da42c",
+    "path": "lane-model/reviewed.json",
+    "sha256": "fc205bca2305a0cc3cb68e7a7ee83b5c8d8a200622d6a1749dde0b258cab65fb"
+  },
+  "warnings": []
+}

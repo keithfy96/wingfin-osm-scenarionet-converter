@@ -1,0 +1,14 @@
+{
+  "routes_version": 1,
+  "identity": {
+    "generation_fingerprint": "b1fe3e0cc9bc58ec0e57cd4baeb81593f49752d50ac9b432823fcd495b7e1ab7",
+    "reviewed_lane_model_sha256": "fd2e2a31b397549033b6a03ef530feb34a8c76cc1176d0b0ced7108be03facaf"
+  },
+  "routes": [
+    {
+      "name": "t",
+      "start_lane": "433fa8957650a8dd",
+      "end_lane": "f72942fa4e2761c2"
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+
+run          scenarionet-10hz scenario 0 (junction-1-57dcd345d17e5a86-test), policy idm, 2 steps, render offscreen
+ended        step cap
+
+OBSERVATION  the array env.step() returns - normalised, and NOT sensor data
+             shape (2, 161)  dtype float32  range [0.000, 1.000]  35 of 161 values move
+  [  0:12 ]  10/12  move   side detector, 12 lasers, static world - road edges
+  [ 12:17 ]   3/5   move   heading error, speed, steering, last throttle, last steering
+  [ 17:18 ]   1/1   move   yaw rate
+  [ 18:19 ]   1/1   move   lateral offset within the lane
+  [ 19:41 ]  20/22  move   navigation - next 10 route points (ahead, sideways), clipped at 30 m
+  [ 41:161]   0/120 move   ray lidar, 120 lasers, 50 m, dynamic world
+             the observation is in [0, 1]; the action you send back is in [-1, 1]
+
+             built directly, NOT taken from env.step - because with a camera on,
+             env.step returned {'image': (180, 320, 3, 3), 'state': (41,)}
+             instead. Reaching a camera offscreen needs image_observation=True
+             (base_env.py:343 deletes every camera from the sensor list without it),
+             and that swaps in ImageStateObservation, whose `state` is 41 numbers
+             with no lidar block at all. Turning cameras on changes what a model
+             trained on the vector above would be handed.
+
+CAMERAS      one frame each at step 40, written as PNG
+  rgb_camera       not sampled: the drive ended before step 40
+  depth_camera     not sampled: the drive ended before step 40
+  semantic_camera  not sampled: the drive ended before step 40
+
+POINT CLOUD  a real 3-D cloud, in the car's own frame - x, y, z per ray
+  not sampled: the drive ended before step 40
+
+IMU          assembled from the physics body - MetaDrive has no IMU sensor class
+  velocity       3-D, m/s      x [+0.98, +1.12]  y [-13.84, -12.20]  z [+0.00, +0.83]
+  angular vel    3-D, rad/s    x [+0.000, +0.085]  y [+0.000, +0.009]  z [-0.002, +0.000]
+  acceleration   differenced over the 0.1 s step, m/s^2 x [-1.44, +0.00]  y [+0.00, +16.41]
+  attitude       rad          roll [-0.0039, +0.0000]  pitch [-0.0020, +0.0000]  heading [-1.491, -1.490]
+
+GPS / GNSS   exact, not approximated - the dataset carries its own projection
+  projection     azimuthal equidistant on WGS 84, centred 3.185894327, 101.611554629
+  recentring     MetaDrive shifted the scenario by [+55.725, -75.469] m and recorded it
+  start          3.186576828, 101.611053272
+  end            3.186567178, 101.611054043
+  -> track.csv   2 rows, 23 columns: position, lat/lon, IMU, attitude, action
+
+INFO         the dict env.step() returns - not seen by a policy, but available
+  46 keys, 14 of them vary over the drive
+  varying: action, curriculum_route_completion, episode_energy, episode_length, episode_reward, lateral_dist, raw_action, route_completion, steering, step_energy, step_reward, step_reward_heading, step_reward_lateral, velocity
+
+samples      /home/keith/Desktop/work/wingfin/converter-scenarionet-stage2-redesign/workspaces/junction-1/sensor-survey
+

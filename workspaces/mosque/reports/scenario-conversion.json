@@ -1,0 +1,112 @@
+{
+  "artifacts": {
+    "dataset_mapping": {
+      "path": "scenarionet/dataset_mapping.pkl",
+      "sha256": "f8ecc53458744390f46e6cb11692e12e3d8611fce0b4ba6cb75cb7561786be47",
+      "size_bytes": 72
+    },
+    "dataset_summary": {
+      "path": "scenarionet/dataset_summary.pkl",
+      "sha256": "93767b06599e9cbf595671ac36964a40591dad8fe3eeb37d9186f587f3c687a5",
+      "size_bytes": 17063
+    },
+    "reachability_html": {
+      "path": "inspection/stage-6-reachability.html",
+      "sha256": "9acbc96b82af4bb94327ab0dd08b1f42ebdfa865f4c062167ff960c43afe7956",
+      "size_bytes": 285087
+    },
+    "route_builder_html": {
+      "path": "inspection/stage-6-route-builder.html",
+      "sha256": "e8837db6edbcc18583ae20231ffc7dc7620e86835aa6992d4b26a9a96d81a11d",
+      "size_bytes": 289393
+    },
+    "scenario:mosque-b1fe3e0cc9bc58ec-test": {
+      "path": "scenarionet/sd_osm-scenario_v1_mosque-b1fe3e0cc9bc58ec-test.pkl",
+      "sha256": "327bbe44178b5e86e06f94c4d64013cc86e5db0f29d7a92fdc5596457ca8c649",
+      "size_bytes": 1254494
+    },
+    "signal_builder_html": {
+      "path": "inspection/stage-6-signal-builder.html",
+      "sha256": "81c70a1a36c611a05fa02a6e505550262e8cd64eead68071c8ee2ebe612d15ef",
+      "size_bytes": 288722
+    }
+  },
+  "converted": {
+    "connectors_active": 137,
+    "connectors_total": 200,
+    "junction_lanes": 202,
+    "lane_boundaries": 715,
+    "lanes": 405,
+    "phase_groups": 0,
+    "restrictions": 33,
+    "signalled_lanes": 0,
+    "signals": 4,
+    "stop_lines": 14
+  },
+  "generated_at": "2026-08-19T10:48:24.668807+00:00",
+  "inputs": {
+    "reviewed_lane_model": "lane-model/reviewed.json",
+    "reviewed_lane_model_sha256": "fd2e2a31b397549033b6a03ef530feb34a8c76cc1176d0b0ced7108be03facaf",
+    "routes": "routes.json",
+    "signals": null
+  },
+  "map_features": 1322,
+  "report_version": 1,
+  "routes": [
+    {
+      "distance_m": 172.44,
+      "driving_duration_s": 16.05,
+      "duration_s": 16.05,
+      "end_lane": "86eeae3d284ca219",
+      "junction_movements": 4,
+      "lane_changes": 1,
+      "lanes": [
+        "1831f85bcfe6bd84",
+        "86602054f094204a",
+        "c21d5460fc71993a",
+        "d2aa783c96ced0ae",
+        "43f78296a1a7ea83",
+        "86eeae3d284ca219"
+      ],
+      "name": "test",
+      "slowest_kph": 6.13,
+      "source": "generated",
+      "speed_kph": 50.0,
+      "start_lane": "1831f85bcfe6bd84",
+      "stops": [],
+      "waiting_s": 0
+    }
+  ],
+  "routing": {
+    "best_start_lane_id": "fc4189b0b2acf30c",
+    "best_start_reaches": 348,
+    "components_respecting_direction": {
+      "count": 114,
+      "largest": 116
+    },
+    "lane_change_edges": 376,
+    "lane_changes_allowed": true,
+    "lanes_reaching_nothing": 3,
+    "median_reach": 177,
+    "possible_lane_pairs": 163620,
+    "reachable_lane_pairs": 60471,
+    "without_lane_changes": {
+      "best_start_lane_id": "81dbf1caa6ccc530",
+      "best_start_reaches": 148,
+      "components_respecting_direction": {
+        "count": 352,
+        "largest": 54
+      },
+      "lanes_reaching_nothing": 16,
+      "median_reach": 20,
+      "possible_lane_pairs": 163620,
+      "reachable_lane_pairs": 12310
+    }
+  },
+  "scenario_files": [
+    "sd_osm-scenario_v1_mosque-b1fe3e0cc9bc58ec-test.pkl"
+  ],
+  "scenario_id": "mosque-b1fe3e0cc9bc58ec",
+  "signals": null,
+  "status": "converted"
+}

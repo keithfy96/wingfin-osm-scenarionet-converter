@@ -1,0 +1,569 @@
+{
+  "acquired_at": "2026-08-10T14:34:50.205620+00:00",
+  "artifacts": {
+    "geopackage": {
+      "path": "normalized/road-network.gpkg",
+      "sha256": "2403e3a6226075517efbd07e1ba984eeb9df53c0ad477f1b6918ea59f329b48f",
+      "size_bytes": 204800
+    },
+    "graphml": {
+      "path": "normalized/road-network.graphml",
+      "sha256": "667a24cdce632be6af0f9598f52bdd9ff1a85f31441e95e57ac04532e9e3acc4",
+      "size_bytes": 116419
+    },
+    "osm_xml": {
+      "path": "source/map.osm",
+      "sha256": "4607fd469ebaf1cf552599ba85640d03e9d5b7c1202dbcaca4fd4c9b97920191",
+      "size_bytes": 106355
+    }
+  },
+  "attribution": "OpenStreetMap contributors",
+  "driving_side": "left",
+  "driving_side_source": "explicit_cli",
+  "graph": {
+    "bounds_wgs84": {
+      "east": 101.6152512,
+      "north": 3.1911378,
+      "south": 3.1839982,
+      "west": 101.6086997
+    },
+    "directed": true,
+    "edge_count": 196,
+    "node_count": 139,
+    "simplified": false
+  },
+  "manifest_version": 1,
+  "road_selection": {
+    "coordinate_mismatch_node_ids": [],
+    "deleted_source_elements": {
+      "way": [
+        "776021090"
+      ]
+    },
+    "direction_mismatches": [],
+    "errors": [],
+    "excluded_by_reason": {
+      "access=private": 8,
+      "highway=path": 1,
+      "highway=service": 4
+    },
+    "excluded_source_ways": 13,
+    "extra_way_ids": [],
+    "filtered_graph_way_count": 43,
+    "ignored_non_highway_ways": 30,
+    "missing_way_ids": [],
+    "output_directed_edges": 196,
+    "output_nodes": 139,
+    "policy_id": "public-driving-v1",
+    "represented_way_ids": 41,
+    "selected_source_ways": 41,
+    "source_way_count": 84,
+    "status": "passed",
+    "tag_mismatch_way_ids": []
+  },
+  "source": {
+    "input_path": "/home/keith/Desktop/work/wingfin/converter-scenarionet-stage2-redesign/workspaces/junction-1/source/map.osm",
+    "original_input_sha256": "4607fd469ebaf1cf552599ba85640d03e9d5b7c1202dbcaca4fd4c9b97920191",
+    "osm_xml_kind": "original_local_file",
+    "path": "source/map.osm",
+    "sha256": "4607fd469ebaf1cf552599ba85640d03e9d5b7c1202dbcaca4fd4c9b97920191",
+    "type": "local_file"
+  },
+  "stage_1b": {
+    "artifacts": {
+      "acquisition_json": {
+        "path": "reports/acquisition.json",
+        "sha256": "b49af8f5fd9b21115ce6d4777b6accdfaaabdae30d081e11672828ae1c2fd256",
+        "size_bytes": 8224
+      },
+      "acquisition_markdown": {
+        "path": "reports/acquisition.md",
+        "sha256": "c4dd7eaaf182dda3d37828b1417b0ce04eec9c964b01b636497a730825d479c3",
+        "size_bytes": 2138
+      },
+      "projected_geopackage": {
+        "path": "normalized/road-network-local.gpkg",
+        "sha256": "c7bd3becfaf196328d45868f2f5a127d2762649026bc8025f3e85516141a2e3f",
+        "size_bytes": 204800
+      },
+      "projected_graphml": {
+        "path": "normalized/road-network-local.graphml",
+        "sha256": "6667cc31bea55110aa7e02013cc0e1420f2642949ad146cc3837c5dd83523493",
+        "size_bytes": 120571
+      },
+      "stage_1b_data_audit_json": {
+        "path": "reports/stage-1b-data-audit.json",
+        "sha256": "d54542d9b9f235f072b3c096bfad8e1f4fee5ce6aa8f70cdeb02dfb4d549758e",
+        "size_bytes": 12573
+      },
+      "stage_1b_data_audit_markdown": {
+        "path": "reports/stage-1b-data-audit.md",
+        "sha256": "c86cdc8eaacbb3a51ecba7b00caad7df805a614b8fedf4025a92ec7485cd70da",
+        "size_bytes": 1525
+      }
+    },
+    "preflight_counts": {
+      "discarded_features": 0,
+      "errors": 0,
+      "inferred_values": 0,
+      "warnings": 15
+    },
+    "projection": {
+      "always_xy": true,
+      "axis_order": "x=east,y=north",
+      "forward": "EPSG:4326 to local_crs, always_xy=True",
+      "inverse": "local_crs to EPSG:4326, always_xy=True",
+      "local_crs_projjson": {
+        "$schema": "https://proj.org/schemas/v0.7/projjson.schema.json",
+        "base_crs": {
+          "coordinate_system": {
+            "axis": [
+              {
+                "abbreviation": "lon",
+                "direction": "east",
+                "name": "Longitude",
+                "unit": "degree"
+              },
+              {
+                "abbreviation": "lat",
+                "direction": "north",
+                "name": "Latitude",
+                "unit": "degree"
+              }
+            ],
+            "subtype": "ellipsoidal"
+          },
+          "datum": {
+            "ellipsoid": {
+              "inverse_flattening": 298.257223563,
+              "name": "WGS 84",
+              "semi_major_axis": 6378137
+            },
+            "id": {
+              "authority": "EPSG",
+              "code": 6326
+            },
+            "name": "World Geodetic System 1984",
+            "type": "GeodeticReferenceFrame"
+          },
+          "name": "unknown"
+        },
+        "conversion": {
+          "method": {
+            "id": {
+              "authority": "EPSG",
+              "code": 1125
+            },
+            "name": "Azimuthal Equidistant"
+          },
+          "name": "unknown",
+          "parameters": [
+            {
+              "id": {
+                "authority": "EPSG",
+                "code": 8801
+              },
+              "name": "Latitude of natural origin",
+              "unit": "degree",
+              "value": 3.185894327145
+            },
+            {
+              "id": {
+                "authority": "EPSG",
+                "code": 8802
+              },
+              "name": "Longitude of natural origin",
+              "unit": "degree",
+              "value": 101.611554629362
+            },
+            {
+              "id": {
+                "authority": "EPSG",
+                "code": 8806
+              },
+              "name": "False easting",
+              "unit": "metre",
+              "value": 0
+            },
+            {
+              "id": {
+                "authority": "EPSG",
+                "code": 8807
+              },
+              "name": "False northing",
+              "unit": "metre",
+              "value": 0
+            }
+          ]
+        },
+        "coordinate_system": {
+          "axis": [
+            {
+              "abbreviation": "E",
+              "direction": "east",
+              "name": "Easting",
+              "unit": "metre"
+            },
+            {
+              "abbreviation": "N",
+              "direction": "north",
+              "name": "Northing",
+              "unit": "metre"
+            }
+          ],
+          "subtype": "Cartesian"
+        },
+        "name": "unknown",
+        "type": "ProjectedCRS"
+      },
+      "local_crs_wkt": "PROJCRS[\"unknown\",BASEGEOGCRS[\"unknown\",DATUM[\"World Geodetic System 1984\",ELLIPSOID[\"WGS 84\",6378137,298.257223563,LENGTHUNIT[\"metre\",1]],ID[\"EPSG\",6326]],PRIMEM[\"Greenwich\",0,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8901]]],CONVERSION[\"unknown\",METHOD[\"Azimuthal Equidistant\",ID[\"EPSG\",1125]],PARAMETER[\"Latitude of natural origin\",3.185894327145,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8801]],PARAMETER[\"Longitude of natural origin\",101.611554629362,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8802]],PARAMETER[\"False easting\",0,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8806]],PARAMETER[\"False northing\",0,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8807]]],CS[Cartesian,2],AXIS[\"(E)\",east,ORDER[1],LENGTHUNIT[\"metre\",1,ID[\"EPSG\",9001]]],AXIS[\"(N)\",north,ORDER[2],LENGTHUNIT[\"metre\",1,ID[\"EPSG\",9001]]]]",
+      "origin": {
+        "latitude": 3.1858943271453275,
+        "longitude": 101.61155462936247,
+        "source": "network_geometry_centroid"
+      },
+      "pyproj_version": "3.7.1",
+      "round_trip": {
+        "maximum_error_degrees": 1.4210854715202004e-14,
+        "sample_count": 139,
+        "tolerance_degrees": 1e-09
+      },
+      "source_crs": "EPSG:4326",
+      "units": "metre"
+    },
+    "status": "passed"
+  },
+  "stage_2": {
+    "artifacts": {
+      "generation_report": {
+        "path": "reports/lane-model-generation.json",
+        "sha256": "b105ea55e4a3782a9b1bef584329f6c93cb3175ca680ab1c7a4235ce33ea6c13",
+        "size_bytes": 880
+      },
+      "preliminary_lane_model": {
+        "path": "lane-model/preliminary.json",
+        "sha256": "cd681b42d95af52ab80b9fa40d4f6e54dfbc2838ae7f8fdeae9dc078d3390f41",
+        "size_bytes": 975605
+      },
+      "review_audit_html": {
+        "path": "inspection/stage-2-review-audit.html",
+        "sha256": "47adbcc7bcd445767b49fda50ea68f414873a7895c5f14c7ea2e7e50e16e3e8c",
+        "size_bytes": 766561
+      }
+    },
+    "generation_fingerprint": "bcb0e1b2e2fb3ae8bbe146b771b76e674dc8efdeff086340eb176443b3d93599",
+    "generator_version": "direct-osm-stage2-v17",
+    "input_checksums": {
+      "configuration": "efdde777ac2ea77ccc57f0ee3cd8c5ba9d54cb50f7fe50fd2600af4837e15636",
+      "projected_graphml": "6667cc31bea55110aa7e02013cc0e1420f2642949ad146cc3837c5dd83523493",
+      "source_osm": "4607fd469ebaf1cf552599ba85640d03e9d5b7c1202dbcaca4fd4c9b97920191"
+    },
+    "lane_model_schema_version": 3,
+    "status": "passed"
+  },
+  "stage_4": {
+    "artifacts": {
+      "applied_decisions": {
+        "path": "review/applied-decisions.json",
+        "sha256": "3dde7ea7440877c4863f2e00310796bcd5ba600ca38022c3862e373744092d2c",
+        "size_bytes": 182260
+      },
+      "comparison_html": {
+        "path": "inspection/stage-4-comparison.html",
+        "sha256": "6f6c0cb4809c928f1ad7277ddff9884a6f3d6f833686b8b24786422adc37fd24",
+        "size_bytes": 175199
+      },
+      "comparison_json": {
+        "path": "reports/reviewed-comparison.json",
+        "sha256": "1bcc9317e0eef8f8cd3ea5f4137964246c9db3e3625bafd6c1529151b2f9b163",
+        "size_bytes": 29195
+      },
+      "comparison_markdown": {
+        "path": "reports/reviewed-comparison.md",
+        "sha256": "19c05fc5537409741f8b422d5b1682716dbd3261454a75a9b24032be7e546a45",
+        "size_bytes": 851
+      },
+      "reviewed_lane_model": {
+        "path": "lane-model/reviewed.json",
+        "sha256": "6902568a1e4188e614ed06e762ff51bcd67755e85a17f48e8cbf5809f65ed6dc",
+        "size_bytes": 938731
+      },
+      "reviewed_osm": {
+        "path": "review/reviewed.osm",
+        "sha256": "4607fd469ebaf1cf552599ba85640d03e9d5b7c1202dbcaca4fd4c9b97920191",
+        "size_bytes": 106355
+      }
+    },
+    "decision_counts": {
+      "activated_connectors": 3,
+      "forbidden_connectors": 28,
+      "total": 139
+    },
+    "feature_counts": {
+      "active_connectors": 83,
+      "connectors": 116,
+      "direct_continuations": 211,
+      "findings": 109,
+      "forbidden_connectors": 33,
+      "lanes": 285,
+      "merge_tapers": 19,
+      "restrictions": 8,
+      "review_required_connectors": 0,
+      "signals": 1,
+      "stop_lines": 0
+    },
+    "generation_fingerprint": "ce2efbed720afb5e57f69f1a66d50d8fa4d5386eee28e5cbe7e13e4268194ac6",
+    "generator_version": "direct-osm-stage2-v17",
+    "input_checksums": {
+      "configuration": "efdde777ac2ea77ccc57f0ee3cd8c5ba9d54cb50f7fe50fd2600af4837e15636",
+      "preliminary_lane_model": "cd681b42d95af52ab80b9fa40d4f6e54dfbc2838ae7f8fdeae9dc078d3390f41",
+      "source_osm": "4607fd469ebaf1cf552599ba85640d03e9d5b7c1202dbcaca4fd4c9b97920191",
+      "submission": "c3c548658ead757300b577270c104002472ab561934ac77de23cae6feac42713"
+    },
+    "lane_model_schema_version": 3,
+    "road_selection": {
+      "coordinate_mismatch_node_ids": [],
+      "deleted_source_elements": {
+        "way": [
+          "776021090"
+        ]
+      },
+      "direction_mismatches": [],
+      "errors": [],
+      "excluded_by_reason": {
+        "access=private": 8,
+        "highway=path": 1,
+        "highway=service": 4
+      },
+      "excluded_source_ways": 13,
+      "extra_way_ids": [],
+      "filtered_graph_way_count": 43,
+      "ignored_non_highway_ways": 30,
+      "missing_way_ids": [],
+      "output_directed_edges": 196,
+      "output_nodes": 139,
+      "policy_id": "public-driving-v1",
+      "represented_way_ids": 41,
+      "selected_source_ways": 41,
+      "source_way_count": 84,
+      "status": "passed",
+      "tag_mismatch_way_ids": []
+    },
+    "status": "passed"
+  },
+  "stage_5": {
+    "artifacts": {
+      "validation_html": {
+        "path": "inspection/stage-5-validation.html",
+        "sha256": "02dd88151ccfcf1c7afcbb0191e07c0fca0e6a1676342635c47388be023ab561",
+        "size_bytes": 57072
+      },
+      "validation_json": {
+        "path": "reports/map-validation.json",
+        "sha256": "62ac04e7ce8303eb6d79c5dd6273c254d92e6067c53319a3a7cf4167dbe172f7",
+        "size_bytes": 2087
+      },
+      "validation_markdown": {
+        "path": "reports/map-validation.md",
+        "sha256": "602e948de2c1b1ee1cd0322f85a72bdefee3fa07ce421fce3e81085b9fbd7475",
+        "size_bytes": 1110
+      }
+    },
+    "boundary": {
+      "lane_ids_at_the_extract_edge": [
+        "055a09556dd340b6",
+        "060c26be3761b4b9",
+        "075e8283910f91f6",
+        "07d1571e2cfd9036",
+        "0ecdaa02698407de",
+        "15d8d0f66b69c437",
+        "1b8102c3efc189ed",
+        "1cae945509380974",
+        "1db69401475140ee",
+        "1f06fd50af787f6f",
+        "1f39b9cd20831ad4",
+        "228b9b06db1be04d",
+        "283d8199e77c8e18",
+        "2fe4cf2f9371615f",
+        "3044748d433c8b33",
+        "34f42eb7a4fbf4e0",
+        "410d20d057856870",
+        "4628081f4cd9922f",
+        "4ad42af4a197d590",
+        "548cfe8c03717fba",
+        "54d61ab5121df0da",
+        "60444583932ec866",
+        "6b3dbbabdc13c0a6",
+        "6c65e0f749dfae79",
+        "74f40adb746ddee1",
+        "7ff90cfeb8d362e1",
+        "82b9f374cd39cd57",
+        "845da000e94a19e1",
+        "86602054f094204a",
+        "90d8ee15ddfe184a",
+        "96841f161339a60a",
+        "970b954652163ffc",
+        "9e1460c553a0dc79",
+        "a8e25e7c1ed4eceb",
+        "b9cc26585f026f95",
+        "bf2605f5edb4422d",
+        "c0530c25fd9abf94",
+        "e31ab46d7ded1751",
+        "e853e580b0bf2c78"
+      ],
+      "lanes_at_the_extract_edge": 39,
+      "lanes_without_entry": 19,
+      "lanes_without_exit": 20,
+      "routing_components": [
+        121,
+        70,
+        44,
+        22,
+        19,
+        9
+      ]
+    },
+    "checked": {
+      "checks": [
+        "geometry",
+        "references",
+        "connectors",
+        "restrictions",
+        "signals",
+        "boundary"
+      ],
+      "connectors": 116,
+      "lanes": 285,
+      "restrictions": 8,
+      "signals": 1,
+      "stop_lines": 0
+    },
+    "issue_counts": {
+      "errors": 0,
+      "warnings": 0
+    },
+    "status": "passed",
+    "validated_lane_model": {
+      "generation_fingerprint": "ce2efbed720afb5e57f69f1a66d50d8fa4d5386eee28e5cbe7e13e4268194ac6",
+      "path": "lane-model/reviewed.json",
+      "sha256": "6902568a1e4188e614ed06e762ff51bcd67755e85a17f48e8cbf5809f65ed6dc"
+    }
+  },
+  "stage_6": {
+    "artifacts": {
+      "dataset_mapping": {
+        "path": "scenarionet/dataset_mapping.pkl",
+        "sha256": "2031964a86acbb0b41605c9a1abdfbbf9c37db6e117d4daa1ca21b5025b38a03",
+        "size_bytes": 82
+      },
+      "dataset_summary": {
+        "path": "scenarionet/dataset_summary.pkl",
+        "sha256": "f3eaf926584fc3c47ce9c1abec6cfd6ce96c66d2987432b2b5b1d1d14bb1c305",
+        "size_bytes": 8408
+      },
+      "reachability_html": {
+        "path": "inspection/stage-6-reachability.html",
+        "sha256": "0068dfe1e77cb3092f467d55d907bfc8e015b0d3061569a77367c1754272970f",
+        "size_bytes": 135475
+      },
+      "route_builder_html": {
+        "path": "inspection/stage-6-route-builder.html",
+        "sha256": "3140325adfcec5e91832f064cc4b56dd9a9792fcba09830a70e9c7d24cd04aa0",
+        "size_bytes": 134795
+      },
+      "scenario:junction-1-ce2efbed720afb5e-main-route": {
+        "path": "scenarionet/sd_osm-scenario_v1_junction-1-ce2efbed720afb5e-main-route.pkl",
+        "sha256": "518191f2f28c22218ac674e6b029ce13490df49b90830f512dfc6e5895be0525",
+        "size_bytes": 228854
+      }
+    },
+    "converted": {
+      "connectors_active": 83,
+      "connectors_total": 116,
+      "lane_boundaries": 570,
+      "lanes": 285,
+      "restrictions": 8,
+      "signals": 1,
+      "stop_lines": 0
+    },
+    "map_features": 855,
+    "routes": [
+      {
+        "distance_m": 902.73,
+        "duration_s": 65.0,
+        "end_lane": "970b954652163ffc",
+        "junction_movements": 18,
+        "lane_changes": 1,
+        "lanes": [
+          "b9cc26585f026f95",
+          "d976ca388f2599ba",
+          "d75fbcca2cdb8384",
+          "f2bfa215050b500a",
+          "4e7678a69919803f",
+          "86762d6619cf4163",
+          "a1e15b3bd8cc0bb4",
+          "3fd9dca0a0c74f0b",
+          "3ad37ab301e5a43e",
+          "15438e6fd90cf39e",
+          "72fdbea2a86f51e8",
+          "b63366201b38cca1",
+          "9f83d567b07605dc",
+          "a1817878db518d3a",
+          "d2aa783c96ced0ae",
+          "43f78296a1a7ea83",
+          "86eeae3d284ca219",
+          "af092c547a4deafa",
+          "0fc2f28dc3ea0eb9",
+          "970b954652163ffc"
+        ],
+        "name": "main-route",
+        "source": "generated",
+        "speed_kph": 50.0,
+        "start_lane": "b9cc26585f026f95"
+      }
+    ],
+    "routing": {
+      "best_start_lane_id": "4628081f4cd9922f",
+      "best_start_reaches": 190,
+      "components_respecting_direction": {
+        "count": 185,
+        "largest": 12
+      },
+      "lane_change_edges": 178,
+      "lane_changes_allowed": true,
+      "lanes_reaching_nothing": 8,
+      "median_reach": 110,
+      "possible_lane_pairs": 80940,
+      "reachable_lane_pairs": 22217,
+      "without_lane_changes": {
+        "best_start_lane_id": "60444583932ec866",
+        "best_start_reaches": 79,
+        "components_respecting_direction": {
+          "count": 274,
+          "largest": 12
+        },
+        "lanes_reaching_nothing": 20,
+        "median_reach": 10,
+        "possible_lane_pairs": 80940,
+        "reachable_lane_pairs": 6556
+      }
+    },
+    "scenario_files": [
+      "sd_osm-scenario_v1_junction-1-ce2efbed720afb5e-main-route.pkl"
+    ],
+    "scenario_id": "junction-1-ce2efbed720afb5e",
+    "source_lane_model": {
+      "path": "lane-model/reviewed.json",
+      "sha256": "6902568a1e4188e614ed06e762ff51bcd67755e85a17f48e8cbf5809f65ed6dc"
+    },
+    "status": "converted"
+  },
+  "tool_versions": {
+    "converter": "0.1.0",
+    "geopandas": "1.1.4",
+    "osmnx": "2.0.7",
+    "pyproj": "3.7.1",
+    "python": "3.10.19",
+    "shapely": "2.1.2"
+  }
+}

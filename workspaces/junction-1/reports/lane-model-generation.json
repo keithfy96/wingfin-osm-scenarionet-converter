@@ -1,0 +1,30 @@
+{
+  "feature_counts": {
+    "active_connectors": 79,
+    "aligned_lanes": 4,
+    "connectors": 116,
+    "direct_continuations": 211,
+    "findings": 144,
+    "forbidden_connectors": 6,
+    "lanes": 285,
+    "merge_tapers": 21,
+    "restrictions": 8,
+    "review_required_connectors": 31,
+    "separated_lanes": 132,
+    "separated_roads": 7,
+    "signals": 1,
+    "stop_lines": 0,
+    "trim_clamped_edges": 23
+  },
+  "generated_at": "2026-08-16T10:08:35.027283+00:00",
+  "generation_fingerprint": "253dda24cd121048ca836e4d299b183458539957cb2a476b29390b5c41133673",
+  "generator_version": "direct-osm-stage2-v26",
+  "input_checksums": {
+    "configuration": "efdde777ac2ea77ccc57f0ee3cd8c5ba9d54cb50f7fe50fd2600af4837e15636",
+    "projected_graphml": "8e3c50cdeaf877fb8097d47acd1a4c557ff1dabe38871e75cc780acedc3feede",
+    "source_osm": "4607fd469ebaf1cf552599ba85640d03e9d5b7c1202dbcaca4fd4c9b97920191"
+  },
+  "lane_model_schema_version": 3,
+  "report_version": 1,
+  "status": "passed"
+}

@@ -1,0 +1,76 @@
+
+run          scenarionet scenario 0 (mosque-b1fe3e0cc9bc58ec-test), policy idm, 43 steps, render offscreen
+ended        out of road
+
+OBSERVATION  the array env.step() returns - normalised, and NOT sensor data
+             shape (43, 161)  dtype float32  range [0.000, 1.000]  39 of 161 values move
+  [  0:12 ]  12/12  move   side detector, 12 lasers, static world - road edges
+  [ 12:17 ]   5/5   move   heading error, speed, steering, last throttle, last steering
+  [ 17:18 ]   1/1   move   yaw rate
+  [ 18:19 ]   1/1   move   lateral offset within the lane
+  [ 19:41 ]  20/22  move   navigation - next 10 route points (ahead, sideways), clipped at 30 m
+  [ 41:161]   0/120 move   ray lidar, 120 lasers, 50 m, dynamic world
+             the observation is in [0, 1]; the action you send back is in [-1, 1]
+
+             built directly, NOT taken from env.step - because with a camera on,
+             env.step returned {'image': (288, 512, 3, 3), 'state': (41,)}
+             instead. Reaching a camera offscreen needs image_observation=True
+             (base_env.py:343 deletes every camera from the sensor list without it),
+             and that swaps in ImageStateObservation, whose `state` is 41 numbers
+             with no lidar block at all. Turning cameras on changes what a model
+             trained on the vector above would be handed.
+
+CAMERAS      one frame each at step 40, written as PNG
+  not sampled this run: rgb_camera, depth_camera, semantic_camera, point_cloud
+  A rig run is the rig alone. Run without --camera-rig for these four -
+  --policy idm is deterministic, so it is the same drive and the rows line up.
+
+CAMERA RIG   7 camera(s) from /home/keith/Desktop/work/wingfin/data/cams.txt
+  the spec is CARLA's frame (x fwd, y right, z up, +yaw right); MetaDrive's is
+  x right, y fwd, z up, +heading LEFT. So the mount is an x/y swap and the aim
+  is a sign flip - `aims` below is where each camera really points.
+  cam_front          512x288  fov  70  H   +0.0  straight ahead                     (288, 512, 3)
+                   -> rig-cam_front.png
+  cam_left           512x288  fov  70  H  +55.0  55 deg to the left, i.e. front-left (288, 512, 3)
+                   -> rig-cam_left.png
+  cam_right          512x288  fov  70  H  -55.0  55 deg to the right, i.e. front-right (288, 512, 3)
+                   -> rig-cam_right.png
+  cam_back           512x288  fov  70  H -180.0  straight behind                    (288, 512, 3)
+                   -> rig-cam_back.png
+  cam_back_left      512x288  fov  70  H -125.0  125 deg to the right, i.e. rear-right (288, 512, 3)
+                   -> rig-cam_back_left.png
+  cam_back_right     512x288  fov  70  H +125.0  125 deg to the left, i.e. rear-left (288, 512, 3)
+                   -> rig-cam_back_right.png
+  cam_front_wide    1280x720  fov 120  H   +0.0  straight ahead                     (720, 1280, 3)
+                   -> rig-cam_front_wide.png
+  read           4.21 ms/step over 1 read(s), 5.42 MB/step
+  the cameras are MOUNTED on the ego, not one camera re-aimed per view: every
+  buffer fills in the same render pass, so the cost lands in env.step and the
+  read is nearly free. Re-aiming one camera calls taskMgr.step() twice per view.
+  panda3d prints `shader_terrain(error): More views than supported` past ~6
+  cameras. Measured inert here - every camera is pixel-identical rendered alone
+  and in the full rig - because use_mesh_terrain is off and ShaderTerrainMesh is
+  not what draws this ground.
+
+POINT CLOUD  a real 3-D cloud, in the car's own frame - x, y, z per ray
+  not sampled: a camera rig is mounted, see CAMERA RIG above
+
+IMU          assembled from the physics body - MetaDrive has no IMU sensor class
+  velocity       3-D, m/s      x [-3.84, +5.65]  y [+5.96, +13.51]  z [+0.00, +0.92]
+  angular vel    3-D, rad/s    x [-0.099, +0.172]  y [-0.135, +0.058]  z [-0.771, +0.302]
+  acceleration   differenced over the 0.1 s step, m/s^2   x [-3.84, +6.48]  y [-16.02, +0.91]
+  attitude       rad          roll [-0.0175, +0.0093]  pitch [-0.0415, +0.0000]  heading [+0.941, +1.908]
+
+GPS / GNSS   exact, not approximated - the dataset carries its own projection
+  projection     azimuthal equidistant on WGS 84, centred 3.188914325, 101.614461501
+  recentring     MetaDrive shifted the scenario by [+243.712, +475.793] m and recorded it
+  start          3.184611530, 101.612268838
+  end            3.184992234, 101.612220499
+  -> track.csv   43 rows, 23 columns: position, lat/lon, IMU, attitude, action
+
+INFO         the dict env.step() returns - not seen by a policy, but available
+  46 keys, 19 of them vary over the drive
+  varying: acceleration, action, cost, curriculum_route_completion, episode_energy, episode_length, episode_reward, lateral_dist, num_on_line, out_of_road, raw_action, route_completion, steering, step_energy, step_reward, step_reward_action_smooth, step_reward_heading, step_reward_lateral, velocity
+
+samples      /home/keith/Desktop/work/wingfin/converter-scenarionet-stage2-redesign/workspaces/mosque/sensor-survey
+

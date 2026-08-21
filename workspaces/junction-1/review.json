@@ -1,0 +1,6949 @@
+{
+  "submission_version": 4,
+  "exported_at": "2026-08-15T17:38:33.412Z",
+  "identity": {
+    "workspace": "junction-1",
+    "source_checksum": "4607fd469ebaf1cf552599ba85640d03e9d5b7c1202dbcaca4fd4c9b97920191",
+    "generation_fingerprint": "70f5123b43eb4e2fe87e7d4fa594bc4abd2f0415d6ccded8c2c653ca29edbce5",
+    "generator_version": "direct-osm-stage2-v24",
+    "lane_model_schema_version": 3,
+    "configuration_checksum": "efdde777ac2ea77ccc57f0ee3cd8c5ba9d54cb50f7fe50fd2600af4837e15636",
+    "generated_at": "2026-08-15T17:34:32.212013+00:00"
+  },
+  "decisions": [
+    {
+      "finding_id": "0084b199af3c4663",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.918Z",
+      "evidence_checksum": "09edc7554cfe297c5bb7ef3bd66fc4274b09e21f41f8c8a3f3e56f8991874b68",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1846682373,
+        "lon": 101.61116317351,
+        "bbox": [
+          101.6108383,
+          3.1846327,
+          101.61116317351,
+          3.1846682373
+        ],
+        "sources": [
+          {
+            "ref": "way:776022254",
+            "coordinates": [
+              {
+                "lat": 3.1846327,
+                "lon": 101.6108383
+              },
+              {
+                "lat": 3.1846682373,
+                "lon": 101.61116317351
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "776022254"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "00af11b811a3fbe9",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.923Z",
+      "evidence_checksum": "d17b70757d2a903c8a2fff0f85ad4711ccc1b5e4762b7fd24b953dd3f7d4b103",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1849095,
+        "lon": 101.6121977,
+        "bbox": [
+          101.6121977,
+          3.1848268,
+          101.6122265,
+          3.1849095
+        ],
+        "sources": [
+          {
+            "ref": "way:39619063",
+            "coordinates": [
+              {
+                "lat": 3.1848268,
+                "lon": 101.6122265
+              },
+              {
+                "lat": 3.1849095,
+                "lon": 101.6121977
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "39619063"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "0164d20308d8dd09",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.556Z",
+      "evidence_checksum": "a076ea8ca4775e4669ca757f74e764116e9313c33dfbca7b7a37873e72c338e1",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1846974,
+        "lon": 101.6121588,
+        "bbox": [
+          101.6119247,
+          3.1845696,
+          101.6122878,
+          3.1847388
+        ],
+        "sources": [
+          {
+            "ref": "way:182502406",
+            "coordinates": [
+              {
+                "lat": 3.1845696,
+                "lon": 101.6122878
+              },
+              {
+                "lat": 3.1846449,
+                "lon": 101.6122451
+              },
+              {
+                "lat": 3.1846974,
+                "lon": 101.6121588
+              },
+              {
+                "lat": 3.1847272,
+                "lon": 101.6120526
+              },
+              {
+                "lat": 3.1847388,
+                "lon": 101.6119247
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "182502406"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "01b733f4ded4bd3b",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:35:24.027Z",
+      "evidence_checksum": "861227bfbac557d93f0ce0206de35d562ec5f18dcf3b16840d41733dda5a6f58",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1866354,
+        "lon": 101.6108696,
+        "bbox": [
+          101.6108696,
+          3.1866354,
+          101.6108696,
+          3.1866354
+        ],
+        "sources": [
+          {
+            "ref": "node:1226982521",
+            "coordinates": [
+              {
+                "lat": 3.1866354,
+                "lon": 101.6108696
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1226982521"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "5f5d7ddbf23473fd",
+        "turn_angle_degrees": -180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "02515bdef8585067",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.923Z",
+      "evidence_checksum": "d84cd40229aa38e9a99e9a90db0073a23406276d232866aea412f83a459a2cfd",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1845852373,
+        "lon": 101.61106747351,
+        "bbox": [
+          101.6109913,
+          3.1845473,
+          101.61116317351,
+          3.1846682373
+        ],
+        "sources": [
+          {
+            "ref": "way:1530245742",
+            "coordinates": [
+              {
+                "lat": 3.1846682373,
+                "lon": 101.61116317351
+              },
+              {
+                "lat": 3.1846185373,
+                "lon": 101.61112557351
+              },
+              {
+                "lat": 3.1845852373,
+                "lon": 101.61106747351
+              },
+              {
+                "lat": 3.1845473,
+                "lon": 101.6109913
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1530245742"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "0494acb0e569eab1",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:35:25.734Z",
+      "evidence_checksum": "dca277fbd1abfaa5c9ad43015b0124f6fb19f8122c98800bac33ca0c862a627f",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1866496,
+        "lon": 101.611,
+        "bbox": [
+          101.611,
+          3.1866496,
+          101.611,
+          3.1866496
+        ],
+        "sources": [
+          {
+            "ref": "node:474913266",
+            "coordinates": [
+              {
+                "lat": 3.1866496,
+                "lon": 101.611
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "474913266"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "06f4b600e698ca81",
+        "turn_angle_degrees": -180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "050d3fffcb4fb2ea",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.924Z",
+      "evidence_checksum": "5a83304594e32cf200acf680bb3fed0cd04b2d9542cb7c179e0af18215d5fd43",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1865775,
+        "lon": 101.6097045,
+        "bbox": [
+          101.6092247,
+          3.1863027,
+          101.6101458,
+          3.1868724
+        ],
+        "sources": [
+          {
+            "ref": "way:1013715114",
+            "coordinates": [
+              {
+                "lat": 3.1863027,
+                "lon": 101.6101458
+              },
+              {
+                "lat": 3.1863883,
+                "lon": 101.6100084
+              },
+              {
+                "lat": 3.1865775,
+                "lon": 101.6097045
+              },
+              {
+                "lat": 3.1868724,
+                "lon": 101.6092247
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1013715114"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "05b4396686c24eea",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:35:27.986Z",
+      "evidence_checksum": "2c35f9b8b4704e931ccde1002dacc60e1c0da256b8e60cdae273c489701592d2",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1863027,
+        "lon": 101.6101458,
+        "bbox": [
+          101.6101458,
+          3.1863027,
+          101.6101458,
+          3.1863027
+        ],
+        "sources": [
+          {
+            "ref": "node:463114118",
+            "coordinates": [
+              {
+                "lat": 3.1863027,
+                "lon": 101.6101458
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "463114118"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "3c5eaf84b633d353",
+        "turn_angle_degrees": 180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "091d89f2c1bef841",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:04.431Z",
+      "evidence_checksum": "ff8b10cfc85a3b8dd5b8b1dd38e9ae833a5f368169545543f15ae6d63b6f085d",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.184728,
+        "lon": 101.610722,
+        "bbox": [
+          101.6106674,
+          3.184728,
+          101.6107859,
+          3.184745
+        ],
+        "sources": [
+          {
+            "ref": "way:1016771782",
+            "coordinates": [
+              {
+                "lat": 3.184745,
+                "lon": 101.6107859
+              },
+              {
+                "lat": 3.184728,
+                "lon": 101.610722
+              },
+              {
+                "lat": 3.1847287,
+                "lon": 101.6106674
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1016771782"
+      ],
+      "proposed_value": {
+        "direction": "backward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "0eeaeee07364fc49",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.563Z",
+      "evidence_checksum": "c50a8468e47f2fa3554b8d17452c8284914dd96d3b8ae5cdeb6af964b8cebc9b",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1847737,
+        "lon": 101.6117089,
+        "bbox": [
+          101.6115081,
+          3.1847345,
+          101.6121977,
+          3.1849095
+        ],
+        "sources": [
+          {
+            "ref": "way:776021091",
+            "coordinates": [
+              {
+                "lat": 3.1847345,
+                "lon": 101.6115081
+              },
+              {
+                "lat": 3.1847737,
+                "lon": 101.6117089
+              },
+              {
+                "lat": 3.1849095,
+                "lon": 101.6121977
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "776021091"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "0faeb5d178433dfb",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:35:30.224Z",
+      "evidence_checksum": "4f64c7ca72a62847cf95d9f906df8e90a02976a444189d48d2f66eba66792a05",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1849869,
+        "lon": 101.6111344,
+        "bbox": [
+          101.6111344,
+          3.1849869,
+          101.6111344,
+          3.1849869
+        ],
+        "sources": [
+          {
+            "ref": "node:1928630157",
+            "coordinates": [
+              {
+                "lat": 3.1849869,
+                "lon": 101.6111344
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1928630157"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "b6e51e4cab42384b",
+        "turn_angle_degrees": -160.205
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "0fcff54fa4eb33b1",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.564Z",
+      "evidence_checksum": "91c2e3161fb397a3e9a64c71f7b4ba370389bb11cf084f7cf8b93354d6878a81",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1848463,
+        "lon": 101.6122865,
+        "bbox": [
+          101.6122587,
+          3.1848463,
+          101.6122865,
+          3.184929
+        ],
+        "sources": [
+          {
+            "ref": "way:777159293",
+            "coordinates": [
+              {
+                "lat": 3.184929,
+                "lon": 101.6122587
+              },
+              {
+                "lat": 3.1848463,
+                "lon": 101.6122865
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "777159293"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "115025b66bfc2583",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:35:34.464Z",
+      "evidence_checksum": "9b031b011b227f92fa628381bbbfc18642401b7b39b59d7ae9058cb14c055135",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1866354,
+        "lon": 101.6108696,
+        "bbox": [
+          101.6108696,
+          3.1866354,
+          101.6108696,
+          3.1866354
+        ],
+        "sources": [
+          {
+            "ref": "node:1226982521",
+            "coordinates": [
+              {
+                "lat": 3.1866354,
+                "lon": 101.6108696
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1226982521"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "b48c1956887c0271",
+        "turn_angle_degrees": -180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "1504e9a140653758",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:07.043Z",
+      "evidence_checksum": "b5961c92e2c7691d15a10c9e8f55522b5bce45b791122a4c2b98cbc37af9205b",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1865775,
+        "lon": 101.6097045,
+        "bbox": [
+          101.6092247,
+          3.1863027,
+          101.6101458,
+          3.1868724
+        ],
+        "sources": [
+          {
+            "ref": "way:1013715114",
+            "coordinates": [
+              {
+                "lat": 3.1863027,
+                "lon": 101.6101458
+              },
+              {
+                "lat": 3.1863883,
+                "lon": 101.6100084
+              },
+              {
+                "lat": 3.1865775,
+                "lon": 101.6097045
+              },
+              {
+                "lat": 3.1868724,
+                "lon": 101.6092247
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1013715114"
+      ],
+      "proposed_value": {
+        "direction": "backward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "17b3756223a71a6c",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.925Z",
+      "evidence_checksum": "49dc132841a181278c8a483776edfd55c7091e21565342c6b964c0497abef1d2",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.184482,
+        "lon": 101.6104586,
+        "bbox": [
+          101.6100597,
+          3.1844768,
+          101.6109913,
+          3.1845473
+        ],
+        "sources": [
+          {
+            "ref": "way:776370584",
+            "coordinates": [
+              {
+                "lat": 3.1845473,
+                "lon": 101.6109913
+              },
+              {
+                "lat": 3.1845285,
+                "lon": 101.6108389
+              },
+              {
+                "lat": 3.184482,
+                "lon": 101.6104586
+              },
+              {
+                "lat": 3.1844768,
+                "lon": 101.6100597
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "776370584"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "17f82fe93616e301",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.565Z",
+      "evidence_checksum": "68e92af156cd29e4df17d0cc9b1f553e01fa8380f819b522233243ecf1185bef",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.184681,
+        "lon": 101.6117222,
+        "bbox": [
+          101.6113491,
+          3.1846053,
+          101.6122265,
+          3.1848268
+        ],
+        "sources": [
+          {
+            "ref": "way:776021089",
+            "coordinates": [
+              {
+                "lat": 3.1848268,
+                "lon": 101.6122265
+              },
+              {
+                "lat": 3.1847388,
+                "lon": 101.6119247
+              },
+              {
+                "lat": 3.184681,
+                "lon": 101.6117222
+              },
+              {
+                "lat": 3.1846416,
+                "lon": 101.6115285
+              },
+              {
+                "lat": 3.1846053,
+                "lon": 101.6113491
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "776021089"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "1a2ff80ff312c04c",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.567Z",
+      "evidence_checksum": "7f42a179774bebfb9ecb85849ba4ab61c333359eb998aff201aad7d89faa88d3",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.186634,
+        "lon": 101.6107323,
+        "bbox": [
+          101.6104474,
+          3.186634,
+          101.6108696,
+          3.1867786
+        ],
+        "sources": [
+          {
+            "ref": "way:39616769",
+            "coordinates": [
+              {
+                "lat": 3.1867786,
+                "lon": 101.6104474
+              },
+              {
+                "lat": 3.1866816,
+                "lon": 101.6105948
+              },
+              {
+                "lat": 3.1866534,
+                "lon": 101.6106565
+              },
+              {
+                "lat": 3.186634,
+                "lon": 101.6107323
+              },
+              {
+                "lat": 3.186637,
+                "lon": 101.6108071
+              },
+              {
+                "lat": 3.1866354,
+                "lon": 101.6108696
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "39616769"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "1f2219addc70b1ad",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.926Z",
+      "evidence_checksum": "0354beebf3712f480e21d0ee600db664c83dff3a92cda0df215fb31c57cde843",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1872457,
+        "lon": 101.6108627,
+        "bbox": [
+          101.6107859,
+          3.184745,
+          101.6129147,
+          3.1911378
+        ],
+        "sources": [
+          {
+            "ref": "way:1351503426",
+            "coordinates": [
+              {
+                "lat": 3.1911378,
+                "lon": 101.6129147
+              },
+              {
+                "lat": 3.1906589,
+                "lon": 101.6126323
+              },
+              {
+                "lat": 3.1901819,
+                "lon": 101.6123512
+              },
+              {
+                "lat": 3.1897093,
+                "lon": 101.6120726
+              },
+              {
+                "lat": 3.1892291,
+                "lon": 101.6117895
+              },
+              {
+                "lat": 3.1887516,
+                "lon": 101.6115081
+              },
+              {
+                "lat": 3.1882848,
+                "lon": 101.6112433
+              },
+              {
+                "lat": 3.1882268,
+                "lon": 101.6112103
+              },
+              {
+                "lat": 3.1878209,
+                "lon": 101.6109889
+              },
+              {
+                "lat": 3.1877866,
+                "lon": 101.6109782
+              },
+              {
+                "lat": 3.1874401,
+                "lon": 101.6108705
+              },
+              {
+                "lat": 3.1872457,
+                "lon": 101.6108627
+              },
+              {
+                "lat": 3.1870716,
+                "lon": 101.6108557
+              },
+              {
+                "lat": 3.1866354,
+                "lon": 101.6108696
+              },
+              {
+                "lat": 3.1863,
+                "lon": 101.61089
+              },
+              {
+                "lat": 3.1859965,
+                "lon": 101.6109085
+              },
+              {
+                "lat": 3.1853497,
+                "lon": 101.6109552
+              },
+              {
+                "lat": 3.1850053,
+                "lon": 101.6109878
+              },
+              {
+                "lat": 3.1849761,
+                "lon": 101.6109887
+              },
+              {
+                "lat": 3.1849469,
+                "lon": 101.6109775
+              },
+              {
+                "lat": 3.1847676,
+                "lon": 101.6108251
+              },
+              {
+                "lat": 3.184745,
+                "lon": 101.6107859
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1351503426"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "1fd18940466eea36",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.568Z",
+      "evidence_checksum": "bce108a970b58bef79d8212048e49be120a6af4878fefc9dd0fe52e496785467",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.184929,
+        "lon": 101.6122587,
+        "bbox": [
+          101.6121977,
+          3.1849095,
+          101.6122587,
+          3.184929
+        ],
+        "sources": [
+          {
+            "ref": "way:777160375",
+            "coordinates": [
+              {
+                "lat": 3.1849095,
+                "lon": 101.6121977
+              },
+              {
+                "lat": 3.184929,
+                "lon": 101.6122587
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "777160375"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "1ff8f1cb902a754d",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.569Z",
+      "evidence_checksum": "db76c70157a7caa0590df24eeafa5043e32cf2dcbd6a525cce3c80384687ae83",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1855743,
+        "lon": 101.6135213,
+        "bbox": [
+          101.6122865,
+          3.1848463,
+          101.6152512,
+          3.1876854
+        ],
+        "sources": [
+          {
+            "ref": "way:1173001826",
+            "coordinates": [
+              {
+                "lat": 3.1876854,
+                "lon": 101.6152512
+              },
+              {
+                "lat": 3.1875701,
+                "lon": 101.6151844
+              },
+              {
+                "lat": 3.1873322,
+                "lon": 101.6150149
+              },
+              {
+                "lat": 3.1861889,
+                "lon": 101.6142001
+              },
+              {
+                "lat": 3.1856692,
+                "lon": 101.6136318
+              },
+              {
+                "lat": 3.1855743,
+                "lon": 101.6135213
+              },
+              {
+                "lat": 3.185436,
+                "lon": 101.6133234
+              },
+              {
+                "lat": 3.1854169,
+                "lon": 101.6132966
+              },
+              {
+                "lat": 3.1851687,
+                "lon": 101.6129469
+              },
+              {
+                "lat": 3.1849545,
+                "lon": 101.6125593
+              },
+              {
+                "lat": 3.1848463,
+                "lon": 101.6122865
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1173001826"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "23337c3257b1482d",
+      "rule": "ambiguous_connector",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:35:37.712Z",
+      "evidence_checksum": "11149dd255fc6ff7aac50fd61841b1e10ebf0d5515d5644991b3d153d0ee54eb",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1845696,
+        "lon": 101.6122878,
+        "bbox": [
+          101.6122878,
+          3.1845696,
+          101.6122878,
+          3.1845696
+        ],
+        "sources": [
+          {
+            "ref": "node:1928630073",
+            "coordinates": [
+              {
+                "lat": 3.1845696,
+                "lon": 101.6122878
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1928630073"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "competing_movements"
+        ],
+        "movement": "through",
+        "to_lane_id": "027a3ef89e3e7b88",
+        "turn_angle_degrees": 0.766
+      }
+    },
+    {
+      "finding_id": "2901066def1ef543",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.570Z",
+      "evidence_checksum": "ba2380a72960487b8a07b7c9355e84614418a9a624daadff2ff5ba0cc4efb56c",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1873225,
+        "lon": 101.6110027,
+        "bbox": [
+          101.610986,
+          3.1849869,
+          101.6112137,
+          3.1879714
+        ],
+        "sources": [
+          {
+            "ref": "way:334662874",
+            "coordinates": [
+              {
+                "lat": 3.1879714,
+                "lon": 101.6112137
+              },
+              {
+                "lat": 3.1877847,
+                "lon": 101.6111243
+              },
+              {
+                "lat": 3.1875362,
+                "lon": 101.6110428
+              },
+              {
+                "lat": 3.1873225,
+                "lon": 101.6110027
+              },
+              {
+                "lat": 3.1870951,
+                "lon": 101.610986
+              },
+              {
+                "lat": 3.1866496,
+                "lon": 101.611
+              },
+              {
+                "lat": 3.1849869,
+                "lon": 101.6111344
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "334662874"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "2a3be145b0c07702",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:09.210Z",
+      "evidence_checksum": "8b98fa73ac8d083dfd1eb0ce64d3e9a44317078409cd1c5b0cc7571e2a198571",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.184357,
+        "lon": 101.610623,
+        "bbox": [
+          101.6093498,
+          3.1839982,
+          101.6122484,
+          3.1846034
+        ],
+        "sources": [
+          {
+            "ref": "way:107911720",
+            "coordinates": [
+              {
+                "lat": 3.1839982,
+                "lon": 101.6122484
+              },
+              {
+                "lat": 3.184432,
+                "lon": 101.6122162
+              },
+              {
+                "lat": 3.1846034,
+                "lon": 101.611948
+              },
+              {
+                "lat": 3.1845177,
+                "lon": 101.6116852
+              },
+              {
+                "lat": 3.1844534,
+                "lon": 101.6114062
+              },
+              {
+                "lat": 3.184357,
+                "lon": 101.610623
+              },
+              {
+                "lat": 3.1843221,
+                "lon": 101.6100671
+              },
+              {
+                "lat": 3.1843222,
+                "lon": 101.6098666
+              },
+              {
+                "lat": 3.1843249,
+                "lon": 101.6096255
+              },
+              {
+                "lat": 3.184312,
+                "lon": 101.6093498
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "107911720"
+      ],
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "2b5f54f60fb558d2",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.927Z",
+      "evidence_checksum": "71954054488618ace3b2bbc19ec70058c1a27a64b3236ef3be6ff2a09ac96054",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1845949,
+        "lon": 101.6104808,
+        "bbox": [
+          101.6093096,
+          3.1845805,
+          101.6108383,
+          3.1846327
+        ],
+        "sources": [
+          {
+            "ref": "way:776022253",
+            "coordinates": [
+              {
+                "lat": 3.1846069,
+                "lon": 101.6093096
+              },
+              {
+                "lat": 3.1845805,
+                "lon": 101.6098525
+              },
+              {
+                "lat": 3.1845949,
+                "lon": 101.6104808
+              },
+              {
+                "lat": 3.1846327,
+                "lon": 101.6108383
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "776022253"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "2cd11f08ed1a3600",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:11.058Z",
+      "evidence_checksum": "f9989ad2d9be4f3df6f2717ebaa814fdcb354583ad7d038588bf5b105de3415f",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.186634,
+        "lon": 101.6107323,
+        "bbox": [
+          101.6104474,
+          3.186634,
+          101.6108696,
+          3.1867786
+        ],
+        "sources": [
+          {
+            "ref": "way:39616769",
+            "coordinates": [
+              {
+                "lat": 3.1867786,
+                "lon": 101.6104474
+              },
+              {
+                "lat": 3.1866816,
+                "lon": 101.6105948
+              },
+              {
+                "lat": 3.1866534,
+                "lon": 101.6106565
+              },
+              {
+                "lat": 3.186634,
+                "lon": 101.6107323
+              },
+              {
+                "lat": 3.186637,
+                "lon": 101.6108071
+              },
+              {
+                "lat": 3.1866354,
+                "lon": 101.6108696
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "39616769"
+      ],
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "2cef387b8318aa85",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:35:40.225Z",
+      "evidence_checksum": "ed61704007866e3fddfacb941a2bb55dbb73203cd5876574437419d20141fc9c",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1853497,
+        "lon": 101.6109552,
+        "bbox": [
+          101.6109552,
+          3.1853497,
+          101.6109552,
+          3.1853497
+        ],
+        "sources": [
+          {
+            "ref": "node:1226982526",
+            "coordinates": [
+              {
+                "lat": 3.1853497,
+                "lon": 101.6109552
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1226982526"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "94ed16a09f9010dc",
+        "turn_angle_degrees": -180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "2d3551c255b80351",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:12.839Z",
+      "evidence_checksum": "2e08b097442f47697e01771a176974dbc82f6ff64c106cbe9b3436ee534cb08f",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1856173,
+        "lon": 101.6102262,
+        "bbox": [
+          101.6089685,
+          3.1853412,
+          101.6109552,
+          3.1863754
+        ],
+        "sources": [
+          {
+            "ref": "way:39618724",
+            "coordinates": [
+              {
+                "lat": 3.1853497,
+                "lon": 101.6109552
+              },
+              {
+                "lat": 3.1853412,
+                "lon": 101.6107344
+              },
+              {
+                "lat": 3.1853419,
+                "lon": 101.6106941
+              },
+              {
+                "lat": 3.1853527,
+                "lon": 101.6106652
+              },
+              {
+                "lat": 3.1856173,
+                "lon": 101.6102262
+              },
+              {
+                "lat": 3.1859169,
+                "lon": 101.6097291
+              },
+              {
+                "lat": 3.1859821,
+                "lon": 101.6096209
+              },
+              {
+                "lat": 3.1863754,
+                "lon": 101.6089685
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "39618724"
+      ],
+      "proposed_value": {
+        "direction": "backward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "2df4aba0dac4e8e4",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.927Z",
+      "evidence_checksum": "c8e6276b620c4ae060899296121f3d50722aaa48fcb2cf2fac30cda19c9453ae",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.184728,
+        "lon": 101.610722,
+        "bbox": [
+          101.6106674,
+          3.184728,
+          101.6107859,
+          3.184745
+        ],
+        "sources": [
+          {
+            "ref": "way:1016771782",
+            "coordinates": [
+              {
+                "lat": 3.184745,
+                "lon": 101.6107859
+              },
+              {
+                "lat": 3.184728,
+                "lon": 101.610722
+              },
+              {
+                "lat": 3.1847287,
+                "lon": 101.6106674
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1016771782"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "313b6bf0bd339212",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:35:49.912Z",
+      "evidence_checksum": "87f9e6e5a09bd124c4ba9add0d6d2ab12d6d528ec9a7a09464f65649f59d6169",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1865775,
+        "lon": 101.6097045,
+        "bbox": [
+          101.6097045,
+          3.1865775,
+          101.6097045,
+          3.1865775
+        ],
+        "sources": [
+          {
+            "ref": "node:1239242644",
+            "coordinates": [
+              {
+                "lat": 3.1865775,
+                "lon": 101.6097045
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1239242644"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "90d8ee15ddfe184a",
+        "turn_angle_degrees": 180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "31f62970490e0800",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.928Z",
+      "evidence_checksum": "46c5f8b2d44f77b12b893598abbf4023301091ac20ae7b591c2c92040f34a092",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1846682373,
+        "lon": 101.61116317351,
+        "bbox": [
+          101.6111344,
+          3.1846682373,
+          101.61116317351,
+          3.1849869
+        ],
+        "sources": [
+          {
+            "ref": "way:776021084",
+            "coordinates": [
+              {
+                "lat": 3.1849869,
+                "lon": 101.6111344
+              },
+              {
+                "lat": 3.1846682373,
+                "lon": 101.61116317351
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "776021084"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "31f7cfe441cbb146",
+      "rule": "turn_permission_geometry_conflict",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:35:13.361Z",
+      "evidence_checksum": "9ac5028521216857f2124db040b3b6743cffb4a1ddab8329d9915ad15a968294",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1848268,
+        "lon": 101.6122265,
+        "bbox": [
+          101.6122265,
+          3.1848268,
+          101.6122265,
+          3.1848268
+        ],
+        "sources": [
+          {
+            "ref": "node:1927184814",
+            "coordinates": [
+              {
+                "lat": 3.1848268,
+                "lon": 101.6122265
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1927184814"
+      ],
+      "proposed_value": {
+        "rejected_movements": [
+          "left",
+          "through"
+        ],
+        "restored_angle_degrees": 5.82,
+        "restored_movement": "through",
+        "turn_permissions": [
+          "right"
+        ]
+      }
+    },
+    {
+      "finding_id": "34bd0e3c8ace99e5",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.571Z",
+      "evidence_checksum": "4289b328ef7372419922aa2302ef831aa358d2bf979575d972f00c80e689bece",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1848268,
+        "lon": 101.6122265,
+        "bbox": [
+          101.6122265,
+          3.1845696,
+          101.6122878,
+          3.1848268
+        ],
+        "sources": [
+          {
+            "ref": "way:756118314",
+            "coordinates": [
+              {
+                "lat": 3.1845696,
+                "lon": 101.6122878
+              },
+              {
+                "lat": 3.1848268,
+                "lon": 101.6122265
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "756118314"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "3517220b64dc0ee4",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:35:52.109Z",
+      "evidence_checksum": "eaf45ac39a1b60aef4a6f777d163ffffb78cdf9df60a33cb6caee0ddb9e9f69e",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1849869,
+        "lon": 101.6111344,
+        "bbox": [
+          101.6111344,
+          3.1849869,
+          101.6111344,
+          3.1849869
+        ],
+        "sources": [
+          {
+            "ref": "node:1928630157",
+            "coordinates": [
+              {
+                "lat": 3.1849869,
+                "lon": 101.6111344
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1928630157"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "unproven_sharp_movement"
+        ],
+        "movement": "right",
+        "to_lane_id": "a1e15b3bd8cc0bb4",
+        "turn_angle_degrees": -138.457
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "37bcaa655c67cc4f",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.572Z",
+      "evidence_checksum": "2d58a20e519c1b9c902b31b74f36baac537a3ae79f770d425bb1fedc3cc9d874",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1847112,
+        "lon": 101.6123725,
+        "bbox": [
+          101.6123407,
+          3.184595,
+          101.6125593,
+          3.1849545
+        ],
+        "sources": [
+          {
+            "ref": "way:182502423",
+            "coordinates": [
+              {
+                "lat": 3.1849545,
+                "lon": 101.6125593
+              },
+              {
+                "lat": 3.1848712,
+                "lon": 101.6124804
+              },
+              {
+                "lat": 3.1847857,
+                "lon": 101.6124178
+              },
+              {
+                "lat": 3.1847112,
+                "lon": 101.6123725
+              },
+              {
+                "lat": 3.1846355,
+                "lon": 101.612345
+              },
+              {
+                "lat": 3.184595,
+                "lon": 101.6123407
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "182502423"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "3896f761a14f7965",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.573Z",
+      "evidence_checksum": "47fbc269079bff3837f402a595466c4d59b74d31e3d5a51630d524ca48f7bd80",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1846284,
+        "lon": 101.6112004,
+        "bbox": [
+          101.61116317351,
+          3.1846053,
+          101.6113491,
+          3.1846682373
+        ],
+        "sources": [
+          {
+            "ref": "way:1530245743",
+            "coordinates": [
+              {
+                "lat": 3.1846053,
+                "lon": 101.6113491
+              },
+              {
+                "lat": 3.1846164,
+                "lon": 101.6112508
+              },
+              {
+                "lat": 3.1846284,
+                "lon": 101.6112004
+              },
+              {
+                "lat": 3.1846682373,
+                "lon": 101.61116317351
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1530245743"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "3919f3f410641f01",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.574Z",
+      "evidence_checksum": "70906982c18c98fb7c0490ac1a8b497f38b6ed892ca7d18df9bdd0c52fb784b2",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.184482,
+        "lon": 101.6104586,
+        "bbox": [
+          101.6100597,
+          3.1844768,
+          101.6109913,
+          3.1845473
+        ],
+        "sources": [
+          {
+            "ref": "way:776370584",
+            "coordinates": [
+              {
+                "lat": 3.1845473,
+                "lon": 101.6109913
+              },
+              {
+                "lat": 3.1845285,
+                "lon": 101.6108389
+              },
+              {
+                "lat": 3.184482,
+                "lon": 101.6104586
+              },
+              {
+                "lat": 3.1844768,
+                "lon": 101.6100597
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "776370584"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "3b2c70db9c3772ab",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.929Z",
+      "evidence_checksum": "c4c25ee3f17a3d5b73c62c14ceb3d4286f9830db25321cc84aa38c4280cbe2df",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.184681,
+        "lon": 101.6117222,
+        "bbox": [
+          101.6113491,
+          3.1846053,
+          101.6122265,
+          3.1848268
+        ],
+        "sources": [
+          {
+            "ref": "way:776021089",
+            "coordinates": [
+              {
+                "lat": 3.1848268,
+                "lon": 101.6122265
+              },
+              {
+                "lat": 3.1847388,
+                "lon": 101.6119247
+              },
+              {
+                "lat": 3.184681,
+                "lon": 101.6117222
+              },
+              {
+                "lat": 3.1846416,
+                "lon": 101.6115285
+              },
+              {
+                "lat": 3.1846053,
+                "lon": 101.6113491
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "776021089"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "3b9b5bd3009f9530",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.929Z",
+      "evidence_checksum": "a505ecdfae73295523429c556d86d64fd4816c7651cdd4dabbc55f04189414f0",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1846284,
+        "lon": 101.6112004,
+        "bbox": [
+          101.61116317351,
+          3.1846053,
+          101.6113491,
+          3.1846682373
+        ],
+        "sources": [
+          {
+            "ref": "way:1530245743",
+            "coordinates": [
+              {
+                "lat": 3.1846053,
+                "lon": 101.6113491
+              },
+              {
+                "lat": 3.1846164,
+                "lon": 101.6112508
+              },
+              {
+                "lat": 3.1846284,
+                "lon": 101.6112004
+              },
+              {
+                "lat": 3.1846682373,
+                "lon": 101.61116317351
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1530245743"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "3c426b62d6442aa3",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:18.241Z",
+      "evidence_checksum": "fccfd40d47d4862b0d02b3bc62aef420b4a3992b32d3c4be89180209ecb92e73",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1866496,
+        "lon": 101.611,
+        "bbox": [
+          101.6108696,
+          3.1866354,
+          101.611,
+          3.1866496
+        ],
+        "sources": [
+          {
+            "ref": "way:1013712948",
+            "coordinates": [
+              {
+                "lat": 3.1866354,
+                "lon": 101.6108696
+              },
+              {
+                "lat": 3.1866496,
+                "lon": 101.611
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1013712948"
+      ],
+      "proposed_value": {
+        "direction": "backward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "44d5e7ab060e8c5e",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.575Z",
+      "evidence_checksum": "97807995582a6a451e15c822dfbb51d437505280df8e9283198c9398cfd0ba69",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.18457,
+        "lon": 101.6111745,
+        "bbox": [
+          101.6109913,
+          3.1845473,
+          101.6113491,
+          3.1846053
+        ],
+        "sources": [
+          {
+            "ref": "way:776021087",
+            "coordinates": [
+              {
+                "lat": 3.1846053,
+                "lon": 101.6113491
+              },
+              {
+                "lat": 3.18457,
+                "lon": 101.6111745
+              },
+              {
+                "lat": 3.1845473,
+                "lon": 101.6109913
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "776021087"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "45295fd0459ec60f",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.930Z",
+      "evidence_checksum": "01c31ebdc4bc392de5cb6fc8129080a27268d5315376f57db8887cabc6f8f21d",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1848268,
+        "lon": 101.6122265,
+        "bbox": [
+          101.6122265,
+          3.1845696,
+          101.6122878,
+          3.1848268
+        ],
+        "sources": [
+          {
+            "ref": "way:756118314",
+            "coordinates": [
+              {
+                "lat": 3.1845696,
+                "lon": 101.6122878
+              },
+              {
+                "lat": 3.1848268,
+                "lon": 101.6122265
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "756118314"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "46a90b46252b54c4",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:20.514Z",
+      "evidence_checksum": "fec27a6053002bd480ca64298c0282b119e9cef06d2d3638a1f20c35cbbb7c8e",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1854769,
+        "lon": 101.6136285,
+        "bbox": [
+          101.6135213,
+          3.1854769,
+          101.6136285,
+          3.1855743
+        ],
+        "sources": [
+          {
+            "ref": "way:760225055",
+            "coordinates": [
+              {
+                "lat": 3.1855743,
+                "lon": 101.6135213
+              },
+              {
+                "lat": 3.1854769,
+                "lon": 101.6136285
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "760225055"
+      ],
+      "proposed_value": {
+        "direction": "backward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "46b6131f47af7df9",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.576Z",
+      "evidence_checksum": "c07b9fcb2d35592ae8cd0bee5223507a99875d2dfda8c48db40e2b6a779d5a07",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1865775,
+        "lon": 101.6097045,
+        "bbox": [
+          101.6092247,
+          3.1863027,
+          101.6101458,
+          3.1868724
+        ],
+        "sources": [
+          {
+            "ref": "way:1013715114",
+            "coordinates": [
+              {
+                "lat": 3.1863027,
+                "lon": 101.6101458
+              },
+              {
+                "lat": 3.1863883,
+                "lon": 101.6100084
+              },
+              {
+                "lat": 3.1865775,
+                "lon": 101.6097045
+              },
+              {
+                "lat": 3.1868724,
+                "lon": 101.6092247
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1013715114"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "4970bae5d71761e9",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:35:58.446Z",
+      "evidence_checksum": "59aee3483eede057608c6b85e003055343548a292347b8af3bcf90ac6b486180",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1846682373,
+        "lon": 101.61116317351,
+        "bbox": [
+          101.61116317351,
+          3.1846682373,
+          101.61116317351,
+          3.1846682373
+        ],
+        "sources": [
+          {
+            "ref": "node:474929865",
+            "coordinates": [
+              {
+                "lat": 3.1846682373,
+                "lon": 101.61116317351
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "474929865"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "competing_movements"
+        ],
+        "movement": "right",
+        "to_lane_id": "9d1142bdbe10a335",
+        "turn_angle_degrees": -122.387
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "498e0db346590c68",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:36:00.253Z",
+      "evidence_checksum": "88213a02e16720a7a5f2841c8e77a0b1bacf0dbbd14930d2ba277242a48f27fe",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1849869,
+        "lon": 101.6111344,
+        "bbox": [
+          101.6111344,
+          3.1849869,
+          101.6111344,
+          3.1849869
+        ],
+        "sources": [
+          {
+            "ref": "node:1928630157",
+            "coordinates": [
+              {
+                "lat": 3.1849869,
+                "lon": 101.6111344
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1928630157"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "863caef770461b65",
+        "turn_angle_degrees": 180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "4b08dbaec9c73d70",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.931Z",
+      "evidence_checksum": "8b573cc9dd8ceef9a0aca481a95253cfbba1cee420ea2a21e2496daf3730d5aa",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1872754,
+        "lon": 101.6101116,
+        "bbox": [
+          101.6097045,
+          3.1865775,
+          101.6101116,
+          3.1872754
+        ],
+        "sources": [
+          {
+            "ref": "way:107906776",
+            "coordinates": [
+              {
+                "lat": 3.1865775,
+                "lon": 101.6097045
+              },
+              {
+                "lat": 3.1872754,
+                "lon": 101.6101116
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "107906776"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "4ba8238ca055b0b3",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.577Z",
+      "evidence_checksum": "9eddba91cf9f177aa80235897cbb9673060843d29dc52b17a1b5d0c872abc586",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1847815,
+        "lon": 101.6110615,
+        "bbox": [
+          101.6108383,
+          3.1846327,
+          101.6111344,
+          3.1849869
+        ],
+        "sources": [
+          {
+            "ref": "way:182502392",
+            "coordinates": [
+              {
+                "lat": 3.1846327,
+                "lon": 101.6108383
+              },
+              {
+                "lat": 3.184677,
+                "lon": 101.6109315
+              },
+              {
+                "lat": 3.1847212,
+                "lon": 101.6110093
+              },
+              {
+                "lat": 3.1847815,
+                "lon": 101.6110615
+              },
+              {
+                "lat": 3.1848419,
+                "lon": 101.6110968
+              },
+              {
+                "lat": 3.1849869,
+                "lon": 101.6111344
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "182502392"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "4bc80586321e5f18",
+      "rule": "movement_served_by_link_bypass",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:38:23.666Z",
+      "evidence_checksum": "7d40651e66b225e93045dc21117818abacf5a4876e7450a70d25065f33d977a9",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1846682373,
+        "lon": 101.61116317351,
+        "bbox": [
+          101.61116317351,
+          3.1846682373,
+          101.61116317351,
+          3.1846682373
+        ],
+        "sources": [
+          {
+            "ref": "node:474929865",
+            "coordinates": [
+              {
+                "lat": 3.1846682373,
+                "lon": 101.61116317351
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "474929865"
+      ],
+      "proposed_value": {
+        "departs_node_id": "1928630015",
+        "link_way_id": "182502392",
+        "metres_before_junction": 36.3,
+        "movement": "left",
+        "turn_angle_degrees": 88.975
+      }
+    },
+    {
+      "finding_id": "4c025d7b6caa3d43",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.578Z",
+      "evidence_checksum": "4127a97b2c8032d036a6f95e43ec0883c4db9be99796f27231683617c43de422",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1846682373,
+        "lon": 101.61116317351,
+        "bbox": [
+          101.6111344,
+          3.1846682373,
+          101.61116317351,
+          3.1849869
+        ],
+        "sources": [
+          {
+            "ref": "way:776021084",
+            "coordinates": [
+              {
+                "lat": 3.1849869,
+                "lon": 101.6111344
+              },
+              {
+                "lat": 3.1846682373,
+                "lon": 101.61116317351
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "776021084"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "4e0f86a163b9dcea",
+      "rule": "turn_permission_geometry_conflict",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:35:18.296Z",
+      "evidence_checksum": "a9389cd901e19a962dc7115edca93ee0170bd97a17e60adf16b6838cadcd84ae",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1845473,
+        "lon": 101.6109913,
+        "bbox": [
+          101.6109913,
+          3.1845473,
+          101.6109913,
+          3.1845473
+        ],
+        "sources": [
+          {
+            "ref": "node:13946726034",
+            "coordinates": [
+              {
+                "lat": 3.1845473,
+                "lon": 101.6109913
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "13946726034"
+      ],
+      "proposed_value": {
+        "rejected_movements": [
+          "through"
+        ],
+        "restored_angle_degrees": -19.36,
+        "restored_movement": "through",
+        "turn_permissions": [
+          "right"
+        ]
+      }
+    },
+    {
+      "finding_id": "55295a0417a66ed5",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:22.271Z",
+      "evidence_checksum": "414dd4077bcdacaf1ee6fc3ae0f0d767e5c870f53f761d7373e06dc684197b74",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1853233,
+        "lon": 101.6138118,
+        "bbox": [
+          101.6136285,
+          3.1848745,
+          101.6143472,
+          3.1854769
+        ],
+        "sources": [
+          {
+            "ref": "way:1213764873",
+            "coordinates": [
+              {
+                "lat": 3.1854769,
+                "lon": 101.6136285
+              },
+              {
+                "lat": 3.1853233,
+                "lon": 101.6138118
+              },
+              {
+                "lat": 3.1848745,
+                "lon": 101.6143472
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1213764873"
+      ],
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "5722a801312d8c65",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:24.392Z",
+      "evidence_checksum": "8fbe6a4162e5bc8a4e9039fc354af052b7e03d96a15b15524202d35e29ab8e8f",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1852758,
+        "lon": 101.6133823,
+        "bbox": [
+          101.6133823,
+          3.1852758,
+          101.6136285,
+          3.1854769
+        ],
+        "sources": [
+          {
+            "ref": "way:1213764874",
+            "coordinates": [
+              {
+                "lat": 3.1854769,
+                "lon": 101.6136285
+              },
+              {
+                "lat": 3.1852758,
+                "lon": 101.6133823
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1213764874"
+      ],
+      "proposed_value": {
+        "direction": "backward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "57275e90cdebcb0e",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.579Z",
+      "evidence_checksum": "cfe926ee6dc2fc9d589756c16e9531b2c2d2c6d09e4bd40c7bd2a12f9b9a2502",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1866496,
+        "lon": 101.611,
+        "bbox": [
+          101.6108696,
+          3.1866354,
+          101.611,
+          3.1866496
+        ],
+        "sources": [
+          {
+            "ref": "way:1013712948",
+            "coordinates": [
+              {
+                "lat": 3.1866354,
+                "lon": 101.6108696
+              },
+              {
+                "lat": 3.1866496,
+                "lon": 101.611
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1013712948"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "58558c1fda74b7b9",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.931Z",
+      "evidence_checksum": "d0e046fd971a7947a4383ee9bf30a31204470066743be04d13487f86ddc01b55",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.184595,
+        "lon": 101.6123407,
+        "bbox": [
+          101.6122865,
+          3.184595,
+          101.6123407,
+          3.1848463
+        ],
+        "sources": [
+          {
+            "ref": "way:777160374",
+            "coordinates": [
+              {
+                "lat": 3.1848463,
+                "lon": 101.6122865
+              },
+              {
+                "lat": 3.184595,
+                "lon": 101.6123407
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "777160374"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "590bded8aa167346",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:31.060Z",
+      "evidence_checksum": "2d46724788fb43cc41fdb27d27e0b2aff4fdc10db67bf7ff8600f6893ead7b23",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1872457,
+        "lon": 101.6108627,
+        "bbox": [
+          101.6107859,
+          3.184745,
+          101.6129147,
+          3.1911378
+        ],
+        "sources": [
+          {
+            "ref": "way:1351503426",
+            "coordinates": [
+              {
+                "lat": 3.1911378,
+                "lon": 101.6129147
+              },
+              {
+                "lat": 3.1906589,
+                "lon": 101.6126323
+              },
+              {
+                "lat": 3.1901819,
+                "lon": 101.6123512
+              },
+              {
+                "lat": 3.1897093,
+                "lon": 101.6120726
+              },
+              {
+                "lat": 3.1892291,
+                "lon": 101.6117895
+              },
+              {
+                "lat": 3.1887516,
+                "lon": 101.6115081
+              },
+              {
+                "lat": 3.1882848,
+                "lon": 101.6112433
+              },
+              {
+                "lat": 3.1882268,
+                "lon": 101.6112103
+              },
+              {
+                "lat": 3.1878209,
+                "lon": 101.6109889
+              },
+              {
+                "lat": 3.1877866,
+                "lon": 101.6109782
+              },
+              {
+                "lat": 3.1874401,
+                "lon": 101.6108705
+              },
+              {
+                "lat": 3.1872457,
+                "lon": 101.6108627
+              },
+              {
+                "lat": 3.1870716,
+                "lon": 101.6108557
+              },
+              {
+                "lat": 3.1866354,
+                "lon": 101.6108696
+              },
+              {
+                "lat": 3.1863,
+                "lon": 101.61089
+              },
+              {
+                "lat": 3.1859965,
+                "lon": 101.6109085
+              },
+              {
+                "lat": 3.1853497,
+                "lon": 101.6109552
+              },
+              {
+                "lat": 3.1850053,
+                "lon": 101.6109878
+              },
+              {
+                "lat": 3.1849761,
+                "lon": 101.6109887
+              },
+              {
+                "lat": 3.1849469,
+                "lon": 101.6109775
+              },
+              {
+                "lat": 3.1847676,
+                "lon": 101.6108251
+              },
+              {
+                "lat": 3.184745,
+                "lon": 101.6107859
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1351503426"
+      ],
+      "proposed_value": {
+        "direction": "backward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "5b12584fec701a83",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:34.808Z",
+      "evidence_checksum": "b9dc1af5b77607167d120c93626ae1e6a1f77facb4783f43e5c176af99493982",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.184728,
+        "lon": 101.610722,
+        "bbox": [
+          101.6106674,
+          3.184728,
+          101.6107859,
+          3.184745
+        ],
+        "sources": [
+          {
+            "ref": "way:1016771782",
+            "coordinates": [
+              {
+                "lat": 3.184745,
+                "lon": 101.6107859
+              },
+              {
+                "lat": 3.184728,
+                "lon": 101.610722
+              },
+              {
+                "lat": 3.1847287,
+                "lon": 101.6106674
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1016771782"
+      ],
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "5b5431519eb915a9",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.932Z",
+      "evidence_checksum": "92962078926b9e04b1d68bb7942ed1c1450ba497709f908069112e4db1e9a80c",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1854769,
+        "lon": 101.6136285,
+        "bbox": [
+          101.6135213,
+          3.1854769,
+          101.6136285,
+          3.1855743
+        ],
+        "sources": [
+          {
+            "ref": "way:760225055",
+            "coordinates": [
+              {
+                "lat": 3.1855743,
+                "lon": 101.6135213
+              },
+              {
+                "lat": 3.1854769,
+                "lon": 101.6136285
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "760225055"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "5bb83f46191bbc3c",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:36:03.512Z",
+      "evidence_checksum": "be17fc6f49fdda02c8b7ca388a02463221111c6e1e459128c9fbc52003503797",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1855743,
+        "lon": 101.6135213,
+        "bbox": [
+          101.6135213,
+          3.1855743,
+          101.6135213,
+          3.1855743
+        ],
+        "sources": [
+          {
+            "ref": "node:1927184954",
+            "coordinates": [
+              {
+                "lat": 3.1855743,
+                "lon": 101.6135213
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1927184954"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "1147aced2ade934b",
+        "turn_angle_degrees": -180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "5be3e454f16ac500",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.580Z",
+      "evidence_checksum": "147d2268a22a5eb5cdefb1109ebc5190a8ba224251d55f2b65ac68faa4ca9116",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.184595,
+        "lon": 101.6123407,
+        "bbox": [
+          101.6122865,
+          3.184595,
+          101.6123407,
+          3.1848463
+        ],
+        "sources": [
+          {
+            "ref": "way:777160374",
+            "coordinates": [
+              {
+                "lat": 3.1848463,
+                "lon": 101.6122865
+              },
+              {
+                "lat": 3.184595,
+                "lon": 101.6123407
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "777160374"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "5d402d8f6d0996cf",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:37.081Z",
+      "evidence_checksum": "b4b0ea18c8a3e5e6f1e6748485599a17382532a4b01cd89d910d919ca8b8628b",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1854769,
+        "lon": 101.6136285,
+        "bbox": [
+          101.6135213,
+          3.1854769,
+          101.6136285,
+          3.1855743
+        ],
+        "sources": [
+          {
+            "ref": "way:760225055",
+            "coordinates": [
+              {
+                "lat": 3.1855743,
+                "lon": 101.6135213
+              },
+              {
+                "lat": 3.1854769,
+                "lon": 101.6136285
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "760225055"
+      ],
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "5d58a1f20b140bdc",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.581Z",
+      "evidence_checksum": "6338275d2d70614ab08f590900345be757155b50b304922f7da4933f48356ebc",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1872754,
+        "lon": 101.6101116,
+        "bbox": [
+          101.6097045,
+          3.1865775,
+          101.6101116,
+          3.1872754
+        ],
+        "sources": [
+          {
+            "ref": "way:107906776",
+            "coordinates": [
+              {
+                "lat": 3.1865775,
+                "lon": 101.6097045
+              },
+              {
+                "lat": 3.1872754,
+                "lon": 101.6101116
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "107906776"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "5e4aa8f3cfc81e2c",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.581Z",
+      "evidence_checksum": "1f4dcc35220ad3c657a8361e5f532acef5f15fe7e22ef1ee3e50c492e153198d",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1846682373,
+        "lon": 101.61116317351,
+        "bbox": [
+          101.6108383,
+          3.1846327,
+          101.61116317351,
+          3.1846682373
+        ],
+        "sources": [
+          {
+            "ref": "way:776022254",
+            "coordinates": [
+              {
+                "lat": 3.1846327,
+                "lon": 101.6108383
+              },
+              {
+                "lat": 3.1846682373,
+                "lon": 101.61116317351
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "776022254"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "5f88e8c3e3808e5a",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.583Z",
+      "evidence_checksum": "1873f63bbf3841959988075a689193c44526f8f1fbb6ac9f8985246ec14eeb24",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1856584,
+        "lon": 101.6134771,
+        "bbox": [
+          101.6122587,
+          3.184929,
+          101.6148989,
+          3.1873205
+        ],
+        "sources": [
+          {
+            "ref": "way:935525164",
+            "coordinates": [
+              {
+                "lat": 3.184929,
+                "lon": 101.6122587
+              },
+              {
+                "lat": 3.1852544,
+                "lon": 101.6129151
+              },
+              {
+                "lat": 3.1855118,
+                "lon": 101.6132732
+              },
+              {
+                "lat": 3.1856584,
+                "lon": 101.6134771
+              },
+              {
+                "lat": 3.1862496,
+                "lon": 101.6141307
+              },
+              {
+                "lat": 3.1873205,
+                "lon": 101.6148989
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "935525164"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "65634c13e0e0a95f",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:36:05.774Z",
+      "evidence_checksum": "4bfd086fa53d495f80054704570ec1097b8986a2ed5ef2f9da4c8c54db539724",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1854769,
+        "lon": 101.6136285,
+        "bbox": [
+          101.6136285,
+          3.1854769,
+          101.6136285,
+          3.1854769
+        ],
+        "sources": [
+          {
+            "ref": "node:1239287164",
+            "coordinates": [
+              {
+                "lat": 3.1854769,
+                "lon": 101.6136285
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1239287164"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "9921e23a4d86a865",
+        "turn_angle_degrees": 180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "66653e8a0057ecd3",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.583Z",
+      "evidence_checksum": "8906424e470f43f49bc7ef091b5dc59ebc3fe568e884ed5e7994132101a4dec5",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1867786,
+        "lon": 101.6104474,
+        "bbox": [
+          101.6104474,
+          3.1867786,
+          101.6105299,
+          3.1869221
+        ],
+        "sources": [
+          {
+            "ref": "way:1016780741",
+            "coordinates": [
+              {
+                "lat": 3.1869221,
+                "lon": 101.6105299
+              },
+              {
+                "lat": 3.1867786,
+                "lon": 101.6104474
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1016780741"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "6864df6b797864ea",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.584Z",
+      "evidence_checksum": "1855f47d2345fd823bf518b1d6ebbd239b2741f6663cb7d7cc811e7600522954",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1856173,
+        "lon": 101.6102262,
+        "bbox": [
+          101.6089685,
+          3.1853412,
+          101.6109552,
+          3.1863754
+        ],
+        "sources": [
+          {
+            "ref": "way:39618724",
+            "coordinates": [
+              {
+                "lat": 3.1853497,
+                "lon": 101.6109552
+              },
+              {
+                "lat": 3.1853412,
+                "lon": 101.6107344
+              },
+              {
+                "lat": 3.1853419,
+                "lon": 101.6106941
+              },
+              {
+                "lat": 3.1853527,
+                "lon": 101.6106652
+              },
+              {
+                "lat": 3.1856173,
+                "lon": 101.6102262
+              },
+              {
+                "lat": 3.1859169,
+                "lon": 101.6097291
+              },
+              {
+                "lat": 3.1859821,
+                "lon": 101.6096209
+              },
+              {
+                "lat": 3.1863754,
+                "lon": 101.6089685
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "39618724"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "6991443a460828ac",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:39.254Z",
+      "evidence_checksum": "d5a663f4ab76301c617118d01073b0ec674d36bd2f4297d7ec6a27c09e7bac20",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1853233,
+        "lon": 101.6138118,
+        "bbox": [
+          101.6136285,
+          3.1848745,
+          101.6143472,
+          3.1854769
+        ],
+        "sources": [
+          {
+            "ref": "way:1213764873",
+            "coordinates": [
+              {
+                "lat": 3.1854769,
+                "lon": 101.6136285
+              },
+              {
+                "lat": 3.1853233,
+                "lon": 101.6138118
+              },
+              {
+                "lat": 3.1848745,
+                "lon": 101.6143472
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1213764873"
+      ],
+      "proposed_value": {
+        "direction": "backward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "69e86cc04654b81c",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.586Z",
+      "evidence_checksum": "2ece2432b5aa917fba4da56df21f944f1f61dfc3b09b0af8e59470d4c60d3ed8",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1853581,
+        "lon": 101.609582,
+        "bbox": [
+          101.6086997,
+          3.1847287,
+          101.6106674,
+          3.1859011
+        ],
+        "sources": [
+          {
+            "ref": "way:106667716",
+            "coordinates": [
+              {
+                "lat": 3.1847287,
+                "lon": 101.6106674
+              },
+              {
+                "lat": 3.1847503,
+                "lon": 101.6106167
+              },
+              {
+                "lat": 3.1850978,
+                "lon": 101.6100414
+              },
+              {
+                "lat": 3.1851402,
+                "lon": 101.6099665
+              },
+              {
+                "lat": 3.1853581,
+                "lon": 101.609582
+              },
+              {
+                "lat": 3.1855138,
+                "lon": 101.6093304
+              },
+              {
+                "lat": 3.1856453,
+                "lon": 101.6091179
+              },
+              {
+                "lat": 3.1859011,
+                "lon": 101.6086997
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "106667716"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "6ae430f2d04e547d",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.587Z",
+      "evidence_checksum": "f72d7da44236cee9f5d48ecd6e1284bfa692ef6cf1e8347d38a41dd72eeb8f63",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1844735,
+        "lon": 101.6098046,
+        "bbox": [
+          101.6093249,
+          3.1844735,
+          101.6100597,
+          3.1844916
+        ],
+        "sources": [
+          {
+            "ref": "way:776370583",
+            "coordinates": [
+              {
+                "lat": 3.1844768,
+                "lon": 101.6100597
+              },
+              {
+                "lat": 3.1844735,
+                "lon": 101.6098046
+              },
+              {
+                "lat": 3.1844916,
+                "lon": 101.6093249
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "776370583"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "6c1ac8de80fc6b0c",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.588Z",
+      "evidence_checksum": "d3774316132ef36ac90ae3b724099df60bf95aa2debae0e85920ed3c95d6c53e",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1849095,
+        "lon": 101.6121977,
+        "bbox": [
+          101.6121977,
+          3.1848268,
+          101.6122265,
+          3.1849095
+        ],
+        "sources": [
+          {
+            "ref": "way:39619063",
+            "coordinates": [
+              {
+                "lat": 3.1848268,
+                "lon": 101.6122265
+              },
+              {
+                "lat": 3.1849095,
+                "lon": 101.6121977
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "39619063"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "6edc00809d9d7b09",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:36:08.187Z",
+      "evidence_checksum": "0af87b463af45a131a1f10dea2ab6203b16a8c02fe866c96d023dec50f08adc7",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1854769,
+        "lon": 101.6136285,
+        "bbox": [
+          101.6136285,
+          3.1854769,
+          101.6136285,
+          3.1854769
+        ],
+        "sources": [
+          {
+            "ref": "node:1239287164",
+            "coordinates": [
+              {
+                "lat": 3.1854769,
+                "lon": 101.6136285
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1239287164"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "faffaa7cc9231ed7",
+        "turn_angle_degrees": 180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "7028d05e8e300e2d",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.933Z",
+      "evidence_checksum": "bb9c8d331bd74d0903f6895706f37c0530d5f7157c787fc1934da6b8fce3c18a",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1867786,
+        "lon": 101.6104474,
+        "bbox": [
+          101.6101458,
+          3.1863027,
+          101.6104474,
+          3.1867786
+        ],
+        "sources": [
+          {
+            "ref": "way:1013712950",
+            "coordinates": [
+              {
+                "lat": 3.1863027,
+                "lon": 101.6101458
+              },
+              {
+                "lat": 3.1867786,
+                "lon": 101.6104474
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1013712950"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "706473b6d53e1c70",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.933Z",
+      "evidence_checksum": "226475799cceea48ec784fab6b9a2b2c2eae21e55f75a65ee982ee73ae18eeef",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1847815,
+        "lon": 101.6110615,
+        "bbox": [
+          101.6108383,
+          3.1846327,
+          101.6111344,
+          3.1849869
+        ],
+        "sources": [
+          {
+            "ref": "way:182502392",
+            "coordinates": [
+              {
+                "lat": 3.1846327,
+                "lon": 101.6108383
+              },
+              {
+                "lat": 3.184677,
+                "lon": 101.6109315
+              },
+              {
+                "lat": 3.1847212,
+                "lon": 101.6110093
+              },
+              {
+                "lat": 3.1847815,
+                "lon": 101.6110615
+              },
+              {
+                "lat": 3.1848419,
+                "lon": 101.6110968
+              },
+              {
+                "lat": 3.1849869,
+                "lon": 101.6111344
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "182502392"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "72d41a5fee7add32",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.934Z",
+      "evidence_checksum": "8923e62d1fa4ffb481cc84e137042aefc576fd0950712b220360d9dca685bdb3",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1848268,
+        "lon": 101.6122265,
+        "bbox": [
+          101.6122265,
+          3.1848268,
+          101.6122865,
+          3.1848463
+        ],
+        "sources": [
+          {
+            "ref": "way:777160373",
+            "coordinates": [
+              {
+                "lat": 3.1848463,
+                "lon": 101.6122865
+              },
+              {
+                "lat": 3.1848268,
+                "lon": 101.6122265
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "777160373"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "744442ebbfff8d9f",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.934Z",
+      "evidence_checksum": "47489f1763f0ce02013181d2aa9d83ad53934ede9a55dc4487b4b17a0e96f8c3",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.18457,
+        "lon": 101.6111745,
+        "bbox": [
+          101.6109913,
+          3.1845473,
+          101.6113491,
+          3.1846053
+        ],
+        "sources": [
+          {
+            "ref": "way:776021087",
+            "coordinates": [
+              {
+                "lat": 3.1846053,
+                "lon": 101.6113491
+              },
+              {
+                "lat": 3.18457,
+                "lon": 101.6111745
+              },
+              {
+                "lat": 3.1845473,
+                "lon": 101.6109913
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "776021087"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "7d9d41e703d5051d",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.589Z",
+      "evidence_checksum": "739b79915c459b10f79c876637a1b5027da456bde080a6761328a3ec74189e3d",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1854769,
+        "lon": 101.6136285,
+        "bbox": [
+          101.6135213,
+          3.1854769,
+          101.6136285,
+          3.1855743
+        ],
+        "sources": [
+          {
+            "ref": "way:760225055",
+            "coordinates": [
+              {
+                "lat": 3.1855743,
+                "lon": 101.6135213
+              },
+              {
+                "lat": 3.1854769,
+                "lon": 101.6136285
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "760225055"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "7e3233fee70b86e8",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.935Z",
+      "evidence_checksum": "909fd21aa323bf18d6e7e193fb583e7e819e0f1841dbb3119529949b1019b63b",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1846974,
+        "lon": 101.6121588,
+        "bbox": [
+          101.6119247,
+          3.1845696,
+          101.6122878,
+          3.1847388
+        ],
+        "sources": [
+          {
+            "ref": "way:182502406",
+            "coordinates": [
+              {
+                "lat": 3.1845696,
+                "lon": 101.6122878
+              },
+              {
+                "lat": 3.1846449,
+                "lon": 101.6122451
+              },
+              {
+                "lat": 3.1846974,
+                "lon": 101.6121588
+              },
+              {
+                "lat": 3.1847272,
+                "lon": 101.6120526
+              },
+              {
+                "lat": 3.1847388,
+                "lon": 101.6119247
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "182502406"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "80bb3ace03b39426",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.590Z",
+      "evidence_checksum": "f535d44308c516115c8fd5ce2da5b536b9fb37eff0f3bbf0e3feab2f256366fb",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1845852373,
+        "lon": 101.61106747351,
+        "bbox": [
+          101.6109913,
+          3.1845473,
+          101.61116317351,
+          3.1846682373
+        ],
+        "sources": [
+          {
+            "ref": "way:1530245742",
+            "coordinates": [
+              {
+                "lat": 3.1846682373,
+                "lon": 101.61116317351
+              },
+              {
+                "lat": 3.1846185373,
+                "lon": 101.61112557351
+              },
+              {
+                "lat": 3.1845852373,
+                "lon": 101.61106747351
+              },
+              {
+                "lat": 3.1845473,
+                "lon": 101.6109913
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1530245742"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "8e163ba6bd94f145",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.591Z",
+      "evidence_checksum": "80c80adeb5632409bb0af00839e1bf3619fbd50f2afaeb5bc457d7ab7d0fa649",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1845949,
+        "lon": 101.6104808,
+        "bbox": [
+          101.6093096,
+          3.1845805,
+          101.6108383,
+          3.1846327
+        ],
+        "sources": [
+          {
+            "ref": "way:776022253",
+            "coordinates": [
+              {
+                "lat": 3.1846069,
+                "lon": 101.6093096
+              },
+              {
+                "lat": 3.1845805,
+                "lon": 101.6098525
+              },
+              {
+                "lat": 3.1845949,
+                "lon": 101.6104808
+              },
+              {
+                "lat": 3.1846327,
+                "lon": 101.6108383
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "776022253"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "8eff08edb07a29b3",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:36:10.725Z",
+      "evidence_checksum": "469685e41137d427effe50f2a51a7fc0414e123e07afcac54877123295a266ca",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1863027,
+        "lon": 101.6101458,
+        "bbox": [
+          101.6101458,
+          3.1863027,
+          101.6101458,
+          3.1863027
+        ],
+        "sources": [
+          {
+            "ref": "node:463114118",
+            "coordinates": [
+              {
+                "lat": 3.1863027,
+                "lon": 101.6101458
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "463114118"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "84e52577497da5e2",
+        "turn_angle_degrees": -180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "93a6bccba097fa66",
+      "rule": "signal_lane_association",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:36:59.800Z",
+      "evidence_checksum": "066e4a11732cccc43bec6b6a880a3071b3d450c50bcc7a92ebb3647885cb481e",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1876854,
+        "lon": 101.6152512,
+        "bbox": [
+          101.6152512,
+          3.1876854,
+          101.6152512,
+          3.1876854
+        ],
+        "sources": [
+          {
+            "ref": "node:1927184932",
+            "coordinates": [
+              {
+                "lat": 3.1876854,
+                "lon": 101.6152512
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1927184932"
+      ],
+      "proposed_value": [
+        "1cae945509380974",
+        "1f39b9cd20831ad4",
+        "4628081f4cd9922f"
+      ]
+    },
+    {
+      "finding_id": "93bc15bea70cb6b5",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.591Z",
+      "evidence_checksum": "34f2dfdd6a95ea4e687dd3c6af6689e3141b01a89e258b1a96a448fb7b867840",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1842238,
+        "lon": 101.6124154,
+        "bbox": [
+          101.6123407,
+          3.184081,
+          101.6124154,
+          3.184595
+        ],
+        "sources": [
+          {
+            "ref": "way:777159294",
+            "coordinates": [
+              {
+                "lat": 3.184595,
+                "lon": 101.6123407
+              },
+              {
+                "lat": 3.1844447,
+                "lon": 101.6123839
+              },
+              {
+                "lat": 3.1843081,
+                "lon": 101.612414
+              },
+              {
+                "lat": 3.1842238,
+                "lon": 101.6124154
+              },
+              {
+                "lat": 3.1841548,
+                "lon": 101.612409
+              },
+              {
+                "lat": 3.184081,
+                "lon": 101.6123822
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "777159294"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "979ef75a0fdf63b2",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:43.033Z",
+      "evidence_checksum": "696b669ea47813e45aa596a22877c110972b9cf9d8d2636cc920244201a01e0b",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1872457,
+        "lon": 101.6108627,
+        "bbox": [
+          101.6107859,
+          3.184745,
+          101.6129147,
+          3.1911378
+        ],
+        "sources": [
+          {
+            "ref": "way:1351503426",
+            "coordinates": [
+              {
+                "lat": 3.1911378,
+                "lon": 101.6129147
+              },
+              {
+                "lat": 3.1906589,
+                "lon": 101.6126323
+              },
+              {
+                "lat": 3.1901819,
+                "lon": 101.6123512
+              },
+              {
+                "lat": 3.1897093,
+                "lon": 101.6120726
+              },
+              {
+                "lat": 3.1892291,
+                "lon": 101.6117895
+              },
+              {
+                "lat": 3.1887516,
+                "lon": 101.6115081
+              },
+              {
+                "lat": 3.1882848,
+                "lon": 101.6112433
+              },
+              {
+                "lat": 3.1882268,
+                "lon": 101.6112103
+              },
+              {
+                "lat": 3.1878209,
+                "lon": 101.6109889
+              },
+              {
+                "lat": 3.1877866,
+                "lon": 101.6109782
+              },
+              {
+                "lat": 3.1874401,
+                "lon": 101.6108705
+              },
+              {
+                "lat": 3.1872457,
+                "lon": 101.6108627
+              },
+              {
+                "lat": 3.1870716,
+                "lon": 101.6108557
+              },
+              {
+                "lat": 3.1866354,
+                "lon": 101.6108696
+              },
+              {
+                "lat": 3.1863,
+                "lon": 101.61089
+              },
+              {
+                "lat": 3.1859965,
+                "lon": 101.6109085
+              },
+              {
+                "lat": 3.1853497,
+                "lon": 101.6109552
+              },
+              {
+                "lat": 3.1850053,
+                "lon": 101.6109878
+              },
+              {
+                "lat": 3.1849761,
+                "lon": 101.6109887
+              },
+              {
+                "lat": 3.1849469,
+                "lon": 101.6109775
+              },
+              {
+                "lat": 3.1847676,
+                "lon": 101.6108251
+              },
+              {
+                "lat": 3.184745,
+                "lon": 101.6107859
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1351503426"
+      ],
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "989b411397bffef2",
+      "rule": "turn_permission_geometry_conflict",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:35:21.920Z",
+      "evidence_checksum": "d414dce63b18cb4c65e329232d5809e54c2e06feb9df5d3cf11e736a2eb5144b",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1848268,
+        "lon": 101.6122265,
+        "bbox": [
+          101.6122265,
+          3.1848268,
+          101.6122265,
+          3.1848268
+        ],
+        "sources": [
+          {
+            "ref": "node:1927184814",
+            "coordinates": [
+              {
+                "lat": 3.1848268,
+                "lon": 101.6122265
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1927184814"
+      ],
+      "proposed_value": {
+        "rejected_movements": [
+          "left",
+          "through"
+        ],
+        "restored_angle_degrees": 5.82,
+        "restored_movement": "through",
+        "turn_permissions": [
+          "right"
+        ]
+      }
+    },
+    {
+      "finding_id": "9e594377e965c2ec",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:46.276Z",
+      "evidence_checksum": "80c862fb8fbbc1ce14e58ca58ab2b82ab9c1e82bb7e0e5b489bc31212b562531",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1872754,
+        "lon": 101.6101116,
+        "bbox": [
+          101.6097045,
+          3.1865775,
+          101.6101116,
+          3.1872754
+        ],
+        "sources": [
+          {
+            "ref": "way:107906776",
+            "coordinates": [
+              {
+                "lat": 3.1865775,
+                "lon": 101.6097045
+              },
+              {
+                "lat": 3.1872754,
+                "lon": 101.6101116
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "107906776"
+      ],
+      "proposed_value": {
+        "direction": "backward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "9e664a714ab668df",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.936Z",
+      "evidence_checksum": "3754bbf1a980e03bdbd993e57e3f5b468609581ec33a1c913c5b5430f3c4f5cc",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.184929,
+        "lon": 101.6122587,
+        "bbox": [
+          101.6121977,
+          3.1849095,
+          101.6122587,
+          3.184929
+        ],
+        "sources": [
+          {
+            "ref": "way:777160375",
+            "coordinates": [
+              {
+                "lat": 3.1849095,
+                "lon": 101.6121977
+              },
+              {
+                "lat": 3.184929,
+                "lon": 101.6122587
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "777160375"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "a2c4f58d30060498",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.592Z",
+      "evidence_checksum": "36a838d3307ce9a06889cf310d544a01f2ff52ea8973356a2fbb7e0cc8235527",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1847547,
+        "lon": 101.6113284,
+        "bbox": [
+          101.6111344,
+          3.1847345,
+          101.6115081,
+          3.1849869
+        ],
+        "sources": [
+          {
+            "ref": "way:182502409",
+            "coordinates": [
+              {
+                "lat": 3.1849869,
+                "lon": 101.6111344
+              },
+              {
+                "lat": 3.1848498,
+                "lon": 101.6112037
+              },
+              {
+                "lat": 3.1847961,
+                "lon": 101.6112548
+              },
+              {
+                "lat": 3.1847547,
+                "lon": 101.6113284
+              },
+              {
+                "lat": 3.1847399,
+                "lon": 101.6114277
+              },
+              {
+                "lat": 3.1847345,
+                "lon": 101.6115081
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "182502409"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "a5cbb86f76639cce",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.936Z",
+      "evidence_checksum": "ae35748490fb69da7be8f93ad146a7619a4216c338dfe390a5acedfe9f5f2b4f",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.186634,
+        "lon": 101.6107323,
+        "bbox": [
+          101.6104474,
+          3.186634,
+          101.6108696,
+          3.1867786
+        ],
+        "sources": [
+          {
+            "ref": "way:39616769",
+            "coordinates": [
+              {
+                "lat": 3.1867786,
+                "lon": 101.6104474
+              },
+              {
+                "lat": 3.1866816,
+                "lon": 101.6105948
+              },
+              {
+                "lat": 3.1866534,
+                "lon": 101.6106565
+              },
+              {
+                "lat": 3.186634,
+                "lon": 101.6107323
+              },
+              {
+                "lat": 3.186637,
+                "lon": 101.6108071
+              },
+              {
+                "lat": 3.1866354,
+                "lon": 101.6108696
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "39616769"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "a613f89c6aeb66c7",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.937Z",
+      "evidence_checksum": "99d1b0de3f820fe7656f1e8f55f784b5ef25805ebc2cf26eb114be939213b948",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1855743,
+        "lon": 101.6135213,
+        "bbox": [
+          101.6122865,
+          3.1848463,
+          101.6152512,
+          3.1876854
+        ],
+        "sources": [
+          {
+            "ref": "way:1173001826",
+            "coordinates": [
+              {
+                "lat": 3.1876854,
+                "lon": 101.6152512
+              },
+              {
+                "lat": 3.1875701,
+                "lon": 101.6151844
+              },
+              {
+                "lat": 3.1873322,
+                "lon": 101.6150149
+              },
+              {
+                "lat": 3.1861889,
+                "lon": 101.6142001
+              },
+              {
+                "lat": 3.1856692,
+                "lon": 101.6136318
+              },
+              {
+                "lat": 3.1855743,
+                "lon": 101.6135213
+              },
+              {
+                "lat": 3.185436,
+                "lon": 101.6133234
+              },
+              {
+                "lat": 3.1854169,
+                "lon": 101.6132966
+              },
+              {
+                "lat": 3.1851687,
+                "lon": 101.6129469
+              },
+              {
+                "lat": 3.1849545,
+                "lon": 101.6125593
+              },
+              {
+                "lat": 3.1848463,
+                "lon": 101.6122865
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1173001826"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "a63f18f16f8940aa",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.593Z",
+      "evidence_checksum": "755bd1dc36675945476136b63cb80d36342cdcc9d20b6759d68a194bcf726ac8",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1852758,
+        "lon": 101.6133823,
+        "bbox": [
+          101.6133823,
+          3.1852758,
+          101.6136285,
+          3.1854769
+        ],
+        "sources": [
+          {
+            "ref": "way:1213764874",
+            "coordinates": [
+              {
+                "lat": 3.1854769,
+                "lon": 101.6136285
+              },
+              {
+                "lat": 3.1852758,
+                "lon": 101.6133823
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1213764874"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "a6b606fbb6699c4e",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.938Z",
+      "evidence_checksum": "27436accb30180e5b803df97ca3d7869da31d0e77a0a70f9d54066313a040686",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1856173,
+        "lon": 101.6102262,
+        "bbox": [
+          101.6089685,
+          3.1853412,
+          101.6109552,
+          3.1863754
+        ],
+        "sources": [
+          {
+            "ref": "way:39618724",
+            "coordinates": [
+              {
+                "lat": 3.1853497,
+                "lon": 101.6109552
+              },
+              {
+                "lat": 3.1853412,
+                "lon": 101.6107344
+              },
+              {
+                "lat": 3.1853419,
+                "lon": 101.6106941
+              },
+              {
+                "lat": 3.1853527,
+                "lon": 101.6106652
+              },
+              {
+                "lat": 3.1856173,
+                "lon": 101.6102262
+              },
+              {
+                "lat": 3.1859169,
+                "lon": 101.6097291
+              },
+              {
+                "lat": 3.1859821,
+                "lon": 101.6096209
+              },
+              {
+                "lat": 3.1863754,
+                "lon": 101.6089685
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "39618724"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "a6fba84e406b2b0c",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.938Z",
+      "evidence_checksum": "fdf3885d2e508fd592c47a682c01c6e821b5c761084f3f8aba8009c46cb93b59",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1848463,
+        "lon": 101.6122865,
+        "bbox": [
+          101.6122587,
+          3.1848463,
+          101.6122865,
+          3.184929
+        ],
+        "sources": [
+          {
+            "ref": "way:777159293",
+            "coordinates": [
+              {
+                "lat": 3.184929,
+                "lon": 101.6122587
+              },
+              {
+                "lat": 3.1848463,
+                "lon": 101.6122865
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "777159293"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "a796b212b81afbfc",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:36:12.251Z",
+      "evidence_checksum": "273a3e53f7072ee4f36b397b90b8def106f5d16ca2c1ad3db0bc7b903dd06016",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1853497,
+        "lon": 101.6109552,
+        "bbox": [
+          101.6109552,
+          3.1853497,
+          101.6109552,
+          3.1853497
+        ],
+        "sources": [
+          {
+            "ref": "node:1226982526",
+            "coordinates": [
+              {
+                "lat": 3.1853497,
+                "lon": 101.6109552
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1226982526"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "6af180a5924c45db",
+        "turn_angle_degrees": 180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "a93ac24acfa0547d",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:36:14.174Z",
+      "evidence_checksum": "11f8e4718200bc6202a419eb56f7c16a839cd1584dd1176e38a5e6b69d0250ca",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1865775,
+        "lon": 101.6097045,
+        "bbox": [
+          101.6097045,
+          3.1865775,
+          101.6097045,
+          3.1865775
+        ],
+        "sources": [
+          {
+            "ref": "node:1239242644",
+            "coordinates": [
+              {
+                "lat": 3.1865775,
+                "lon": 101.6097045
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1239242644"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "16584fb03bb6d143",
+        "turn_angle_degrees": -180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "ad04a621be52b759",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.939Z",
+      "evidence_checksum": "bfa9adf908fce54b5a7bc93b40485dafa385fe5a61f04343b530a984d61cc030",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1847345,
+        "lon": 101.6115081,
+        "bbox": [
+          101.61116317351,
+          3.1846682373,
+          101.6115081,
+          3.1847345
+        ],
+        "sources": [
+          {
+            "ref": "way:776021086",
+            "coordinates": [
+              {
+                "lat": 3.1846682373,
+                "lon": 101.61116317351
+              },
+              {
+                "lat": 3.1847345,
+                "lon": 101.6115081
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "776021086"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "ad9b53caff8326be",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.939Z",
+      "evidence_checksum": "22652c6944d3a1c6d3d7185c3e32c2bbd8b441e5bb092adeda677943bd81be44",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.184357,
+        "lon": 101.610623,
+        "bbox": [
+          101.6093498,
+          3.1839982,
+          101.6122484,
+          3.1846034
+        ],
+        "sources": [
+          {
+            "ref": "way:107911720",
+            "coordinates": [
+              {
+                "lat": 3.1839982,
+                "lon": 101.6122484
+              },
+              {
+                "lat": 3.184432,
+                "lon": 101.6122162
+              },
+              {
+                "lat": 3.1846034,
+                "lon": 101.611948
+              },
+              {
+                "lat": 3.1845177,
+                "lon": 101.6116852
+              },
+              {
+                "lat": 3.1844534,
+                "lon": 101.6114062
+              },
+              {
+                "lat": 3.184357,
+                "lon": 101.610623
+              },
+              {
+                "lat": 3.1843221,
+                "lon": 101.6100671
+              },
+              {
+                "lat": 3.1843222,
+                "lon": 101.6098666
+              },
+              {
+                "lat": 3.1843249,
+                "lon": 101.6096255
+              },
+              {
+                "lat": 3.184312,
+                "lon": 101.6093498
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "107911720"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "ae8818ee509d1ca1",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:36:15.945Z",
+      "evidence_checksum": "54f2027f378863d53eb587c9118ec2e10d219eade4f2d972523eab0a65228b1b",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1859965,
+        "lon": 101.6109085,
+        "bbox": [
+          101.6109085,
+          3.1859965,
+          101.6109085,
+          3.1859965
+        ],
+        "sources": [
+          {
+            "ref": "node:2024270227",
+            "coordinates": [
+              {
+                "lat": 3.1859965,
+                "lon": 101.6109085
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "2024270227"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "3f547856414d50c9",
+        "turn_angle_degrees": 180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "b21c9671d777ca1a",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.593Z",
+      "evidence_checksum": "c079423603221b5bbd307851f24bb0d88b3263d274dc0f54984cc08354df0d6e",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.184728,
+        "lon": 101.610722,
+        "bbox": [
+          101.6106674,
+          3.184728,
+          101.6107859,
+          3.184745
+        ],
+        "sources": [
+          {
+            "ref": "way:1016771782",
+            "coordinates": [
+              {
+                "lat": 3.184745,
+                "lon": 101.6107859
+              },
+              {
+                "lat": 3.184728,
+                "lon": 101.610722
+              },
+              {
+                "lat": 3.1847287,
+                "lon": 101.6106674
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1016771782"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "b8ad170a7585e4f9",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:36:17.587Z",
+      "evidence_checksum": "f9b3b129b9df270b449883c0b0a4d79caec18725ecce13127d82e2fe391a2385",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1866496,
+        "lon": 101.611,
+        "bbox": [
+          101.611,
+          3.1866496,
+          101.611,
+          3.1866496
+        ],
+        "sources": [
+          {
+            "ref": "node:474913266",
+            "coordinates": [
+              {
+                "lat": 3.1866496,
+                "lon": 101.611
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "474913266"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "53022bb86ae16748",
+        "turn_angle_degrees": 180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "b9ce06f5e8d91f1a",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:36:19.960Z",
+      "evidence_checksum": "0bd9d8cb13594d179f1b3997501fa92e096f0051b306fb9313d6ada72032197d",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1866496,
+        "lon": 101.611,
+        "bbox": [
+          101.611,
+          3.1866496,
+          101.611,
+          3.1866496
+        ],
+        "sources": [
+          {
+            "ref": "node:474913266",
+            "coordinates": [
+              {
+                "lat": 3.1866496,
+                "lon": 101.611
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "474913266"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "b9f571a6a5c916cf",
+        "turn_angle_degrees": 180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "b9ff605c78cb7a68",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:36:22.068Z",
+      "evidence_checksum": "b9184429494706c3fcd5c88b664edd5d90e80c3d023d4b639e44bc843c7310b4",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1859965,
+        "lon": 101.6109085,
+        "bbox": [
+          101.6109085,
+          3.1859965,
+          101.6109085,
+          3.1859965
+        ],
+        "sources": [
+          {
+            "ref": "node:2024270227",
+            "coordinates": [
+              {
+                "lat": 3.1859965,
+                "lon": 101.6109085
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "2024270227"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "e1b7addfeb082ce9",
+        "turn_angle_degrees": -180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "beeec34992c0d9c8",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:47.948Z",
+      "evidence_checksum": "310fb110f6156a45f88c258282c27643fa458c93b6b0f5713b6d5d90bfb0af06",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1865775,
+        "lon": 101.6097045,
+        "bbox": [
+          101.6092247,
+          3.1863027,
+          101.6101458,
+          3.1868724
+        ],
+        "sources": [
+          {
+            "ref": "way:1013715114",
+            "coordinates": [
+              {
+                "lat": 3.1863027,
+                "lon": 101.6101458
+              },
+              {
+                "lat": 3.1863883,
+                "lon": 101.6100084
+              },
+              {
+                "lat": 3.1865775,
+                "lon": 101.6097045
+              },
+              {
+                "lat": 3.1868724,
+                "lon": 101.6092247
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1013715114"
+      ],
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "c0277dc292f36a25",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.940Z",
+      "evidence_checksum": "b97fd758d6d18efe9d26f0756f4c9ea8eb43cd6301896f3aa73ccc79e9144a3e",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1847112,
+        "lon": 101.6123725,
+        "bbox": [
+          101.6123407,
+          3.184595,
+          101.6125593,
+          3.1849545
+        ],
+        "sources": [
+          {
+            "ref": "way:182502423",
+            "coordinates": [
+              {
+                "lat": 3.1849545,
+                "lon": 101.6125593
+              },
+              {
+                "lat": 3.1848712,
+                "lon": 101.6124804
+              },
+              {
+                "lat": 3.1847857,
+                "lon": 101.6124178
+              },
+              {
+                "lat": 3.1847112,
+                "lon": 101.6123725
+              },
+              {
+                "lat": 3.1846355,
+                "lon": 101.612345
+              },
+              {
+                "lat": 3.184595,
+                "lon": 101.6123407
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "182502423"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "c1c2a2c5db326605",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.594Z",
+      "evidence_checksum": "739f3560247db22fa77785639e249edb42a71ef8c9c7819a61157cd90f8f48e6",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1872457,
+        "lon": 101.6108627,
+        "bbox": [
+          101.6107859,
+          3.184745,
+          101.6129147,
+          3.1911378
+        ],
+        "sources": [
+          {
+            "ref": "way:1351503426",
+            "coordinates": [
+              {
+                "lat": 3.1911378,
+                "lon": 101.6129147
+              },
+              {
+                "lat": 3.1906589,
+                "lon": 101.6126323
+              },
+              {
+                "lat": 3.1901819,
+                "lon": 101.6123512
+              },
+              {
+                "lat": 3.1897093,
+                "lon": 101.6120726
+              },
+              {
+                "lat": 3.1892291,
+                "lon": 101.6117895
+              },
+              {
+                "lat": 3.1887516,
+                "lon": 101.6115081
+              },
+              {
+                "lat": 3.1882848,
+                "lon": 101.6112433
+              },
+              {
+                "lat": 3.1882268,
+                "lon": 101.6112103
+              },
+              {
+                "lat": 3.1878209,
+                "lon": 101.6109889
+              },
+              {
+                "lat": 3.1877866,
+                "lon": 101.6109782
+              },
+              {
+                "lat": 3.1874401,
+                "lon": 101.6108705
+              },
+              {
+                "lat": 3.1872457,
+                "lon": 101.6108627
+              },
+              {
+                "lat": 3.1870716,
+                "lon": 101.6108557
+              },
+              {
+                "lat": 3.1866354,
+                "lon": 101.6108696
+              },
+              {
+                "lat": 3.1863,
+                "lon": 101.61089
+              },
+              {
+                "lat": 3.1859965,
+                "lon": 101.6109085
+              },
+              {
+                "lat": 3.1853497,
+                "lon": 101.6109552
+              },
+              {
+                "lat": 3.1850053,
+                "lon": 101.6109878
+              },
+              {
+                "lat": 3.1849761,
+                "lon": 101.6109887
+              },
+              {
+                "lat": 3.1849469,
+                "lon": 101.6109775
+              },
+              {
+                "lat": 3.1847676,
+                "lon": 101.6108251
+              },
+              {
+                "lat": 3.184745,
+                "lon": 101.6107859
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1351503426"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "c4f21f6900097a36",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:49.710Z",
+      "evidence_checksum": "d6d26e7daab822a022edbcfab43dbccf087bc940ca72c863589ae279ca23043a",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1867786,
+        "lon": 101.6104474,
+        "bbox": [
+          101.6101458,
+          3.1863027,
+          101.6104474,
+          3.1867786
+        ],
+        "sources": [
+          {
+            "ref": "way:1013712950",
+            "coordinates": [
+              {
+                "lat": 3.1863027,
+                "lon": 101.6101458
+              },
+              {
+                "lat": 3.1867786,
+                "lon": 101.6104474
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1013712950"
+      ],
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "c66e9531920b0710",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.595Z",
+      "evidence_checksum": "5f8f588623216a863604ed0ce02dd4358c5342b4a1eecfc9c2e204bf41f22cb4",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1847345,
+        "lon": 101.6115081,
+        "bbox": [
+          101.61116317351,
+          3.1846682373,
+          101.6115081,
+          3.1847345
+        ],
+        "sources": [
+          {
+            "ref": "way:776021086",
+            "coordinates": [
+              {
+                "lat": 3.1846682373,
+                "lon": 101.61116317351
+              },
+              {
+                "lat": 3.1847345,
+                "lon": 101.6115081
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "776021086"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "caa3e4f4bf22b974",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.941Z",
+      "evidence_checksum": "a6c1ffa63a87e837efa6820a86d0d476ffeb1a45f8616056c8cf541c0bd95c4d",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1844735,
+        "lon": 101.6098046,
+        "bbox": [
+          101.6093249,
+          3.1844735,
+          101.6100597,
+          3.1844916
+        ],
+        "sources": [
+          {
+            "ref": "way:776370583",
+            "coordinates": [
+              {
+                "lat": 3.1844768,
+                "lon": 101.6100597
+              },
+              {
+                "lat": 3.1844735,
+                "lon": 101.6098046
+              },
+              {
+                "lat": 3.1844916,
+                "lon": 101.6093249
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "776370583"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "cc49a0e460d671d1",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:36:23.749Z",
+      "evidence_checksum": "b33e1ef0550bb7bfecae6bd96e46de4461aa738afd4eaa0ac8dc34dd6a6f2006",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1849869,
+        "lon": 101.6111344,
+        "bbox": [
+          101.6111344,
+          3.1849869,
+          101.6111344,
+          3.1849869
+        ],
+        "sources": [
+          {
+            "ref": "node:1928630157",
+            "coordinates": [
+              {
+                "lat": 3.1849869,
+                "lon": 101.6111344
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1928630157"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence",
+          "competing_movements"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "a1e15b3bd8cc0bb4",
+        "turn_angle_degrees": -158.252
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "cfa909dd6d61fcdb",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:36:25.886Z",
+      "evidence_checksum": "027592fa9d1978ce91b2991667db89ebdf1419eddbd6a7c876a94c41ba33a3d7",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1853497,
+        "lon": 101.6109552,
+        "bbox": [
+          101.6109552,
+          3.1853497,
+          101.6109552,
+          3.1853497
+        ],
+        "sources": [
+          {
+            "ref": "node:1226982526",
+            "coordinates": [
+              {
+                "lat": 3.1853497,
+                "lon": 101.6109552
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1226982526"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "b15655bb754283e1",
+        "turn_angle_degrees": -180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "d2ed65713d55df3b",
+      "rule": "restriction_enforced_leg",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:38:11.166Z",
+      "evidence_checksum": "b18b4190d2285e8ecbece978cc648e482a99d4130d2f9c34d6b783369cf223c3",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1848463,
+        "lon": 101.6122865,
+        "bbox": [
+          101.6121977,
+          3.1848268,
+          101.6122865,
+          3.184929
+        ],
+        "sources": [
+          {
+            "ref": "way:777159293",
+            "coordinates": [
+              {
+                "lat": 3.184929,
+                "lon": 101.6122587
+              },
+              {
+                "lat": 3.1848463,
+                "lon": 101.6122865
+              }
+            ]
+          },
+          {
+            "ref": "way:777160373",
+            "coordinates": [
+              {
+                "lat": 3.1848463,
+                "lon": 101.6122865
+              },
+              {
+                "lat": 3.1848268,
+                "lon": 101.6122265
+              }
+            ]
+          },
+          {
+            "ref": "way:777160375",
+            "coordinates": [
+              {
+                "lat": 3.1849095,
+                "lon": 101.6121977
+              },
+              {
+                "lat": 3.184929,
+                "lon": 101.6122587
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "relation",
+      "source_ids": [
+        "10761640"
+      ],
+      "proposed_value": {
+        "chain": [
+          "777160375",
+          "777159293",
+          "777160373"
+        ],
+        "removed_connector_ids": [
+          "09326c75a32bd6a9"
+        ],
+        "restriction": "no_u_turn"
+      }
+    },
+    {
+      "finding_id": "d685d509a11fa0bf",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:36:27.868Z",
+      "evidence_checksum": "2ece8cce3b4f9cdbcc95654b4f95ed4bdfca15ecff77286f30d08d6b6db75e0e",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1865775,
+        "lon": 101.6097045,
+        "bbox": [
+          101.6097045,
+          3.1865775,
+          101.6097045,
+          3.1865775
+        ],
+        "sources": [
+          {
+            "ref": "node:1239242644",
+            "coordinates": [
+              {
+                "lat": 3.1865775,
+                "lon": 101.6097045
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1239242644"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "548cfe8c03717fba",
+        "turn_angle_degrees": 180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "d73e2f88ebc027a6",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.941Z",
+      "evidence_checksum": "dca723d00d87bf24158bc32a941d652a1137b6d1fff907a3cf2bc7bfde1f53b5",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1867786,
+        "lon": 101.6104474,
+        "bbox": [
+          101.6104474,
+          3.1867786,
+          101.6105299,
+          3.1869221
+        ],
+        "sources": [
+          {
+            "ref": "way:1016780741",
+            "coordinates": [
+              {
+                "lat": 3.1869221,
+                "lon": 101.6105299
+              },
+              {
+                "lat": 3.1867786,
+                "lon": 101.6104474
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1016780741"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "d82a38dc7ab8ba22",
+      "rule": "ambiguous_connector",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:36:32.174Z",
+      "evidence_checksum": "789d6ff3781965183b483ecaaedd1bb644348c99e88ee526a7f5f343670c9159",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1846682373,
+        "lon": 101.61116317351,
+        "bbox": [
+          101.61116317351,
+          3.1846682373,
+          101.61116317351,
+          3.1846682373
+        ],
+        "sources": [
+          {
+            "ref": "node:474929865",
+            "coordinates": [
+              {
+                "lat": 3.1846682373,
+                "lon": 101.61116317351
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "474929865"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "competing_movements",
+          "borderline_angle"
+        ],
+        "movement": "slight_right",
+        "to_lane_id": "5fe50f735e40d7c2",
+        "turn_angle_degrees": -38.021
+      }
+    },
+    {
+      "finding_id": "da338e22fe887ed8",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.942Z",
+      "evidence_checksum": "4ef8e0418907bcdd21b10bd0b1082b22bcddcecc2c6d6a387a55fafb70a12ba7",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1856584,
+        "lon": 101.6134771,
+        "bbox": [
+          101.6122587,
+          3.184929,
+          101.6148989,
+          3.1873205
+        ],
+        "sources": [
+          {
+            "ref": "way:935525164",
+            "coordinates": [
+              {
+                "lat": 3.184929,
+                "lon": 101.6122587
+              },
+              {
+                "lat": 3.1852544,
+                "lon": 101.6129151
+              },
+              {
+                "lat": 3.1855118,
+                "lon": 101.6132732
+              },
+              {
+                "lat": 3.1856584,
+                "lon": 101.6134771
+              },
+              {
+                "lat": 3.1862496,
+                "lon": 101.6141307
+              },
+              {
+                "lat": 3.1873205,
+                "lon": 101.6148989
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "935525164"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "db681ab62c9ce73d",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.942Z",
+      "evidence_checksum": "0b45caa4c82bc643ba1b77eff4e3df8dd1dbccc8212c82abf00d4bc9fc3fd969",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1873225,
+        "lon": 101.6110027,
+        "bbox": [
+          101.610986,
+          3.1849869,
+          101.6112137,
+          3.1879714
+        ],
+        "sources": [
+          {
+            "ref": "way:334662874",
+            "coordinates": [
+              {
+                "lat": 3.1879714,
+                "lon": 101.6112137
+              },
+              {
+                "lat": 3.1877847,
+                "lon": 101.6111243
+              },
+              {
+                "lat": 3.1875362,
+                "lon": 101.6110428
+              },
+              {
+                "lat": 3.1873225,
+                "lon": 101.6110027
+              },
+              {
+                "lat": 3.1870951,
+                "lon": 101.610986
+              },
+              {
+                "lat": 3.1866496,
+                "lon": 101.611
+              },
+              {
+                "lat": 3.1849869,
+                "lon": 101.6111344
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "334662874"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "dc6812b585fa8bf9",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:36:36.283Z",
+      "evidence_checksum": "a56f611a74efc53be22588be55f25b4934fa3c6e56cbfd3fb140f00c66d586fd",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1849869,
+        "lon": 101.6111344,
+        "bbox": [
+          101.6111344,
+          3.1849869,
+          101.6111344,
+          3.1849869
+        ],
+        "sources": [
+          {
+            "ref": "node:1928630157",
+            "coordinates": [
+              {
+                "lat": 3.1849869,
+                "lon": 101.6111344
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1928630157"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence",
+          "competing_movements"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "b6e51e4cab42384b",
+        "turn_angle_degrees": -180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "dd0aa7775aef9db4",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:52.123Z",
+      "evidence_checksum": "6441d183fdeffab9ad06364687ba4f7ea3de45a534b33b71d40e30e1be17817e",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1852758,
+        "lon": 101.6133823,
+        "bbox": [
+          101.6133823,
+          3.1852758,
+          101.6136285,
+          3.1854769
+        ],
+        "sources": [
+          {
+            "ref": "way:1213764874",
+            "coordinates": [
+              {
+                "lat": 3.1854769,
+                "lon": 101.6136285
+              },
+              {
+                "lat": 3.1852758,
+                "lon": 101.6133823
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1213764874"
+      ],
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "dfa14a6699b48802",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.944Z",
+      "evidence_checksum": "56e4f1c77c71c99d426e4672c001be7ab3831cbd8bcf71413c5c0659db50b0e9",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1852758,
+        "lon": 101.6133823,
+        "bbox": [
+          101.6133823,
+          3.1852758,
+          101.6136285,
+          3.1854769
+        ],
+        "sources": [
+          {
+            "ref": "way:1213764874",
+            "coordinates": [
+              {
+                "lat": 3.1854769,
+                "lon": 101.6136285
+              },
+              {
+                "lat": 3.1852758,
+                "lon": 101.6133823
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1213764874"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "e0098cec159bf91e",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:36:40.773Z",
+      "evidence_checksum": "d155cc7428187d01fd624cd4efa436eadd04544019da7d78cb4ac6b721f5bca4",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1846682373,
+        "lon": 101.61116317351,
+        "bbox": [
+          101.61116317351,
+          3.1846682373,
+          101.61116317351,
+          3.1846682373
+        ],
+        "sources": [
+          {
+            "ref": "node:474929865",
+            "coordinates": [
+              {
+                "lat": 3.1846682373,
+                "lon": 101.61116317351
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "474929865"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "unproven_sharp_movement"
+        ],
+        "movement": "right",
+        "to_lane_id": "d2e454f7d7517d46",
+        "turn_angle_degrees": -133.462
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "e3310b279b762800",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.944Z",
+      "evidence_checksum": "b797ec51d56302786e46bbf52f74e5bd352b01e7d9e49d22ef606d2e7dfc7014",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1842197,
+        "lon": 101.612356,
+        "bbox": [
+          101.6122878,
+          3.184081,
+          101.6123822,
+          3.1845696
+        ],
+        "sources": [
+          {
+            "ref": "way:756118316",
+            "coordinates": [
+              {
+                "lat": 3.184081,
+                "lon": 101.6123822
+              },
+              {
+                "lat": 3.1841468,
+                "lon": 101.6123647
+              },
+              {
+                "lat": 3.1842197,
+                "lon": 101.612356
+              },
+              {
+                "lat": 3.1843088,
+                "lon": 101.6123463
+              },
+              {
+                "lat": 3.1845696,
+                "lon": 101.6122878
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "756118316"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "e4dc43b249797920",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:36:42.641Z",
+      "evidence_checksum": "0675274afba8777b7736eb36edf83251aad1e5f4cb28b525b447fb11fa1884a0",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1854769,
+        "lon": 101.6136285,
+        "bbox": [
+          101.6136285,
+          3.1854769,
+          101.6136285,
+          3.1854769
+        ],
+        "sources": [
+          {
+            "ref": "node:1239287164",
+            "coordinates": [
+              {
+                "lat": 3.1854769,
+                "lon": 101.6136285
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1239287164"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "060c26be3761b4b9",
+        "turn_angle_degrees": -180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "e73ab092da7fa052",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:36:44.693Z",
+      "evidence_checksum": "bc9d52adc683f12cfa8030c38736a69631891b7cae03eaef763e64c61cf7e54b",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1866354,
+        "lon": 101.6108696,
+        "bbox": [
+          101.6108696,
+          3.1866354,
+          101.6108696,
+          3.1866354
+        ],
+        "sources": [
+          {
+            "ref": "node:1226982521",
+            "coordinates": [
+              {
+                "lat": 3.1866354,
+                "lon": 101.6108696
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1226982521"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "e709e791b1559ab2",
+        "turn_angle_degrees": 180
+      },
+      "value": {
+        "accepted": false
+      }
+    },
+    {
+      "finding_id": "e88082ea402873d3",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:53.865Z",
+      "evidence_checksum": "678f1e81b512c181defd6d469ee71f44f12395763a2efe511fa075b0323b0233",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1856173,
+        "lon": 101.6102262,
+        "bbox": [
+          101.6089685,
+          3.1853412,
+          101.6109552,
+          3.1863754
+        ],
+        "sources": [
+          {
+            "ref": "way:39618724",
+            "coordinates": [
+              {
+                "lat": 3.1853497,
+                "lon": 101.6109552
+              },
+              {
+                "lat": 3.1853412,
+                "lon": 101.6107344
+              },
+              {
+                "lat": 3.1853419,
+                "lon": 101.6106941
+              },
+              {
+                "lat": 3.1853527,
+                "lon": 101.6106652
+              },
+              {
+                "lat": 3.1856173,
+                "lon": 101.6102262
+              },
+              {
+                "lat": 3.1859169,
+                "lon": 101.6097291
+              },
+              {
+                "lat": 3.1859821,
+                "lon": 101.6096209
+              },
+              {
+                "lat": 3.1863754,
+                "lon": 101.6089685
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "39618724"
+      ],
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "e9074c0db2bb4ad4",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.596Z",
+      "evidence_checksum": "81f40961342368a9bf98803dbd1a98b533f9b8e31f6b1858ce8766d132cf268e",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1853233,
+        "lon": 101.6138118,
+        "bbox": [
+          101.6136285,
+          3.1848745,
+          101.6143472,
+          3.1854769
+        ],
+        "sources": [
+          {
+            "ref": "way:1213764873",
+            "coordinates": [
+              {
+                "lat": 3.1854769,
+                "lon": 101.6136285
+              },
+              {
+                "lat": 3.1853233,
+                "lon": 101.6138118
+              },
+              {
+                "lat": 3.1848745,
+                "lon": 101.6143472
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1213764873"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "ea49443dabd0cd4f",
+      "rule": "ambiguous_connector",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:36:47.331Z",
+      "evidence_checksum": "91598fc844025b37e43bd9fc3508da0200f9b81f4b2b95a0dc6404fd5520f441",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1845696,
+        "lon": 101.6122878,
+        "bbox": [
+          101.6122878,
+          3.1845696,
+          101.6122878,
+          3.1845696
+        ],
+        "sources": [
+          {
+            "ref": "node:1928630073",
+            "coordinates": [
+              {
+                "lat": 3.1845696,
+                "lon": 101.6122878
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "1928630073"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "competing_movements"
+        ],
+        "movement": "through",
+        "to_lane_id": "cab3280515d4b733",
+        "turn_angle_degrees": 16.977
+      }
+    },
+    {
+      "finding_id": "ed5f2c3fab38702b",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.945Z",
+      "evidence_checksum": "9dc6723ae89a713217e0c970a7c78d7f0c429a883cb4b61af507de5e5bb3cfc3",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1866496,
+        "lon": 101.611,
+        "bbox": [
+          101.6108696,
+          3.1866354,
+          101.611,
+          3.1866496
+        ],
+        "sources": [
+          {
+            "ref": "way:1013712948",
+            "coordinates": [
+              {
+                "lat": 3.1866354,
+                "lon": 101.6108696
+              },
+              {
+                "lat": 3.1866496,
+                "lon": 101.611
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1013712948"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "ed7537a83f292ae0",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.596Z",
+      "evidence_checksum": "4e08cfe24dc75ff4ff860774c5d9eae871308d00bc54522f2869fbda2a1f7f79",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1859859,
+        "lon": 101.610698,
+        "bbox": [
+          101.6101458,
+          3.1859842,
+          101.6109085,
+          3.1863027
+        ],
+        "sources": [
+          {
+            "ref": "way:38951183",
+            "coordinates": [
+              {
+                "lat": 3.1859965,
+                "lon": 101.6109085
+              },
+              {
+                "lat": 3.1859842,
+                "lon": 101.6107359
+              },
+              {
+                "lat": 3.1859859,
+                "lon": 101.610698
+              },
+              {
+                "lat": 3.1859959,
+                "lon": 101.6106635
+              },
+              {
+                "lat": 3.1863027,
+                "lon": 101.6101458
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "38951183"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "ee92de4ab58df326",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:55.262Z",
+      "evidence_checksum": "a6efc100c1cf6e62b12baa7432c022cc9f470e7a5d1ee70ff38dc4f4b096887c",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1853581,
+        "lon": 101.609582,
+        "bbox": [
+          101.6086997,
+          3.1847287,
+          101.6106674,
+          3.1859011
+        ],
+        "sources": [
+          {
+            "ref": "way:106667716",
+            "coordinates": [
+              {
+                "lat": 3.1847287,
+                "lon": 101.6106674
+              },
+              {
+                "lat": 3.1847503,
+                "lon": 101.6106167
+              },
+              {
+                "lat": 3.1850978,
+                "lon": 101.6100414
+              },
+              {
+                "lat": 3.1851402,
+                "lon": 101.6099665
+              },
+              {
+                "lat": 3.1853581,
+                "lon": 101.609582
+              },
+              {
+                "lat": 3.1855138,
+                "lon": 101.6093304
+              },
+              {
+                "lat": 3.1856453,
+                "lon": 101.6091179
+              },
+              {
+                "lat": 3.1859011,
+                "lon": 101.6086997
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "106667716"
+      ],
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "f1454904672bf7af",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:57.128Z",
+      "evidence_checksum": "3d704e976fecf1b9f19372c32aa8743ca040844e4088edf939be7a1b9b90dc19",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1867786,
+        "lon": 101.6104474,
+        "bbox": [
+          101.6104474,
+          3.1867786,
+          101.6105299,
+          3.1869221
+        ],
+        "sources": [
+          {
+            "ref": "way:1016780741",
+            "coordinates": [
+              {
+                "lat": 3.1869221,
+                "lon": 101.6105299
+              },
+              {
+                "lat": 3.1867786,
+                "lon": 101.6104474
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1016780741"
+      ],
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "f3ed6d2e032d92a1",
+      "rule": "restriction_enforced_leg",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:38:13.248Z",
+      "evidence_checksum": "6b6c1256323ad0b7c1972a38dd7f553773b53ed3111f9f7be2c0be1a900c768c",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1849095,
+        "lon": 101.6121977,
+        "bbox": [
+          101.6121977,
+          3.1848268,
+          101.6122865,
+          3.184929
+        ],
+        "sources": [
+          {
+            "ref": "way:39619063",
+            "coordinates": [
+              {
+                "lat": 3.1848268,
+                "lon": 101.6122265
+              },
+              {
+                "lat": 3.1849095,
+                "lon": 101.6121977
+              }
+            ]
+          },
+          {
+            "ref": "way:777160373",
+            "coordinates": [
+              {
+                "lat": 3.1848463,
+                "lon": 101.6122865
+              },
+              {
+                "lat": 3.1848268,
+                "lon": 101.6122265
+              }
+            ]
+          },
+          {
+            "ref": "way:777160375",
+            "coordinates": [
+              {
+                "lat": 3.1849095,
+                "lon": 101.6121977
+              },
+              {
+                "lat": 3.184929,
+                "lon": 101.6122587
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "relation",
+      "source_ids": [
+        "10421009"
+      ],
+      "proposed_value": {
+        "chain": [
+          "777160373",
+          "39619063",
+          "777160375"
+        ],
+        "removed_connector_ids": [
+          "ed1e8a2432e248dd"
+        ],
+        "restriction": "no_u_turn"
+      }
+    },
+    {
+      "finding_id": "f48bf98321d5115d",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.945Z",
+      "evidence_checksum": "99468b8ea9e4177bb58423d634759b534f363a3650574635ec4ead98fd277844",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1842238,
+        "lon": 101.6124154,
+        "bbox": [
+          101.6123407,
+          3.184081,
+          101.6124154,
+          3.184595
+        ],
+        "sources": [
+          {
+            "ref": "way:777159294",
+            "coordinates": [
+              {
+                "lat": 3.184595,
+                "lon": 101.6123407
+              },
+              {
+                "lat": 3.1844447,
+                "lon": 101.6123839
+              },
+              {
+                "lat": 3.1843081,
+                "lon": 101.612414
+              },
+              {
+                "lat": 3.1842238,
+                "lon": 101.6124154
+              },
+              {
+                "lat": 3.1841548,
+                "lon": 101.612409
+              },
+              {
+                "lat": 3.184081,
+                "lon": 101.6123822
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "777159294"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "f54e17b2e32d4e58",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.946Z",
+      "evidence_checksum": "8b126b5df38d428a984757268ded7d110c9d083bb092c4d4803417cb30ff12a6",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1847737,
+        "lon": 101.6117089,
+        "bbox": [
+          101.6115081,
+          3.1847345,
+          101.6121977,
+          3.1849095
+        ],
+        "sources": [
+          {
+            "ref": "way:776021091",
+            "coordinates": [
+              {
+                "lat": 3.1847345,
+                "lon": 101.6115081
+              },
+              {
+                "lat": 3.1847737,
+                "lon": 101.6117089
+              },
+              {
+                "lat": 3.1849095,
+                "lon": 101.6121977
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "776021091"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "f59415cc4156503e",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:37:58.570Z",
+      "evidence_checksum": "f1f536455497fe3e8fe2c500f5ba58bd995d07907bd7399985437b773874eec5",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1872754,
+        "lon": 101.6101116,
+        "bbox": [
+          101.6097045,
+          3.1865775,
+          101.6101116,
+          3.1872754
+        ],
+        "sources": [
+          {
+            "ref": "way:107906776",
+            "coordinates": [
+              {
+                "lat": 3.1865775,
+                "lon": 101.6097045
+              },
+              {
+                "lat": 3.1872754,
+                "lon": 101.6101116
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "107906776"
+      ],
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "f61f7b362a38851a",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.597Z",
+      "evidence_checksum": "16f341a78eba7181210979ee885a1602c2459a45c69fc365d95308de5f0be1d1",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1867786,
+        "lon": 101.6104474,
+        "bbox": [
+          101.6101458,
+          3.1863027,
+          101.6104474,
+          3.1867786
+        ],
+        "sources": [
+          {
+            "ref": "way:1013712950",
+            "coordinates": [
+              {
+                "lat": 3.1863027,
+                "lon": 101.6101458
+              },
+              {
+                "lat": 3.1867786,
+                "lon": 101.6104474
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1013712950"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "f7b5dc6786362bb4",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.598Z",
+      "evidence_checksum": "50f48a87c86ac54d963b69d1202548ff5364a99f20711465733aeaad611bb3e4",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.184357,
+        "lon": 101.610623,
+        "bbox": [
+          101.6093498,
+          3.1839982,
+          101.6122484,
+          3.1846034
+        ],
+        "sources": [
+          {
+            "ref": "way:107911720",
+            "coordinates": [
+              {
+                "lat": 3.1839982,
+                "lon": 101.6122484
+              },
+              {
+                "lat": 3.184432,
+                "lon": 101.6122162
+              },
+              {
+                "lat": 3.1846034,
+                "lon": 101.611948
+              },
+              {
+                "lat": 3.1845177,
+                "lon": 101.6116852
+              },
+              {
+                "lat": 3.1844534,
+                "lon": 101.6114062
+              },
+              {
+                "lat": 3.184357,
+                "lon": 101.610623
+              },
+              {
+                "lat": 3.1843221,
+                "lon": 101.6100671
+              },
+              {
+                "lat": 3.1843222,
+                "lon": 101.6098666
+              },
+              {
+                "lat": 3.1843249,
+                "lon": 101.6096255
+              },
+              {
+                "lat": 3.184312,
+                "lon": 101.6093498
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "107911720"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "f86f1b4d6f7f31cc",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.946Z",
+      "evidence_checksum": "9d41291477f74dc3e3bc58b62b85b3545fd5e27708d8ccbcc5311437d94bb9d1",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1853581,
+        "lon": 101.609582,
+        "bbox": [
+          101.6086997,
+          3.1847287,
+          101.6106674,
+          3.1859011
+        ],
+        "sources": [
+          {
+            "ref": "way:106667716",
+            "coordinates": [
+              {
+                "lat": 3.1847287,
+                "lon": 101.6106674
+              },
+              {
+                "lat": 3.1847503,
+                "lon": 101.6106167
+              },
+              {
+                "lat": 3.1850978,
+                "lon": 101.6100414
+              },
+              {
+                "lat": 3.1851402,
+                "lon": 101.6099665
+              },
+              {
+                "lat": 3.1853581,
+                "lon": 101.609582
+              },
+              {
+                "lat": 3.1855138,
+                "lon": 101.6093304
+              },
+              {
+                "lat": 3.1856453,
+                "lon": 101.6091179
+              },
+              {
+                "lat": 3.1859011,
+                "lon": 101.6086997
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "106667716"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "f9406156ca962ae3",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.599Z",
+      "evidence_checksum": "9dcbeb6e03e1f0a709e3699ec79013f6fb26dcb08654634dbcfa6f1a844de0e5",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1842197,
+        "lon": 101.612356,
+        "bbox": [
+          101.6122878,
+          3.184081,
+          101.6123822,
+          3.1845696
+        ],
+        "sources": [
+          {
+            "ref": "way:756118316",
+            "coordinates": [
+              {
+                "lat": 3.184081,
+                "lon": 101.6123822
+              },
+              {
+                "lat": 3.1841468,
+                "lon": 101.6123647
+              },
+              {
+                "lat": 3.1842197,
+                "lon": 101.612356
+              },
+              {
+                "lat": 3.1843088,
+                "lon": 101.6123463
+              },
+              {
+                "lat": 3.1845696,
+                "lon": 101.6122878
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "756118316"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "fba5f6f7c281d884",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.947Z",
+      "evidence_checksum": "2bc72b37ef99b8deae3afbab5b9104e5ce6e9c03d35e10f57c4f2aa42bcffeef",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1859859,
+        "lon": 101.610698,
+        "bbox": [
+          101.6101458,
+          3.1859842,
+          101.6109085,
+          3.1863027
+        ],
+        "sources": [
+          {
+            "ref": "way:38951183",
+            "coordinates": [
+              {
+                "lat": 3.1859965,
+                "lon": 101.6109085
+              },
+              {
+                "lat": 3.1859842,
+                "lon": 101.6107359
+              },
+              {
+                "lat": 3.1859859,
+                "lon": 101.610698
+              },
+              {
+                "lat": 3.1859959,
+                "lon": 101.6106635
+              },
+              {
+                "lat": 3.1863027,
+                "lon": 101.6101458
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "38951183"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "fbc4f8f28a2ca6e1",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.947Z",
+      "evidence_checksum": "efd43a46f96a0326038fa27a7c20ed438a22570bb5e4d476a25287f91f356a7e",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1853233,
+        "lon": 101.6138118,
+        "bbox": [
+          101.6136285,
+          3.1848745,
+          101.6143472,
+          3.1854769
+        ],
+        "sources": [
+          {
+            "ref": "way:1213764873",
+            "coordinates": [
+              {
+                "lat": 3.1854769,
+                "lon": 101.6136285
+              },
+              {
+                "lat": 3.1853233,
+                "lon": 101.6138118
+              },
+              {
+                "lat": 3.1848745,
+                "lon": 101.6143472
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1213764873"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "fd4c1737c7e745c1",
+      "rule": "lane_width_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:34:55.599Z",
+      "evidence_checksum": "44c6451b3cfda4ee7559f30e22a63e34626dbd230dbf9742d32d7c31e97c7cbe",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1848268,
+        "lon": 101.6122265,
+        "bbox": [
+          101.6122265,
+          3.1848268,
+          101.6122865,
+          3.1848463
+        ],
+        "sources": [
+          {
+            "ref": "way:777160373",
+            "coordinates": [
+              {
+                "lat": 3.1848463,
+                "lon": 101.6122865
+              },
+              {
+                "lat": 3.1848268,
+                "lon": 101.6122265
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "777160373"
+      ],
+      "proposed_value": 3.5
+    },
+    {
+      "finding_id": "fe0ad142d9ead1d2",
+      "rule": "speed_default",
+      "status": "ignored",
+      "decided_at": "2026-08-15T17:35:01.948Z",
+      "evidence_checksum": "0dc3da89d6dd954875415ab5047802e20667bfa9601cd51b146dc5fe844cba82",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1847547,
+        "lon": 101.6113284,
+        "bbox": [
+          101.6111344,
+          3.1847345,
+          101.6115081,
+          3.1849869
+        ],
+        "sources": [
+          {
+            "ref": "way:182502409",
+            "coordinates": [
+              {
+                "lat": 3.1849869,
+                "lon": 101.6111344
+              },
+              {
+                "lat": 3.1848498,
+                "lon": 101.6112037
+              },
+              {
+                "lat": 3.1847961,
+                "lon": 101.6112548
+              },
+              {
+                "lat": 3.1847547,
+                "lon": 101.6113284
+              },
+              {
+                "lat": 3.1847399,
+                "lon": 101.6114277
+              },
+              {
+                "lat": 3.1847345,
+                "lon": 101.6115081
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "182502409"
+      ],
+      "proposed_value": 50
+    },
+    {
+      "finding_id": "fe3433b60c0c9c65",
+      "rule": "lane_count_inference",
+      "status": "accepted",
+      "decided_at": "2026-08-15T17:38:00.918Z",
+      "evidence_checksum": "ed2bce6344629c587b5927bae0f1a14be275c310384431588937ea9930e9c192",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1866496,
+        "lon": 101.611,
+        "bbox": [
+          101.6108696,
+          3.1866354,
+          101.611,
+          3.1866496
+        ],
+        "sources": [
+          {
+            "ref": "way:1013712948",
+            "coordinates": [
+              {
+                "lat": 3.1866354,
+                "lon": 101.6108696
+              },
+              {
+                "lat": 3.1866496,
+                "lon": 101.611
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "way",
+      "source_ids": [
+        "1013712948"
+      ],
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      }
+    },
+    {
+      "finding_id": "fe798d5bf41748da",
+      "rule": "ambiguous_connector",
+      "status": "overridden",
+      "decided_at": "2026-08-15T17:36:49.133Z",
+      "evidence_checksum": "88791c3c2bbd302da4a6f8687309723a892ca3b1157267ebd19b6996f6c3847f",
+      "location": {
+        "coordinate_system": "EPSG:4326",
+        "lat": 3.1859965,
+        "lon": 101.6109085,
+        "bbox": [
+          101.6109085,
+          3.1859965,
+          101.6109085,
+          3.1859965
+        ],
+        "sources": [
+          {
+            "ref": "node:2024270227",
+            "coordinates": [
+              {
+                "lat": 3.1859965,
+                "lon": 101.6109085
+              }
+            ]
+          }
+        ]
+      },
+      "source_type": "node",
+      "source_ids": [
+        "2024270227"
+      ],
+      "proposed_value": {
+        "ambiguity_causes": [
+          "uturn_without_evidence"
+        ],
+        "movement": "reverse",
+        "to_lane_id": "de0c6065deeab061",
+        "turn_angle_degrees": 180
+      },
+      "value": {
+        "accepted": false
+      }
+    }
+  ],
+  "readiness": {
+    "total": 144,
+    "resolved": 61,
+    "ignored": 82,
+    "blockers_total": 57,
+    "blockers_unresolved": 0,
+    "ready": true
+  }
+}

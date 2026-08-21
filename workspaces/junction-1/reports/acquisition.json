@@ -1,0 +1,280 @@
+{
+  "bounds": {
+    "local_metres": {
+      "east": 410.86791513023167,
+      "north": 579.8113258212231,
+      "south": -209.66935897519974,
+      "west": -317.321379673393
+    },
+    "wgs84": {
+      "east": 101.6152512,
+      "north": 3.1911378,
+      "south": 3.1839982,
+      "west": 101.6086997
+    }
+  },
+  "feature_counts": {
+    "edges": 196,
+    "nodes": 139
+  },
+  "generated_at": "2026-08-15T17:34:31.176562+00:00",
+  "preflight": {
+    "discarded_features": [],
+    "errors": [],
+    "inferred_values": [],
+    "warnings": [
+      {
+        "code": "missing_lane_count",
+        "osm_id": "106667716",
+        "reason": "no usable lanes or directional lane-count tag is present"
+      },
+      {
+        "code": "missing_lane_count",
+        "osm_id": "39618724",
+        "reason": "no usable lanes or directional lane-count tag is present"
+      },
+      {
+        "code": "missing_lane_count",
+        "osm_id": "1013715114",
+        "reason": "no usable lanes or directional lane-count tag is present"
+      },
+      {
+        "code": "missing_lane_count",
+        "osm_id": "107911720",
+        "reason": "no usable lanes or directional lane-count tag is present"
+      },
+      {
+        "code": "missing_lane_count",
+        "osm_id": "1016780741",
+        "reason": "no usable lanes or directional lane-count tag is present"
+      },
+      {
+        "code": "missing_lane_count",
+        "osm_id": "760225055",
+        "reason": "no usable lanes or directional lane-count tag is present"
+      },
+      {
+        "code": "missing_lane_count",
+        "osm_id": "1351503426",
+        "reason": "no usable lanes or directional lane-count tag is present"
+      },
+      {
+        "code": "missing_lane_count",
+        "osm_id": "1013712948",
+        "reason": "no usable lanes or directional lane-count tag is present"
+      },
+      {
+        "code": "missing_lane_count",
+        "osm_id": "39616769",
+        "reason": "no usable lanes or directional lane-count tag is present"
+      },
+      {
+        "code": "missing_lane_count",
+        "osm_id": "1213764873",
+        "reason": "no usable lanes or directional lane-count tag is present"
+      },
+      {
+        "code": "missing_lane_count",
+        "osm_id": "1213764874",
+        "reason": "no usable lanes or directional lane-count tag is present"
+      },
+      {
+        "code": "missing_lane_count",
+        "osm_id": "1013712950",
+        "reason": "no usable lanes or directional lane-count tag is present"
+      },
+      {
+        "code": "missing_lane_count",
+        "osm_id": "107906776",
+        "reason": "no usable lanes or directional lane-count tag is present"
+      },
+      {
+        "code": "missing_lane_count",
+        "osm_id": "1016771782",
+        "reason": "no usable lanes or directional lane-count tag is present"
+      },
+      {
+        "code": "disconnected_component",
+        "node_ids": [
+          "1239287149",
+          "1239287207",
+          "1239287208",
+          "1239287210",
+          "1239287227",
+          "1239287228",
+          "1239287230",
+          "1239287292",
+          "7048003754",
+          "7921658611"
+        ],
+        "osm_id": null,
+        "reason": "component 2 contains 10 nodes"
+      }
+    ]
+  },
+  "projection": {
+    "always_xy": true,
+    "axis_order": "x=east,y=north",
+    "forward": "EPSG:4326 to local_crs, always_xy=True",
+    "inverse": "local_crs to EPSG:4326, always_xy=True",
+    "local_crs_projjson": {
+      "$schema": "https://proj.org/schemas/v0.7/projjson.schema.json",
+      "base_crs": {
+        "coordinate_system": {
+          "axis": [
+            {
+              "abbreviation": "lon",
+              "direction": "east",
+              "name": "Longitude",
+              "unit": "degree"
+            },
+            {
+              "abbreviation": "lat",
+              "direction": "north",
+              "name": "Latitude",
+              "unit": "degree"
+            }
+          ],
+          "subtype": "ellipsoidal"
+        },
+        "datum": {
+          "ellipsoid": {
+            "inverse_flattening": 298.257223563,
+            "name": "WGS 84",
+            "semi_major_axis": 6378137
+          },
+          "id": {
+            "authority": "EPSG",
+            "code": 6326
+          },
+          "name": "World Geodetic System 1984",
+          "type": "GeodeticReferenceFrame"
+        },
+        "name": "unknown"
+      },
+      "conversion": {
+        "method": {
+          "id": {
+            "authority": "EPSG",
+            "code": 1125
+          },
+          "name": "Azimuthal Equidistant"
+        },
+        "name": "unknown",
+        "parameters": [
+          {
+            "id": {
+              "authority": "EPSG",
+              "code": 8801
+            },
+            "name": "Latitude of natural origin",
+            "unit": "degree",
+            "value": 3.185894327145
+          },
+          {
+            "id": {
+              "authority": "EPSG",
+              "code": 8802
+            },
+            "name": "Longitude of natural origin",
+            "unit": "degree",
+            "value": 101.611554629362
+          },
+          {
+            "id": {
+              "authority": "EPSG",
+              "code": 8806
+            },
+            "name": "False easting",
+            "unit": "metre",
+            "value": 0
+          },
+          {
+            "id": {
+              "authority": "EPSG",
+              "code": 8807
+            },
+            "name": "False northing",
+            "unit": "metre",
+            "value": 0
+          }
+        ]
+      },
+      "coordinate_system": {
+        "axis": [
+          {
+            "abbreviation": "E",
+            "direction": "east",
+            "name": "Easting",
+            "unit": "metre"
+          },
+          {
+            "abbreviation": "N",
+            "direction": "north",
+            "name": "Northing",
+            "unit": "metre"
+          }
+        ],
+        "subtype": "Cartesian"
+      },
+      "name": "unknown",
+      "type": "ProjectedCRS"
+    },
+    "local_crs_wkt": "PROJCRS[\"unknown\",BASEGEOGCRS[\"unknown\",DATUM[\"World Geodetic System 1984\",ELLIPSOID[\"WGS 84\",6378137,298.257223563,LENGTHUNIT[\"metre\",1]],ID[\"EPSG\",6326]],PRIMEM[\"Greenwich\",0,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8901]]],CONVERSION[\"unknown\",METHOD[\"Azimuthal Equidistant\",ID[\"EPSG\",1125]],PARAMETER[\"Latitude of natural origin\",3.185894327145,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8801]],PARAMETER[\"Longitude of natural origin\",101.611554629362,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8802]],PARAMETER[\"False easting\",0,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8806]],PARAMETER[\"False northing\",0,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8807]]],CS[Cartesian,2],AXIS[\"(E)\",east,ORDER[1],LENGTHUNIT[\"metre\",1,ID[\"EPSG\",9001]]],AXIS[\"(N)\",north,ORDER[2],LENGTHUNIT[\"metre\",1,ID[\"EPSG\",9001]]]]",
+    "origin": {
+      "latitude": 3.1858943271453275,
+      "longitude": 101.61155462936247,
+      "source": "network_geometry_centroid"
+    },
+    "pyproj_version": "3.7.1",
+    "round_trip": {
+      "maximum_error_degrees": 1.4210854715202004e-14,
+      "sample_count": 139,
+      "tolerance_degrees": 1e-09
+    },
+    "source_crs": "EPSG:4326",
+    "units": "metre"
+  },
+  "report_version": 1,
+  "source_audit": {
+    "coordinate_mismatch_node_ids": [],
+    "deleted_source_elements": {
+      "way": [
+        "776021090"
+      ]
+    },
+    "direction_mismatches": [],
+    "errors": [],
+    "excluded_by_reason": {
+      "access=private": 8,
+      "highway=path": 1,
+      "highway=service": 4
+    },
+    "excluded_source_ways": 13,
+    "extra_way_ids": [],
+    "filtered_graph_way_count": 43,
+    "ignored_non_highway_ways": 30,
+    "missing_way_ids": [],
+    "output_directed_edges": 196,
+    "output_nodes": 139,
+    "policy_id": "public-driving-v1",
+    "represented_way_ids": 41,
+    "selected_source_ways": 41,
+    "single_lane_oneway": {
+      "applied": [],
+      "blocked": []
+    },
+    "source_way_count": 84,
+    "status": "passed",
+    "tag_mismatch_way_ids": []
+  },
+  "stage_1a_to_1b_parity": {
+    "attribute_mismatches": [],
+    "extra_edges": [],
+    "extra_node_ids": [],
+    "missing_edges": [],
+    "missing_node_ids": [],
+    "status": "passed"
+  },
+  "status": "passed"
+}

@@ -1,0 +1,2702 @@
+<?xml version='1.0' encoding='utf-8'?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd">
+  <key id="d19" for="edge" attr.name="turn:lanes:forward" attr.type="string" />
+  <key id="d18" for="edge" attr.name="lanes:backward" attr.type="string" />
+  <key id="d17" for="edge" attr.name="turn:lanes" attr.type="string" />
+  <key id="d16" for="edge" attr.name="osm_tags_json" attr.type="string" />
+  <key id="d15" for="edge" attr.name="length" attr.type="string" />
+  <key id="d14" for="edge" attr.name="reversed" attr.type="string" />
+  <key id="d13" for="edge" attr.name="surface" attr.type="string" />
+  <key id="d12" for="edge" attr.name="oneway" attr.type="string" />
+  <key id="d11" for="edge" attr.name="name" attr.type="string" />
+  <key id="d10" for="edge" attr.name="lanes" attr.type="string" />
+  <key id="d9" for="edge" attr.name="highway" attr.type="string" />
+  <key id="d8" for="edge" attr.name="osmid" attr.type="string" />
+  <key id="d7" for="node" attr.name="highway" attr.type="string" />
+  <key id="d6" for="node" attr.name="ref" attr.type="string" />
+  <key id="d5" for="node" attr.name="osm_tags_json" attr.type="string" />
+  <key id="d4" for="node" attr.name="x" attr.type="string" />
+  <key id="d3" for="node" attr.name="y" attr.type="string" />
+  <key id="d2" for="graph" attr.name="crs" attr.type="string" />
+  <key id="d1" for="graph" attr.name="created_with" attr.type="string" />
+  <key id="d0" for="graph" attr.name="created_date" attr.type="string" />
+  <graph edgedefault="directed">
+    <node id="7251588319">
+      <data key="d3">3.1843088</data>
+      <data key="d4">101.6123463</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1927184900">
+      <data key="d3">3.1856692</data>
+      <data key="d4">101.6136318</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7251588320">
+      <data key="d3">3.1844447</data>
+      <data key="d4">101.6123839</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="8010982925">
+      <data key="d3">3.1873205</data>
+      <data key="d4">101.6148989</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="8632000017">
+      <data key="d3">3.1851402</data>
+      <data key="d4">101.6099665</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="8632000018">
+      <data key="d3">3.1859821</data>
+      <data key="d4">101.6096209</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="8632000019">
+      <data key="d3">3.1855138</data>
+      <data key="d4">101.6093304</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="8632000020">
+      <data key="d3">3.1863883</data>
+      <data key="d4">101.6100084</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1927184918">
+      <data key="d3">3.1844735</data>
+      <data key="d4">101.6098046</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="8632000022">
+      <data key="d3">3.1859169</data>
+      <data key="d4">101.6097291</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1927184922">
+      <data key="d3">3.184681</data>
+      <data key="d4">101.6117222</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="474939931">
+      <data key="d3">3.1870951</data>
+      <data key="d4">101.610986</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239287292">
+      <data key="d3">3.1843249</data>
+      <data key="d4">101.6096255</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="5781685275">
+      <data key="d3">3.1850978</data>
+      <data key="d4">101.6100414</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="9378265122">
+      <data key="d3">3.1869221</data>
+      <data key="d4">101.6105299</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="9568024799">
+      <data key="d3">3.1855118</data>
+      <data key="d4">101.6132732</data>
+      <data key="d6">PJ37</data>
+      <data key="d5">{"bus":"yes","name":"Bandar Sri Damansara 7","name:ms":"Bandar Sri Damansara 7","network":"Smart Selangor Bus","operator":"Rapid Bus","public_transport":"stop_position","ref":"PJ37"}</data>
+    </node>
+    <node id="1927184932">
+      <data key="d3">3.1876854</data>
+      <data key="d4">101.6152512</data>
+      <data key="d7">traffic_signals</data>
+      <data key="d5">{"highway":"traffic_signals"}</data>
+    </node>
+    <node id="8631973416">
+      <data key="d3">3.1856173</data>
+      <data key="d4">101.6102262</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1927184954">
+      <data key="d3">3.1855743</data>
+      <data key="d4">101.6135213</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="474924605">
+      <data key="d3">3.1862496</data>
+      <data key="d4">101.6141307</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1927184958">
+      <data key="d3">3.184482</data>
+      <data key="d4">101.6104586</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="474928234">
+      <data key="d3">3.1845949</data>
+      <data key="d4">101.6104808</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1226982515">
+      <data key="d3">3.1878209</data>
+      <data key="d4">101.6109889</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1226982519">
+      <data key="d3">3.1870716</data>
+      <data key="d4">101.6108557</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="474939000">
+      <data key="d3">3.1859011</data>
+      <data key="d4">101.6086997</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1226982521">
+      <data key="d3">3.1866354</data>
+      <data key="d4">101.6108696</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1226982526">
+      <data key="d3">3.1853497</data>
+      <data key="d4">101.6109552</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7239548041">
+      <data key="d3">3.1847112</data>
+      <data key="d4">101.6123725</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7239548042">
+      <data key="d3">3.1848712</data>
+      <data key="d4">101.6124804</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7239548043">
+      <data key="d3">3.1846449</data>
+      <data key="d4">101.6122451</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7239548044">
+      <data key="d3">3.1847272</data>
+      <data key="d4">101.6120526</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="13946726031">
+      <data key="d3">3.1846053</data>
+      <data key="d4">101.6113491</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="13946726032">
+      <data key="d3">3.1846185373</data>
+      <data key="d4">101.61112557351</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="13946726033">
+      <data key="d3">3.1845852373</data>
+      <data key="d4">101.61106747351</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="13946726034">
+      <data key="d3">3.1845473</data>
+      <data key="d4">101.6109913</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="13946726035">
+      <data key="d3">3.1846164</data>
+      <data key="d4">101.6112508</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="13946726036">
+      <data key="d3">3.1846284</data>
+      <data key="d4">101.6112004</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="474928793">
+      <data key="d3">3.1849095</data>
+      <data key="d4">101.6121977</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7048003754">
+      <data key="d3">3.1843222</data>
+      <data key="d4">101.6098666</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="474926253">
+      <data key="d3">3.1853527</data>
+      <data key="d4">101.6106652</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="474925232">
+      <data key="d3">3.1856453</data>
+      <data key="d4">101.6091179</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="9352590000">
+      <data key="d3">3.186634</data>
+      <data key="d4">101.6107323</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="9359913653">
+      <data key="d3">3.1848745</data>
+      <data key="d4">101.6143472</data>
+      <data key="d5">{"access":"private","barrier":"lift_gate"}</data>
+    </node>
+    <node id="474918595">
+      <data key="d3">3.1867786</data>
+      <data key="d4">101.6104474</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="474929865">
+      <data key="d3">3.1846682373</data>
+      <data key="d4">101.61116317351</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7931881676">
+      <data key="d3">3.1859842</data>
+      <data key="d4">101.6107359</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7931881677">
+      <data key="d3">3.1859959</data>
+      <data key="d4">101.6106635</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239189211">
+      <data key="d3">3.1877866</data>
+      <data key="d4">101.6109782</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7239569628">
+      <data key="d3">3.1847547</data>
+      <data key="d4">101.6113284</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7251588317">
+      <data key="d3">3.1842238</data>
+      <data key="d4">101.6124154</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="9568024797">
+      <data key="d3">3.1854169</data>
+      <data key="d4">101.6132966</data>
+      <data key="d6">PJ22</data>
+      <data key="d5">{"bus":"yes","name":"Komersial Bandar Sri Damansara 7","name:ms":"Komersial Bandar Sri Damansara 7","network":"Smart Selangor Bus","operator":"Rapid Bus","public_transport":"stop_position","ref":"PJ22"}</data>
+    </node>
+    <node id="1239189215">
+      <data key="d3">3.1892291</data>
+      <data key="d4">101.6117895</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7239569629">
+      <data key="d3">3.1848498</data>
+      <data key="d4">101.6112037</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239189217">
+      <data key="d3">3.1887516</data>
+      <data key="d4">101.6115081</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7251588322">
+      <data key="d3">3.1841548</data>
+      <data key="d4">101.612409</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="9568024801">
+      <data key="d3">3.1873322</data>
+      <data key="d4">101.6150149</data>
+      <data key="d6">PJ21</data>
+      <data key="d5">{"bus":"yes","name":"Komersial Sri Damansara","name:ms":"Komersial Sri Damansara","network":"Smart Selangor Bus","operator":"Rapid Bus","public_transport":"stop_position","ref":"PJ21"}</data>
+    </node>
+    <node id="7251588323">
+      <data key="d3">3.184081</data>
+      <data key="d4">101.6123822</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7251588325">
+      <data key="d3">3.184929</data>
+      <data key="d4">101.6122587</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7251588324">
+      <data key="d3">3.1848463</data>
+      <data key="d4">101.6122865</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7251588321">
+      <data key="d3">3.1843081</data>
+      <data key="d4">101.612414</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7243746024">
+      <data key="d3">3.1844768</data>
+      <data key="d4">101.6100597</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239189225">
+      <data key="d3">3.1875362</data>
+      <data key="d4">101.6110428</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239189226">
+      <data key="d3">3.1882268</data>
+      <data key="d4">101.6112103</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="474931946">
+      <data key="d3">3.1853581</data>
+      <data key="d4">101.609582</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1928629993">
+      <data key="d3">3.1848419</data>
+      <data key="d4">101.6110968</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7239569636">
+      <data key="d3">3.1845285</data>
+      <data key="d4">101.6108389</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7239569641">
+      <data key="d3">3.1846416</data>
+      <data key="d4">101.6115285</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239189231">
+      <data key="d3">3.1911378</data>
+      <data key="d4">101.6129147</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7921658611">
+      <data key="d3">3.1845177</data>
+      <data key="d4">101.6116852</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="11245164788">
+      <data key="d3">3.1852758</data>
+      <data key="d4">101.6133823</data>
+      <data key="d5">{"access":"no","barrier":"lift_gate"}</data>
+    </node>
+    <node id="1239189239">
+      <data key="d3">3.1897093</data>
+      <data key="d4">101.6120726</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1928630007">
+      <data key="d3">3.1847399</data>
+      <data key="d4">101.6114277</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1928630009">
+      <data key="d3">3.1847345</data>
+      <data key="d4">101.6115081</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239189242">
+      <data key="d3">3.1901819</data>
+      <data key="d4">101.6123512</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239189243">
+      <data key="d3">3.1874401</data>
+      <data key="d4">101.6108705</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239189244">
+      <data key="d3">3.1882848</data>
+      <data key="d4">101.6112433</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239189246">
+      <data key="d3">3.1906589</data>
+      <data key="d4">101.6126323</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1928630015">
+      <data key="d3">3.1846327</data>
+      <data key="d4">101.6108383</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="474924293">
+      <data key="d3">3.1856584</data>
+      <data key="d4">101.6134771</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239189256">
+      <data key="d3">3.1872457</data>
+      <data key="d4">101.6108627</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239189258">
+      <data key="d3">3.1868724</data>
+      <data key="d4">101.6092247</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1928630032">
+      <data key="d3">3.1847961</data>
+      <data key="d4">101.6112548</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7932324630">
+      <data key="d3">3.1877847</data>
+      <data key="d4">101.6111243</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7932324631">
+      <data key="d3">3.1873225</data>
+      <data key="d4">101.6110027</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7239569630">
+      <data key="d3">3.184677</data>
+      <data key="d4">101.6109315</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="474937113">
+      <data key="d3">3.1850053</data>
+      <data key="d4">101.6109878</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1928630053">
+      <data key="d3">3.1847388</data>
+      <data key="d4">101.6119247</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7239569631">
+      <data key="d3">3.1847815</data>
+      <data key="d4">101.6110615</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="474927409">
+      <data key="d3">3.1852544</data>
+      <data key="d4">101.6129151</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="474922802">
+      <data key="d3">3.1845805</data>
+      <data key="d4">101.6098525</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1928630073">
+      <data key="d3">3.1845696</data>
+      <data key="d4">101.6122878</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1928630099">
+      <data key="d3">3.1846974</data>
+      <data key="d4">101.6121588</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239287131">
+      <data key="d3">3.1846069</data>
+      <data key="d4">101.6093096</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="474923868">
+      <data key="d3">3.1847737</data>
+      <data key="d4">101.6117089</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7251564392">
+      <data key="d3">3.184595</data>
+      <data key="d4">101.6123407</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239287149">
+      <data key="d3">3.184312</data>
+      <data key="d4">101.6093498</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1928630135">
+      <data key="d3">3.1847212</data>
+      <data key="d4">101.6110093</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239287164">
+      <data key="d3">3.1854769</data>
+      <data key="d4">101.6136285</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1928630144">
+      <data key="d3">3.1846355</data>
+      <data key="d4">101.612345</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="10127799681">
+      <data key="d3">3.1863</data>
+      <data key="d4">101.61089</data>
+      <data key="d5">{"barrier":"lift_gate"}</data>
+    </node>
+    <node id="1928630148">
+      <data key="d3">3.1847857</data>
+      <data key="d4">101.6124178</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="463114118">
+      <data key="d3">3.1863027</data>
+      <data key="d4">101.6101458</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1928630157">
+      <data key="d3">3.1849869</data>
+      <data key="d4">101.6111344</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="2024270225">
+      <data key="d3">3.1859859</data>
+      <data key="d4">101.610698</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="2024270226">
+      <data key="d3">3.1847676</data>
+      <data key="d4">101.6108251</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="2024270227">
+      <data key="d3">3.1859965</data>
+      <data key="d4">101.6109085</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239242644">
+      <data key="d3">3.1865775</data>
+      <data key="d4">101.6097045</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7931891093">
+      <data key="d3">3.1866816</data>
+      <data key="d4">101.6105948</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7931891092">
+      <data key="d3">3.1866534</data>
+      <data key="d4">101.6106565</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7931891098">
+      <data key="d3">3.1853419</data>
+      <data key="d4">101.6106941</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7931891099">
+      <data key="d3">3.1853412</data>
+      <data key="d4">101.6107344</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7931891100">
+      <data key="d3">3.1849761</data>
+      <data key="d4">101.6109887</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7931891101">
+      <data key="d3">3.1849469</data>
+      <data key="d4">101.6109775</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7931891102">
+      <data key="d3">3.184745</data>
+      <data key="d4">101.6107859</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7931891103">
+      <data key="d3">3.184728</data>
+      <data key="d4">101.610722</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7931891104">
+      <data key="d3">3.1847503</data>
+      <data key="d4">101.6106167</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239287205">
+      <data key="d3">3.1853233</data>
+      <data key="d4">101.6138118</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239287207">
+      <data key="d3">3.184432</data>
+      <data key="d4">101.6122162</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239287208">
+      <data key="d3">3.1846034</data>
+      <data key="d4">101.611948</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239242666">
+      <data key="d3">3.1872754</data>
+      <data key="d4">101.6101116</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239287210">
+      <data key="d3">3.1839982</data>
+      <data key="d4">101.6122484</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1927184814">
+      <data key="d3">3.1848268</data>
+      <data key="d4">101.6122265</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1927184824">
+      <data key="d3">3.1844916</data>
+      <data key="d4">101.6093249</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239287227">
+      <data key="d3">3.1844534</data>
+      <data key="d4">101.6114062</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239287228">
+      <data key="d3">3.184357</data>
+      <data key="d4">101.610623</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239287230">
+      <data key="d3">3.1843221</data>
+      <data key="d4">101.6100671</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1239242688">
+      <data key="d3">3.186637</data>
+      <data key="d4">101.6108071</data>
+      <data key="d5">{"barrier":"lift_gate"}</data>
+    </node>
+    <node id="1927184833">
+      <data key="d3">3.1861889</data>
+      <data key="d4">101.6142001</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="474934223">
+      <data key="d3">3.1847287</data>
+      <data key="d4">101.6106674</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1927184850">
+      <data key="d3">3.1849545</data>
+      <data key="d4">101.6125593</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1927184864">
+      <data key="d3">3.1851687</data>
+      <data key="d4">101.6129469</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1927184868">
+      <data key="d3">3.1875701</data>
+      <data key="d4">101.6151844</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="474926062">
+      <data key="d3">3.1879714</data>
+      <data key="d4">101.6112137</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="474913266">
+      <data key="d3">3.1866496</data>
+      <data key="d4">101.611</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1927184882">
+      <data key="d3">3.18457</data>
+      <data key="d4">101.6111745</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7251588316">
+      <data key="d3">3.1841468</data>
+      <data key="d4">101.6123647</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="1927184890">
+      <data key="d3">3.185436</data>
+      <data key="d4">101.6133234</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="474930684">
+      <data key="d3">3.1863754</data>
+      <data key="d4">101.6089685</data>
+      <data key="d5">{}</data>
+    </node>
+    <node id="7251588318">
+      <data key="d3">3.1842197</data>
+      <data key="d4">101.612356</data>
+      <data key="d5">{}</data>
+    </node>
+    <edge source="7251588319" target="1928630073" id="0">
+      <data key="d8">756118316</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">2</data>
+      <data key="d11">Persiaran Meranti</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">29.71808583929917</data>
+      <data key="d16">{"756118316":{"highway":"tertiary","lanes":"2","name":"Persiaran Meranti","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1927184900" target="1927184954" id="0">
+      <data key="d8">1173001826</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">16.18205712093892</data>
+      <data key="d16">{"1173001826":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","name:ms":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7251588320" target="7251588321" id="0">
+      <data key="d8">777159294</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">2</data>
+      <data key="d11">Persiaran Meranti</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">15.552521431339597</data>
+      <data key="d16">{"777159294":{"highway":"tertiary","lanes":"2","name":"Persiaran Meranti","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="8632000017" target="474931946" id="0">
+      <data key="d8">106667716</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/9</data>
+      <data key="d12">True</data>
+      <data key="d14">False</data>
+      <data key="d15">49.08532086558298</data>
+      <data key="d16">{"106667716":{"highway":"residential","name":"Jalan Kenanga SD 9/9","oneway":"yes"}}</data>
+    </edge>
+    <edge source="8632000018" target="474930684" id="0">
+      <data key="d8">39618724</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/8</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">84.61031151447733</data>
+      <data key="d16">{"39618724":{"highway":"residential","name":"Jalan Kenanga SD 9/8"}}</data>
+    </edge>
+    <edge source="8632000018" target="8632000022" id="0">
+      <data key="d8">39618724</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/8</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">14.030915854650805</data>
+      <data key="d16">{"39618724":{"highway":"residential","name":"Jalan Kenanga SD 9/8"}}</data>
+    </edge>
+    <edge source="8632000019" target="474925232" id="0">
+      <data key="d8">106667716</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/9</data>
+      <data key="d12">True</data>
+      <data key="d14">False</data>
+      <data key="d15">27.756274227739382</data>
+      <data key="d16">{"106667716":{"highway":"residential","name":"Jalan Kenanga SD 9/9","oneway":"yes"}}</data>
+    </edge>
+    <edge source="8632000020" target="1239242644" id="0">
+      <data key="d8">1013715114</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/7</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">39.76160986874339</data>
+      <data key="d16">{"1013715114":{"highway":"residential","name":"Jalan Kenanga SD 9/7"}}</data>
+    </edge>
+    <edge source="8632000020" target="463114118" id="0">
+      <data key="d8">1013715114</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/7</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">17.98055567546128</data>
+      <data key="d16">{"1013715114":{"highway":"residential","name":"Jalan Kenanga SD 9/7"}}</data>
+    </edge>
+    <edge source="1927184918" target="1927184824" id="0">
+      <data key="d8">776370583</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d17">through;left|through|through</data>
+      <data key="d14">False</data>
+      <data key="d15">53.295931405557205</data>
+      <data key="d16">{"776370583":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","oneway":"yes","surface":"asphalt","turn:lanes":"through;left|through|through"}}</data>
+    </edge>
+    <edge source="8632000022" target="8632000018" id="0">
+      <data key="d8">39618724</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/8</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">14.030915854650805</data>
+      <data key="d16">{"39618724":{"highway":"residential","name":"Jalan Kenanga SD 9/8"}}</data>
+    </edge>
+    <edge source="8632000022" target="8631973416" id="0">
+      <data key="d8">39618724</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/8</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">64.46490241922426</data>
+      <data key="d16">{"39618724":{"highway":"residential","name":"Jalan Kenanga SD 9/8"}}</data>
+    </edge>
+    <edge source="1927184922" target="7239569641" id="0">
+      <data key="d8">776021089</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">21.946950349249704</data>
+      <data key="d16">{"776021089":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="474939931" target="474913266" id="0">
+      <data key="d8">334662874</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">4</data>
+      <data key="d18">2</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">49.56178862658949</data>
+      <data key="d16">{"334662874":{"highway":"tertiary","lanes":"4","lanes:backward":"2","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="474939931" target="7932324631" id="0">
+      <data key="d8">334662874</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">4</data>
+      <data key="d18">2</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">25.353646584828834</data>
+      <data key="d16">{"334662874":{"highway":"tertiary","lanes":"4","lanes:backward":"2","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239287292" target="1239287149" id="0">
+      <data key="d8">107911720</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Damar SD 15/1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">30.64274274868646</data>
+      <data key="d16">{"107911720":{"highway":"residential","name":"Jalan Damar SD 15/1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="5781685275" target="8632000017" id="0">
+      <data key="d8">106667716</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/9</data>
+      <data key="d12">True</data>
+      <data key="d14">False</data>
+      <data key="d15">9.559189207119957</data>
+      <data key="d16">{"106667716":{"highway":"residential","name":"Jalan Kenanga SD 9/9","oneway":"yes"}}</data>
+    </edge>
+    <edge source="9378265122" target="474918595" id="0">
+      <data key="d8">1016780741</data>
+      <data key="d9">residential</data>
+      <data key="d12">True</data>
+      <data key="d14">False</data>
+      <data key="d15">18.398490975102323</data>
+      <data key="d16">{"1016780741":{"highway":"residential","oneway":"yes"}}</data>
+    </edge>
+    <edge source="9568024799" target="474924293" id="0">
+      <data key="d8">935525164</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">27.8960927057044</data>
+      <data key="d16">{"935525164":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","name:ms":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1927184932" target="1927184868" id="0">
+      <data key="d8">1173001826</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">14.811307316015295</data>
+      <data key="d16">{"1173001826":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","name:ms":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="8631973416" target="8632000022" id="0">
+      <data key="d8">39618724</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/8</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">64.46490241922426</data>
+      <data key="d16">{"39618724":{"highway":"residential","name":"Jalan Kenanga SD 9/8"}}</data>
+    </edge>
+    <edge source="8631973416" target="474926253" id="0">
+      <data key="d8">39618724</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/8</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">56.93134681732146</data>
+      <data key="d16">{"39618724":{"highway":"residential","name":"Jalan Kenanga SD 9/8"}}</data>
+    </edge>
+    <edge source="1927184954" target="1239287164" id="0">
+      <data key="d8">760225055</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Ara SD 7/5</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">16.091858792468454</data>
+      <data key="d16">{"760225055":{"highway":"residential","name":"Jalan Ara SD 7/5","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1927184954" target="1927184890" id="0">
+      <data key="d8">1173001826</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">26.8186231102572</data>
+      <data key="d16">{"1173001826":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","name:ms":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="474924605" target="8010982925" id="0">
+      <data key="d8">935525164</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">146.47116502289495</data>
+      <data key="d16">{"935525164":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","name:ms":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1927184958" target="7243746024" id="0">
+      <data key="d8">776370584</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">44.29100138783294</data>
+      <data key="d16">{"776370584":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="474928234" target="1928630015" id="0">
+      <data key="d8">776022253</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">39.912786756876365</data>
+      <data key="d16">{"776022253":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","oneway":"yes","placement":"right_of:2","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1226982515" target="1239189211" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">3.9947148464339315</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1226982515" target="1239189226" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">51.39344483544917</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1226982519" target="1226982521" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">48.527839523070256</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1226982519" target="1239189256" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">19.374657213501614</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1226982521" target="474913266" id="0">
+      <data key="d8">1013712948</data>
+      <data key="d9">residential</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">14.563268686455643</data>
+      <data key="d16">{"1013712948":{"highway":"residential"}}</data>
+    </edge>
+    <edge source="1226982521" target="10127799681" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">37.363539357445504</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1226982521" target="1226982519" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">48.527839523070256</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1226982526" target="7931891099" id="0">
+      <data key="d8">39618724</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/8</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">24.532156030261305</data>
+      <data key="d16">{"39618724":{"highway":"residential","name":"Jalan Kenanga SD 9/8"}}</data>
+    </edge>
+    <edge source="1226982526" target="474937113" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">38.46624151511317</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1226982526" target="2024270227" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">72.10762366859498</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="7239548041" target="1928630144" id="0">
+      <data key="d8">182502423</data>
+      <data key="d9">secondary_link</data>
+      <data key="d10">1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">8.954074126044167</data>
+      <data key="d16">{"182502423":{"highway":"secondary_link","lanes":"1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7239548042" target="1928630148" id="0">
+      <data key="d8">182502423</data>
+      <data key="d9">secondary_link</data>
+      <data key="d10">1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">11.776664114020083</data>
+      <data key="d16">{"182502423":{"highway":"secondary_link","lanes":"1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7239548043" target="1928630099" id="0">
+      <data key="d8">182502406</data>
+      <data key="d9">secondary_link</data>
+      <data key="d10">1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">11.21966344401911</data>
+      <data key="d16">{"182502406":{"highway":"secondary_link","lanes":"1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7239548044" target="1928630053" id="0">
+      <data key="d8">182502406</data>
+      <data key="d9">secondary_link</data>
+      <data key="d10">1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">14.258349762048224</data>
+      <data key="d16">{"182502406":{"highway":"secondary_link","lanes":"1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="13946726031" target="1927184882" id="0">
+      <data key="d8">776021087</data>
+      <data key="d9">secondary</data>
+      <data key="d10">2</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">19.778092001207742</data>
+      <data key="d16">{"776021087":{"highway":"secondary","lanes":"2","name":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="13946726031" target="13946726035" id="0">
+      <data key="d8">1530245743</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">1</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d19">right</data>
+      <data key="d14">False</data>
+      <data key="d15">10.983169454752137</data>
+      <data key="d16">{"1530245743":{"highway":"tertiary","lanes":"1","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","oneway":"yes","surface":"asphalt","turn:lanes:forward":"right"}}</data>
+    </edge>
+    <edge source="13946726032" target="13946726033" id="0">
+      <data key="d8">1530245742</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">1</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d19">right</data>
+      <data key="d14">False</data>
+      <data key="d15">7.437681425908495</data>
+      <data key="d16">{"1530245742":{"highway":"tertiary","lanes":"1","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","oneway":"yes","surface":"asphalt","turn:lanes:forward":"right"}}</data>
+    </edge>
+    <edge source="13946726033" target="13946726034" id="0">
+      <data key="d8">1530245742</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">1</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d19">right</data>
+      <data key="d14">False</data>
+      <data key="d15">9.450755077814215</data>
+      <data key="d16">{"1530245742":{"highway":"tertiary","lanes":"1","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","oneway":"yes","surface":"asphalt","turn:lanes:forward":"right"}}</data>
+    </edge>
+    <edge source="13946726034" target="7239569636" id="0">
+      <data key="d8">776370584</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">17.048612336955145</data>
+      <data key="d16">{"776370584":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="13946726035" target="13946726036" id="0">
+      <data key="d8">1530245743</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">1</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d19">right</data>
+      <data key="d14">False</data>
+      <data key="d15">5.752473837912916</data>
+      <data key="d16">{"1530245743":{"highway":"tertiary","lanes":"1","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","oneway":"yes","surface":"asphalt","turn:lanes:forward":"right"}}</data>
+    </edge>
+    <edge source="13946726036" target="474929865" id="0">
+      <data key="d8">1530245743</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">1</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d19">right</data>
+      <data key="d14">False</data>
+      <data key="d15">6.058392554957698</data>
+      <data key="d16">{"1530245743":{"highway":"tertiary","lanes":"1","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","oneway":"yes","surface":"asphalt","turn:lanes:forward":"right"}}</data>
+    </edge>
+    <edge source="474928793" target="7251588325" id="0">
+      <data key="d8">777160375</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">7.111066122400167</data>
+      <data key="d16">{"777160375":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7048003754" target="1239287292" id="0">
+      <data key="d8">107911720</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Damar SD 15/1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">26.769424995695054</data>
+      <data key="d16">{"107911720":{"highway":"residential","name":"Jalan Damar SD 15/1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="474926253" target="8631973416" id="0">
+      <data key="d8">39618724</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/8</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">56.93134681732146</data>
+      <data key="d16">{"39618724":{"highway":"residential","name":"Jalan Kenanga SD 9/8"}}</data>
+    </edge>
+    <edge source="474926253" target="7931891098" id="0">
+      <data key="d8">39618724</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/8</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">3.4259477903064495</data>
+      <data key="d16">{"39618724":{"highway":"residential","name":"Jalan Kenanga SD 9/8"}}</data>
+    </edge>
+    <edge source="474925232" target="474939000" id="0">
+      <data key="d8">106667716</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/9</data>
+      <data key="d12">True</data>
+      <data key="d14">False</data>
+      <data key="d15">54.4498087003758</data>
+      <data key="d16">{"106667716":{"highway":"residential","name":"Jalan Kenanga SD 9/9","oneway":"yes"}}</data>
+    </edge>
+    <edge source="9352590000" target="1239242688" id="0">
+      <data key="d8">39616769</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/6</data>
+      <data key="d12">True</data>
+      <data key="d14">False</data>
+      <data key="d15">8.311228760820603</data>
+      <data key="d16">{"39616769":{"highway":"residential","name":"Jalan Kenanga SD 9/6","oneway":"yes"}}</data>
+    </edge>
+    <edge source="9359913653" target="1239287205" id="0">
+      <data key="d8">1213764873</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Ara SD 7/4</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">77.61302684994712</data>
+      <data key="d16">{"1213764873":{"highway":"residential","name":"Jalan Ara SD 7/4","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="474918595" target="7931891093" id="0">
+      <data key="d8">39616769</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/6</data>
+      <data key="d12">True</data>
+      <data key="d14">False</data>
+      <data key="d15">19.599570564273424</data>
+      <data key="d16">{"39616769":{"highway":"residential","name":"Jalan Kenanga SD 9/6","oneway":"yes"}}</data>
+    </edge>
+    <edge source="474929865" target="1928630157" id="0">
+      <data key="d8">776021084</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">2</data>
+      <data key="d18">1</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d13">asphalt</data>
+      <data key="d19">right</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">35.577435834906844</data>
+      <data key="d16">{"776021084":{"highway":"tertiary","lanes":"2","lanes:backward":"1","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","surface":"asphalt","turn:lanes:forward":"right"}}</data>
+    </edge>
+    <edge source="474929865" target="1928630009" id="0">
+      <data key="d8">776021086</data>
+      <data key="d9">secondary</data>
+      <data key="d10">2</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">38.99727993738315</data>
+      <data key="d16">{"776021086":{"highway":"secondary","lanes":"2","name":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="474929865" target="13946726032" id="0">
+      <data key="d8">1530245742</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">1</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d19">right</data>
+      <data key="d14">False</data>
+      <data key="d15">6.92584432663174</data>
+      <data key="d16">{"1530245742":{"highway":"tertiary","lanes":"1","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","oneway":"yes","surface":"asphalt","turn:lanes:forward":"right"}}</data>
+    </edge>
+    <edge source="7931881676" target="2024270225" id="0">
+      <data key="d8">38951183</data>
+      <data key="d9">residential</data>
+      <data key="d10">2</data>
+      <data key="d18">1</data>
+      <data key="d11">Jalan Kenanga SD 9/7</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">4.212023931469158</data>
+      <data key="d16">{"38951183":{"highway":"residential","lanes":"2","lanes:backward":"1","name":"Jalan Kenanga SD 9/7"}}</data>
+    </edge>
+    <edge source="7931881676" target="2024270227" id="0">
+      <data key="d8">38951183</data>
+      <data key="d9">residential</data>
+      <data key="d10">2</data>
+      <data key="d18">1</data>
+      <data key="d11">Jalan Kenanga SD 9/7</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">19.211354206574697</data>
+      <data key="d16">{"38951183":{"highway":"residential","lanes":"2","lanes:backward":"1","name":"Jalan Kenanga SD 9/7"}}</data>
+    </edge>
+    <edge source="7931881677" target="463114118" id="0">
+      <data key="d8">38951183</data>
+      <data key="d9">residential</data>
+      <data key="d10">2</data>
+      <data key="d18">1</data>
+      <data key="d11">Jalan Kenanga SD 9/7</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">66.83847561391575</data>
+      <data key="d16">{"38951183":{"highway":"residential","lanes":"2","lanes:backward":"1","name":"Jalan Kenanga SD 9/7"}}</data>
+    </edge>
+    <edge source="7931881677" target="2024270225" id="0">
+      <data key="d8">38951183</data>
+      <data key="d9">residential</data>
+      <data key="d10">2</data>
+      <data key="d18">1</data>
+      <data key="d11">Jalan Kenanga SD 9/7</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">3.9884383861694674</data>
+      <data key="d16">{"38951183":{"highway":"residential","lanes":"2","lanes:backward":"1","name":"Jalan Kenanga SD 9/7"}}</data>
+    </edge>
+    <edge source="1239189211" target="1239189243" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">40.34185759952978</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1239189211" target="1226982515" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">3.9947148464339315</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="7239569628" target="1928630007" id="0">
+      <data key="d8">182502409</data>
+      <data key="d9">secondary_link</data>
+      <data key="d10">1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">11.146771242111102</data>
+      <data key="d16">{"182502409":{"highway":"secondary_link","lanes":"1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7251588317" target="7251588322" id="0">
+      <data key="d8">777159294</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">2</data>
+      <data key="d11">Persiaran Meranti</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">7.705292691008891</data>
+      <data key="d16">{"777159294":{"highway":"tertiary","lanes":"2","name":"Persiaran Meranti","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="9568024797" target="1927184864" id="0">
+      <data key="d8">1173001826</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">47.63457225293505</data>
+      <data key="d16">{"1173001826":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","name:ms":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239189215" target="1239189217" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">61.60520306868384</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1239189215" target="1239189239" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">61.95966796763669</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="7239569629" target="1928630032" id="0">
+      <data key="d8">182502409</data>
+      <data key="d9">secondary_link</data>
+      <data key="d10">1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">8.236576668836516</data>
+      <data key="d16">{"182502409":{"highway":"secondary_link","lanes":"1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239189217" target="1239189244" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">59.65327104200298</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1239189217" target="1239189215" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">61.60520306868384</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="7251588322" target="7251588323" id="0">
+      <data key="d8">777159294</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">2</data>
+      <data key="d11">Persiaran Meranti</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">8.72896568780552</data>
+      <data key="d16">{"777159294":{"highway":"tertiary","lanes":"2","name":"Persiaran Meranti","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="9568024801" target="1927184833" id="0">
+      <data key="d8">1173001826</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">156.02941768949168</data>
+      <data key="d16">{"1173001826":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","name:ms":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7251588323" target="7251588316" id="0">
+      <data key="d8">756118316</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">2</data>
+      <data key="d11">Persiaran Meranti</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">7.570209281718469</data>
+      <data key="d16">{"756118316":{"highway":"tertiary","lanes":"2","name":"Persiaran Meranti","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7251588325" target="7251588324" id="0">
+      <data key="d8">777159293</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">1</data>
+      <data key="d11">Persiaran Meranti</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">9.699975179383767</data>
+      <data key="d16">{"777159293":{"highway":"tertiary","lanes":"1","name":"Persiaran Meranti","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7251588325" target="474927409" id="0">
+      <data key="d8">935525164</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">81.36380716681141</data>
+      <data key="d16">{"935525164":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","name:ms":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7251588324" target="1927184814" id="0">
+      <data key="d8">777160373</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">7.005412239673192</data>
+      <data key="d16">{"777160373":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7251588324" target="7251564392" id="0">
+      <data key="d8">777160374</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">1</data>
+      <data key="d11">Persiaran Meranti</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">28.583898998348047</data>
+      <data key="d16">{"777160374":{"highway":"tertiary","lanes":"1","name":"Persiaran Meranti","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7251588321" target="7251588317" id="0">
+      <data key="d8">777159294</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">2</data>
+      <data key="d11">Persiaran Meranti</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">9.37503414021054</data>
+      <data key="d16">{"777159294":{"highway":"tertiary","lanes":"2","name":"Persiaran Meranti","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7243746024" target="1927184918" id="0">
+      <data key="d8">776370583</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d17">through;left|through|through</data>
+      <data key="d14">False</data>
+      <data key="d15">28.324441769688107</data>
+      <data key="d16">{"776370583":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","oneway":"yes","surface":"asphalt","turn:lanes":"through;left|through|through"}}</data>
+    </edge>
+    <edge source="1239189225" target="7932324631" id="0">
+      <data key="d8">334662874</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">4</data>
+      <data key="d18">2</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">24.175848999638124</data>
+      <data key="d16">{"334662874":{"highway":"tertiary","lanes":"4","lanes:backward":"2","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239189225" target="7932324630" id="0">
+      <data key="d8">334662874</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">4</data>
+      <data key="d18">2</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">29.075752149456633</data>
+      <data key="d16">{"334662874":{"highway":"tertiary","lanes":"4","lanes:backward":"2","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239189226" target="1226982515" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">51.39344483544917</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1239189226" target="1239189244" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">7.417330107109692</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="474931946" target="8632000019" id="0">
+      <data key="d8">106667716</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/9</data>
+      <data key="d12">True</data>
+      <data key="d14">False</data>
+      <data key="d15">32.86366631218878</data>
+      <data key="d16">{"106667716":{"highway":"residential","name":"Jalan Kenanga SD 9/9","oneway":"yes"}}</data>
+    </edge>
+    <edge source="1928629993" target="1928630157" id="0">
+      <data key="d8">182502392</data>
+      <data key="d9">secondary_link</data>
+      <data key="d10">1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">16.654928689785898</data>
+      <data key="d16">{"182502392":{"highway":"secondary_link","lanes":"1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7239569636" target="1927184958" id="0">
+      <data key="d8">776370584</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">42.53760949341997</data>
+      <data key="d16">{"776370584":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7239569641" target="13946726031" id="0">
+      <data key="d8">776021089</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">20.322471372001456</data>
+      <data key="d16">{"776021089":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239189231" target="1239189246" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">61.79564877552052</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="7921658611" target="1239287227" id="0">
+      <data key="d8">107911720</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Damar SD 15/1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">31.789987602212914</data>
+      <data key="d16">{"107911720":{"highway":"residential","name":"Jalan Damar SD 15/1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="11245164788" target="1239287164" id="0">
+      <data key="d8">1213764874</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Ara SD 7/5</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">35.31533688921428</data>
+      <data key="d16">{"1213764874":{"highway":"residential","name":"Jalan Ara SD 7/5","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239189239" target="1239189215" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">61.95966796763669</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1239189239" target="1239189242" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">60.97794582275835</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1928630007" target="1928630009" id="0">
+      <data key="d8">182502409</data>
+      <data key="d9">secondary_link</data>
+      <data key="d10">1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">8.94645053141747</data>
+      <data key="d16">{"182502409":{"highway":"secondary_link","lanes":"1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1928630009" target="474923868" id="0">
+      <data key="d8">776021091</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">22.715615901962394</data>
+      <data key="d16">{"776021091":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239189242" target="1239189239" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">60.97794582275835</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1239189242" target="1239189246" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">61.54037231490516</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1239189243" target="1239189256" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">21.633663501854205</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1239189243" target="1239189211" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">40.34185759952978</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1239189244" target="1239189226" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">7.417330107109692</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1239189244" target="1239189217" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">59.65327104200298</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1239189246" target="1239189242" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">61.54037231490516</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1239189246" target="1239189231" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">61.79564877552052</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1928630015" target="7239569630" id="0">
+      <data key="d8">182502392</data>
+      <data key="d9">secondary_link</data>
+      <data key="d10">1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">11.460066577518596</data>
+      <data key="d16">{"182502392":{"highway":"secondary_link","lanes":"1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1928630015" target="474929865" id="0">
+      <data key="d8">776022254</data>
+      <data key="d9">secondary</data>
+      <data key="d10">2</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">36.28436588829095</data>
+      <data key="d16">{"776022254":{"highway":"secondary","lanes":"2","name":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="474924293" target="474924605" id="0">
+      <data key="d8">935525164</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">97.91425761096353</data>
+      <data key="d16">{"935525164":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","name:ms":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239189256" target="1226982519" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">19.374657213501614</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1239189256" target="1239189243" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">21.633663501854205</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1239189258" target="1239242644" id="0">
+      <data key="d8">1013715114</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/7</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">62.55280849772698</data>
+      <data key="d16">{"1013715114":{"highway":"residential","name":"Jalan Kenanga SD 9/7"}}</data>
+    </edge>
+    <edge source="1928630032" target="7239569628" id="0">
+      <data key="d8">182502409</data>
+      <data key="d9">secondary_link</data>
+      <data key="d10">1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">9.378829476223155</data>
+      <data key="d16">{"182502409":{"highway":"secondary_link","lanes":"1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7932324630" target="1239189225" id="0">
+      <data key="d8">334662874</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">4</data>
+      <data key="d18">2</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">29.075752149456633</data>
+      <data key="d16">{"334662874":{"highway":"tertiary","lanes":"4","lanes:backward":"2","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7932324630" target="474926062" id="0">
+      <data key="d8">334662874</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">4</data>
+      <data key="d18">2</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">23.01081003535111</data>
+      <data key="d16">{"334662874":{"highway":"tertiary","lanes":"4","lanes:backward":"2","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7932324631" target="474939931" id="0">
+      <data key="d8">334662874</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">4</data>
+      <data key="d18">2</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">25.353646584828834</data>
+      <data key="d16">{"334662874":{"highway":"tertiary","lanes":"4","lanes:backward":"2","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7932324631" target="1239189225" id="0">
+      <data key="d8">334662874</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">4</data>
+      <data key="d18">2</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">24.175848999638124</data>
+      <data key="d16">{"334662874":{"highway":"tertiary","lanes":"4","lanes:backward":"2","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7239569630" target="1928630135" id="0">
+      <data key="d8">182502392</data>
+      <data key="d9">secondary_link</data>
+      <data key="d10">1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">9.938003521165575</data>
+      <data key="d16">{"182502392":{"highway":"secondary_link","lanes":"1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="474937113" target="7931891100" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">3.2484335805281543</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="474937113" target="1226982526" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">38.46624151511317</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1928630053" target="1927184922" id="0">
+      <data key="d8">776021089</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">23.382856089840082</data>
+      <data key="d16">{"776021089":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7239569631" target="1928629993" id="0">
+      <data key="d8">182502392</data>
+      <data key="d9">secondary_link</data>
+      <data key="d10">1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">7.776030391048037</data>
+      <data key="d16">{"182502392":{"highway":"secondary_link","lanes":"1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="474927409" target="9568024799" id="0">
+      <data key="d8">935525164</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">48.98827107850773</data>
+      <data key="d16">{"935525164":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","name:ms":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="474922802" target="474928234" id="0">
+      <data key="d8">776022253</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">69.77435839273193</data>
+      <data key="d16">{"776022253":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","oneway":"yes","placement":"right_of:2","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1928630073" target="7239548043" id="0">
+      <data key="d8">182502406</data>
+      <data key="d9">secondary_link</data>
+      <data key="d10">1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">9.621911140841569</data>
+      <data key="d16">{"182502406":{"highway":"secondary_link","lanes":"1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1928630073" target="1927184814" id="0">
+      <data key="d8">756118314</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">2</data>
+      <data key="d11">Persiaran Meranti</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d17">right|right</data>
+      <data key="d14">False</data>
+      <data key="d15">29.397997669578814</data>
+      <data key="d16">{"756118314":{"highway":"tertiary","lanes":"2","name":"Persiaran Meranti","oneway":"yes","surface":"asphalt","turn:lanes":"right|right"}}</data>
+    </edge>
+    <edge source="1928630099" target="7239548044" id="0">
+      <data key="d8">182502406</data>
+      <data key="d9">secondary_link</data>
+      <data key="d10">1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">12.24745607709172</data>
+      <data key="d16">{"182502406":{"highway":"secondary_link","lanes":"1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239287131" target="474922802" id="0">
+      <data key="d8">776022253</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">60.34602987299453</data>
+      <data key="d16">{"776022253":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","oneway":"yes","placement":"right_of:2","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="474923868" target="474928793" id="0">
+      <data key="d8">776021091</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">56.32989822550481</data>
+      <data key="d16">{"776021091":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7251564392" target="7251588320" id="0">
+      <data key="d8">777159294</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">2</data>
+      <data key="d11">Persiaran Meranti</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">17.38721751475703</data>
+      <data key="d16">{"777159294":{"highway":"tertiary","lanes":"2","name":"Persiaran Meranti","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1928630135" target="7239569631" id="0">
+      <data key="d8">182502392</data>
+      <data key="d9">secondary_link</data>
+      <data key="d10">1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">8.862548082082112</data>
+      <data key="d16">{"182502392":{"highway":"secondary_link","lanes":"1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239287164" target="1927184954" id="0">
+      <data key="d8">760225055</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Ara SD 7/5</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">16.091858792468454</data>
+      <data key="d16">{"760225055":{"highway":"residential","name":"Jalan Ara SD 7/5","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239287164" target="1239287205" id="0">
+      <data key="d8">1213764873</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Ara SD 7/4</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">26.56797207465327</data>
+      <data key="d16">{"1213764873":{"highway":"residential","name":"Jalan Ara SD 7/4","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239287164" target="11245164788" id="0">
+      <data key="d8">1213764874</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Ara SD 7/5</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">35.31533688921428</data>
+      <data key="d16">{"1213764874":{"highway":"residential","name":"Jalan Ara SD 7/5","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1928630144" target="7251564392" id="0">
+      <data key="d8">182502423</data>
+      <data key="d9">secondary_link</data>
+      <data key="d10">1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">4.528634540366562</data>
+      <data key="d16">{"182502423":{"highway":"secondary_link","lanes":"1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="10127799681" target="2024270227" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">33.81015253572301</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="10127799681" target="1226982521" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">37.363539357445504</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1928630148" target="7239548041" id="0">
+      <data key="d8">182502423</data>
+      <data key="d9">secondary_link</data>
+      <data key="d10">1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">9.691215383548077</data>
+      <data key="d16">{"182502423":{"highway":"secondary_link","lanes":"1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="463114118" target="7931881677" id="0">
+      <data key="d8">38951183</data>
+      <data key="d9">residential</data>
+      <data key="d10">2</data>
+      <data key="d18">1</data>
+      <data key="d11">Jalan Kenanga SD 9/7</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">66.83847561391575</data>
+      <data key="d16">{"38951183":{"highway":"residential","lanes":"2","lanes:backward":"1","name":"Jalan Kenanga SD 9/7"}}</data>
+    </edge>
+    <edge source="463114118" target="474918595" id="0">
+      <data key="d8">1013712950</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/7A</data>
+      <data key="d12">True</data>
+      <data key="d14">False</data>
+      <data key="d15">62.62191842798358</data>
+      <data key="d16">{"1013712950":{"highway":"residential","name":"Jalan Kenanga SD 9/7A","oneway":"yes"}}</data>
+    </edge>
+    <edge source="463114118" target="8632000020" id="0">
+      <data key="d8">1013715114</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/7</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">17.98055567546128</data>
+      <data key="d16">{"1013715114":{"highway":"residential","name":"Jalan Kenanga SD 9/7"}}</data>
+    </edge>
+    <edge source="1928630157" target="7239569629" id="0">
+      <data key="d8">182502409</data>
+      <data key="d9">secondary_link</data>
+      <data key="d10">1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">17.076348814850945</data>
+      <data key="d16">{"182502409":{"highway":"secondary_link","lanes":"1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1928630157" target="474913266" id="0">
+      <data key="d8">334662874</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">4</data>
+      <data key="d18">2</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">185.48522745575988</data>
+      <data key="d16">{"334662874":{"highway":"tertiary","lanes":"4","lanes:backward":"2","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1928630157" target="474929865" id="0">
+      <data key="d8">776021084</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">2</data>
+      <data key="d18">1</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d13">asphalt</data>
+      <data key="d19">right</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">35.577435834906844</data>
+      <data key="d16">{"776021084":{"highway":"tertiary","lanes":"2","lanes:backward":"1","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","surface":"asphalt","turn:lanes:forward":"right"}}</data>
+    </edge>
+    <edge source="2024270225" target="7931881677" id="0">
+      <data key="d8">38951183</data>
+      <data key="d9">residential</data>
+      <data key="d10">2</data>
+      <data key="d18">1</data>
+      <data key="d11">Jalan Kenanga SD 9/7</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">3.9884383861694674</data>
+      <data key="d16">{"38951183":{"highway":"residential","lanes":"2","lanes:backward":"1","name":"Jalan Kenanga SD 9/7"}}</data>
+    </edge>
+    <edge source="2024270225" target="7931881676" id="0">
+      <data key="d8">38951183</data>
+      <data key="d9">residential</data>
+      <data key="d10">2</data>
+      <data key="d18">1</data>
+      <data key="d11">Jalan Kenanga SD 9/7</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">4.212023931469158</data>
+      <data key="d16">{"38951183":{"highway":"residential","lanes":"2","lanes:backward":"1","name":"Jalan Kenanga SD 9/7"}}</data>
+    </edge>
+    <edge source="2024270226" target="7931891102" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">5.025546944439641</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="2024270226" target="7931891101" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">26.149187842528764</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="2024270227" target="7931881676" id="0">
+      <data key="d8">38951183</data>
+      <data key="d9">residential</data>
+      <data key="d10">2</data>
+      <data key="d18">1</data>
+      <data key="d11">Jalan Kenanga SD 9/7</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">19.211354206574697</data>
+      <data key="d16">{"38951183":{"highway":"residential","lanes":"2","lanes:backward":"1","name":"Jalan Kenanga SD 9/7"}}</data>
+    </edge>
+    <edge source="2024270227" target="1226982526" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">72.10762366859498</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="2024270227" target="10127799681" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">33.81015253572301</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1239242644" target="1239242666" id="0">
+      <data key="d8">107906776</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan SD 9/7B</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">89.80561355806881</data>
+      <data key="d16">{"107906776":{"highway":"residential","name":"Jalan SD 9/7B"}}</data>
+    </edge>
+    <edge source="1239242644" target="1239189258" id="0">
+      <data key="d8">1013715114</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/7</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">62.55280849772698</data>
+      <data key="d16">{"1013715114":{"highway":"residential","name":"Jalan Kenanga SD 9/7"}}</data>
+    </edge>
+    <edge source="1239242644" target="8632000020" id="0">
+      <data key="d8">1013715114</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/7</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">39.76160986874339</data>
+      <data key="d16">{"1013715114":{"highway":"residential","name":"Jalan Kenanga SD 9/7"}}</data>
+    </edge>
+    <edge source="7931891093" target="7931891092" id="0">
+      <data key="d8">39616769</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/6</data>
+      <data key="d12">True</data>
+      <data key="d14">False</data>
+      <data key="d15">7.53371607416465</data>
+      <data key="d16">{"39616769":{"highway":"residential","name":"Jalan Kenanga SD 9/6","oneway":"yes"}}</data>
+    </edge>
+    <edge source="7931891092" target="9352590000" id="0">
+      <data key="d8">39616769</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/6</data>
+      <data key="d12">True</data>
+      <data key="d14">False</data>
+      <data key="d15">8.687635202300385</data>
+      <data key="d16">{"39616769":{"highway":"residential","name":"Jalan Kenanga SD 9/6","oneway":"yes"}}</data>
+    </edge>
+    <edge source="7931891098" target="474926253" id="0">
+      <data key="d8">39618724</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/8</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">3.4259477903064495</data>
+      <data key="d16">{"39618724":{"highway":"residential","name":"Jalan Kenanga SD 9/8"}}</data>
+    </edge>
+    <edge source="7931891098" target="7931891099" id="0">
+      <data key="d8">39618724</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/8</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">4.474915529441012</data>
+      <data key="d16">{"39618724":{"highway":"residential","name":"Jalan Kenanga SD 9/8"}}</data>
+    </edge>
+    <edge source="7931891099" target="7931891098" id="0">
+      <data key="d8">39618724</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/8</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">4.474915529441012</data>
+      <data key="d16">{"39618724":{"highway":"residential","name":"Jalan Kenanga SD 9/8"}}</data>
+    </edge>
+    <edge source="7931891099" target="1226982526" id="0">
+      <data key="d8">39618724</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/8</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">24.532156030261305</data>
+      <data key="d16">{"39618724":{"highway":"residential","name":"Jalan Kenanga SD 9/8"}}</data>
+    </edge>
+    <edge source="7931891100" target="7931891101" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">3.4768566991998786</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="7931891100" target="474937113" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">3.2484335805281543</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="7931891101" target="2024270226" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">26.149187842528764</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="7931891101" target="7931891100" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">3.4768566991998786</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="7931891102" target="7931891103" id="0">
+      <data key="d8">1016771782</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">7.341913821611184</data>
+      <data key="d16">{"1016771782":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="7931891102" target="2024270226" id="0">
+      <data key="d8">1351503426</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">5.025546944439641</data>
+      <data key="d16">{"1351503426":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="7931891103" target="474934223" id="0">
+      <data key="d8">1016771782</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">6.062374878556891</data>
+      <data key="d16">{"1016771782":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="7931891103" target="7931891102" id="0">
+      <data key="d8">1016771782</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">7.341913821611184</data>
+      <data key="d16">{"1016771782":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="7931891104" target="5781685275" id="0">
+      <data key="d8">106667716</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/9</data>
+      <data key="d12">True</data>
+      <data key="d14">False</data>
+      <data key="d15">74.65031312637389</data>
+      <data key="d16">{"106667716":{"highway":"residential","name":"Jalan Kenanga SD 9/9","oneway":"yes"}}</data>
+    </edge>
+    <edge source="1239287205" target="9359913653" id="0">
+      <data key="d8">1213764873</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Ara SD 7/4</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">77.61302684994712</data>
+      <data key="d16">{"1213764873":{"highway":"residential","name":"Jalan Ara SD 7/4","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239287205" target="1239287164" id="0">
+      <data key="d8">1213764873</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Ara SD 7/4</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">26.56797207465327</data>
+      <data key="d16">{"1213764873":{"highway":"residential","name":"Jalan Ara SD 7/4","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239287207" target="1239287208" id="0">
+      <data key="d8">107911720</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Damar SD 15/1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">35.35360574020606</data>
+      <data key="d16">{"107911720":{"highway":"residential","name":"Jalan Damar SD 15/1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239287208" target="7921658611" id="0">
+      <data key="d8">107911720</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Damar SD 15/1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">30.693709270762238</data>
+      <data key="d16">{"107911720":{"highway":"residential","name":"Jalan Damar SD 15/1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239242666" target="1239242644" id="0">
+      <data key="d8">107906776</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan SD 9/7B</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">89.80561355806881</data>
+      <data key="d16">{"107906776":{"highway":"residential","name":"Jalan SD 9/7B"}}</data>
+    </edge>
+    <edge source="1239287210" target="1239287207" id="0">
+      <data key="d8">107911720</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Damar SD 15/1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">48.36872145593931</data>
+      <data key="d16">{"107911720":{"highway":"residential","name":"Jalan Damar SD 15/1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1927184814" target="474928793" id="0">
+      <data key="d8">39619063</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">2</data>
+      <data key="d11">Persiaran Meranti</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d17">right|right</data>
+      <data key="d14">False</data>
+      <data key="d15">9.735870826146536</data>
+      <data key="d16">{"39619063":{"highway":"tertiary","lanes":"2","name":"Persiaran Meranti","oneway":"yes","surface":"asphalt","turn:lanes":"right|right"}}</data>
+    </edge>
+    <edge source="1927184814" target="1928630053" id="0">
+      <data key="d8">776021089</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">34.906421728736504</data>
+      <data key="d16">{"776021089":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239287227" target="1239287228" id="0">
+      <data key="d8">107911720</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Damar SD 15/1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">87.61173330566773</data>
+      <data key="d16">{"107911720":{"highway":"residential","name":"Jalan Damar SD 15/1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239287228" target="1239287230" id="0">
+      <data key="d8">107911720</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Damar SD 15/1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">61.839791819109394</data>
+      <data key="d16">{"107911720":{"highway":"residential","name":"Jalan Damar SD 15/1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239287230" target="7048003754" id="0">
+      <data key="d8">107911720</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Damar SD 15/1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">22.26019420631977</data>
+      <data key="d16">{"107911720":{"highway":"residential","name":"Jalan Damar SD 15/1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1239242688" target="1226982521" id="0">
+      <data key="d8">39616769</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/6</data>
+      <data key="d12">True</data>
+      <data key="d14">False</data>
+      <data key="d15">6.9412272466106755</data>
+      <data key="d16">{"39616769":{"highway":"residential","name":"Jalan Kenanga SD 9/6","oneway":"yes"}}</data>
+    </edge>
+    <edge source="1927184833" target="1927184900" id="0">
+      <data key="d8">1173001826</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">85.55921090936465</data>
+      <data key="d16">{"1173001826":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","name:ms":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="474934223" target="7931891104" id="0">
+      <data key="d8">106667716</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/9</data>
+      <data key="d12">True</data>
+      <data key="d14">False</data>
+      <data key="d15">6.119889296795947</data>
+      <data key="d16">{"106667716":{"highway":"residential","name":"Jalan Kenanga SD 9/9","oneway":"yes"}}</data>
+    </edge>
+    <edge source="474934223" target="7931891103" id="0">
+      <data key="d8">1016771782</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/5</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">6.062374878556891</data>
+      <data key="d16">{"1016771782":{"highway":"residential","name":"Jalan Kenanga SD 9/5"}}</data>
+    </edge>
+    <edge source="1927184850" target="7239548042" id="0">
+      <data key="d8">182502423</data>
+      <data key="d9">secondary_link</data>
+      <data key="d10">1</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">12.74864329850073</data>
+      <data key="d16">{"182502423":{"highway":"secondary_link","lanes":"1","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1927184850" target="7251588324" id="0">
+      <data key="d8">1173001826</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">32.58933578259381</data>
+      <data key="d16">{"1173001826":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","name:ms":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1927184864" target="1927184850" id="0">
+      <data key="d8">1173001826</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">49.184392552129424</data>
+      <data key="d16">{"1173001826":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","name:ms":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1927184868" target="9568024801" id="0">
+      <data key="d8">1173001826</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">32.463982263243075</data>
+      <data key="d16">{"1173001826":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","name:ms":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="474926062" target="7932324630" id="0">
+      <data key="d8">334662874</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">4</data>
+      <data key="d18">2</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">23.01081003535111</data>
+      <data key="d16">{"334662874":{"highway":"tertiary","lanes":"4","lanes:backward":"2","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="474913266" target="1928630157" id="0">
+      <data key="d8">334662874</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">4</data>
+      <data key="d18">2</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">False</data>
+      <data key="d15">185.48522745575988</data>
+      <data key="d16">{"334662874":{"highway":"tertiary","lanes":"4","lanes:backward":"2","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="474913266" target="474939931" id="0">
+      <data key="d8">334662874</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">4</data>
+      <data key="d18">2</data>
+      <data key="d11">Persiaran Kenanga</data>
+      <data key="d13">asphalt</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">49.56178862658949</data>
+      <data key="d16">{"334662874":{"highway":"tertiary","lanes":"4","lanes:backward":"2","name":"Persiaran Kenanga","name:ms":"Persiaran Kenanga","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="474913266" target="1226982521" id="0">
+      <data key="d8">1013712948</data>
+      <data key="d9">residential</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">14.563268686455643</data>
+      <data key="d16">{"1013712948":{"highway":"residential"}}</data>
+    </edge>
+    <edge source="1927184882" target="13946726034" id="0">
+      <data key="d8">776021087</data>
+      <data key="d9">secondary</data>
+      <data key="d10">2</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">20.49550562224419</data>
+      <data key="d16">{"776021087":{"highway":"secondary","lanes":"2","name":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="7251588316" target="7251588318" id="0">
+      <data key="d8">756118316</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">2</data>
+      <data key="d11">Persiaran Meranti</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">8.163466016495773</data>
+      <data key="d16">{"756118316":{"highway":"tertiary","lanes":"2","name":"Persiaran Meranti","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="1927184890" target="9568024797" id="0">
+      <data key="d8">1173001826</data>
+      <data key="d9">secondary</data>
+      <data key="d10">3</data>
+      <data key="d11">Persiaran Perdana</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">3.6556510566463256</data>
+      <data key="d16">{"1173001826":{"highway":"secondary","lanes":"3","name":"Persiaran Perdana","name:ms":"Persiaran Perdana","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <edge source="474930684" target="8632000018" id="0">
+      <data key="d8">39618724</data>
+      <data key="d9">residential</data>
+      <data key="d11">Jalan Kenanga SD 9/8</data>
+      <data key="d12">False</data>
+      <data key="d14">True</data>
+      <data key="d15">84.61031151447733</data>
+      <data key="d16">{"39618724":{"highway":"residential","name":"Jalan Kenanga SD 9/8"}}</data>
+    </edge>
+    <edge source="7251588318" target="7251588319" id="0">
+      <data key="d8">756118316</data>
+      <data key="d9">tertiary</data>
+      <data key="d10">2</data>
+      <data key="d11">Persiaran Meranti</data>
+      <data key="d12">True</data>
+      <data key="d13">asphalt</data>
+      <data key="d14">False</data>
+      <data key="d15">9.965840185820412</data>
+      <data key="d16">{"756118316":{"highway":"tertiary","lanes":"2","name":"Persiaran Meranti","oneway":"yes","surface":"asphalt"}}</data>
+    </edge>
+    <data key="d0">2026-08-16 01:34:30</data>
+    <data key="d1">OSMnx 2.0.7</data>
+    <data key="d2">epsg:4326</data>
+  </graph>
+</graphml>

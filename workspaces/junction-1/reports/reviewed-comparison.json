@@ -1,0 +1,1249 @@
+{
+  "connector_status": {
+    "active": {
+      "preliminary": 79,
+      "reviewed": 82
+    },
+    "forbidden": {
+      "preliminary": 6,
+      "reviewed": 34
+    },
+    "review_required": {
+      "preliminary": 31,
+      "reviewed": 0
+    }
+  },
+  "connectors": {
+    "activated_by_review": [
+      "06deaca4e54a9bed",
+      "7046b111f705c203",
+      "8af3358680e52ce6"
+    ],
+    "added": [],
+    "forbidden_by_review": [
+      "0354b1c94465e8fa",
+      "04fecfe10663ca9e",
+      "056c099d0cdc87dc",
+      "0ba16a185b968677",
+      "0d12f113e63a8394",
+      "136bc94e107e7322",
+      "2967218d0a6b8a87",
+      "3119c1dbe1401ad6",
+      "320526e7aa993d94",
+      "4adca799946e9746",
+      "4db19a60340183f1",
+      "506695be7c75beb4",
+      "66bd064264237b14",
+      "6c79d219963c7c6b",
+      "6e36a4a0ea9a4863",
+      "85d00244c80e34b4",
+      "919a0f8762d3324a",
+      "946445a4d53aaad4",
+      "aaec00ea0cb4e288",
+      "bccacd0de0bcf613",
+      "bdce5d00bd5dd8a4",
+      "c51b5daeacbf9861",
+      "c7077f6e723bc063",
+      "c7f1dec26cc26ebb",
+      "d5b08c340f658cca",
+      "d9be55c8d5f3733b",
+      "e213df726b2d53ee",
+      "e55252c484df29c8"
+    ],
+    "removed": []
+  },
+  "counts": {
+    "connectors": {
+      "preliminary": 116,
+      "reviewed": 116
+    },
+    "findings": {
+      "preliminary": 144,
+      "reviewed": 113
+    },
+    "lanes": {
+      "preliminary": 285,
+      "reviewed": 285
+    },
+    "restrictions": {
+      "preliminary": 8,
+      "reviewed": 8
+    },
+    "signals": {
+      "preliminary": 1,
+      "reviewed": 1
+    },
+    "stop_lines": {
+      "preliminary": 0,
+      "reviewed": 0
+    }
+  },
+  "finding_decisions": {
+    "0084b199af3c4663": {
+      "answers_finding_id": "0084b199af3c4663",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "00af11b811a3fbe9": {
+      "answers_finding_id": "00af11b811a3fbe9",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "0164d20308d8dd09": {
+      "answers_finding_id": "0164d20308d8dd09",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "02515bdef8585067": {
+      "answers_finding_id": "02515bdef8585067",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "050d3fffcb4fb2ea": {
+      "answers_finding_id": "050d3fffcb4fb2ea",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "091d89f2c1bef841": {
+      "answers_finding_id": "091d89f2c1bef841",
+      "proposed_value": {
+        "direction": "backward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "0eeaeee07364fc49": {
+      "answers_finding_id": "0eeaeee07364fc49",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "0fcff54fa4eb33b1": {
+      "answers_finding_id": "0fcff54fa4eb33b1",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "1504e9a140653758": {
+      "answers_finding_id": "1504e9a140653758",
+      "proposed_value": {
+        "direction": "backward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "17b3756223a71a6c": {
+      "answers_finding_id": "17b3756223a71a6c",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "17f82fe93616e301": {
+      "answers_finding_id": "17f82fe93616e301",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "1a2ff80ff312c04c": {
+      "answers_finding_id": "1a2ff80ff312c04c",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "1f2219addc70b1ad": {
+      "answers_finding_id": "1f2219addc70b1ad",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "1fd18940466eea36": {
+      "answers_finding_id": "1fd18940466eea36",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "1ff8f1cb902a754d": {
+      "answers_finding_id": "1ff8f1cb902a754d",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "2901066def1ef543": {
+      "answers_finding_id": "2901066def1ef543",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "2a3be145b0c07702": {
+      "answers_finding_id": "2a3be145b0c07702",
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "2b5f54f60fb558d2": {
+      "answers_finding_id": "2b5f54f60fb558d2",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "2cd11f08ed1a3600": {
+      "answers_finding_id": "2cd11f08ed1a3600",
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "2d3551c255b80351": {
+      "answers_finding_id": "2d3551c255b80351",
+      "proposed_value": {
+        "direction": "backward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "2df4aba0dac4e8e4": {
+      "answers_finding_id": "2df4aba0dac4e8e4",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "31f62970490e0800": {
+      "answers_finding_id": "31f62970490e0800",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "31f7cfe441cbb146": {
+      "answers_finding_id": "31f7cfe441cbb146",
+      "proposed_value": {
+        "rejected_movements": [
+          "left",
+          "through"
+        ],
+        "restored_angle_degrees": 5.82,
+        "restored_movement": "through",
+        "turn_permissions": [
+          "right"
+        ]
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "34bd0e3c8ace99e5": {
+      "answers_finding_id": "34bd0e3c8ace99e5",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "37bcaa655c67cc4f": {
+      "answers_finding_id": "37bcaa655c67cc4f",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "3896f761a14f7965": {
+      "answers_finding_id": "3896f761a14f7965",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "3919f3f410641f01": {
+      "answers_finding_id": "3919f3f410641f01",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "3b2c70db9c3772ab": {
+      "answers_finding_id": "3b2c70db9c3772ab",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "3b9b5bd3009f9530": {
+      "answers_finding_id": "3b9b5bd3009f9530",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "3c426b62d6442aa3": {
+      "answers_finding_id": "3c426b62d6442aa3",
+      "proposed_value": {
+        "direction": "backward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "44d5e7ab060e8c5e": {
+      "answers_finding_id": "44d5e7ab060e8c5e",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "45295fd0459ec60f": {
+      "answers_finding_id": "45295fd0459ec60f",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "46a90b46252b54c4": {
+      "answers_finding_id": "46a90b46252b54c4",
+      "proposed_value": {
+        "direction": "backward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "46b6131f47af7df9": {
+      "answers_finding_id": "46b6131f47af7df9",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "4b08dbaec9c73d70": {
+      "answers_finding_id": "4b08dbaec9c73d70",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "4ba8238ca055b0b3": {
+      "answers_finding_id": "4ba8238ca055b0b3",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "4bc80586321e5f18": {
+      "answers_finding_id": "4bc80586321e5f18",
+      "proposed_value": {
+        "departs_node_id": "1928630015",
+        "link_way_id": "182502392",
+        "metres_before_junction": 36.3,
+        "movement": "left",
+        "turn_angle_degrees": 88.975
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "4c025d7b6caa3d43": {
+      "answers_finding_id": "4c025d7b6caa3d43",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "4e0f86a163b9dcea": {
+      "answers_finding_id": "4e0f86a163b9dcea",
+      "proposed_value": {
+        "rejected_movements": [
+          "through"
+        ],
+        "restored_angle_degrees": -19.36,
+        "restored_movement": "through",
+        "turn_permissions": [
+          "right"
+        ]
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "55295a0417a66ed5": {
+      "answers_finding_id": "55295a0417a66ed5",
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "5722a801312d8c65": {
+      "answers_finding_id": "5722a801312d8c65",
+      "proposed_value": {
+        "direction": "backward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "57275e90cdebcb0e": {
+      "answers_finding_id": "57275e90cdebcb0e",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "58558c1fda74b7b9": {
+      "answers_finding_id": "58558c1fda74b7b9",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "590bded8aa167346": {
+      "answers_finding_id": "590bded8aa167346",
+      "proposed_value": {
+        "direction": "backward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "59be65b4b9ca0e97": {
+      "state": "undecided"
+    },
+    "5b12584fec701a83": {
+      "answers_finding_id": "5b12584fec701a83",
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "5b5431519eb915a9": {
+      "answers_finding_id": "5b5431519eb915a9",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "5be3e454f16ac500": {
+      "answers_finding_id": "5be3e454f16ac500",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "5d402d8f6d0996cf": {
+      "answers_finding_id": "5d402d8f6d0996cf",
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "5d58a1f20b140bdc": {
+      "answers_finding_id": "5d58a1f20b140bdc",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "5e4aa8f3cfc81e2c": {
+      "answers_finding_id": "5e4aa8f3cfc81e2c",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "5f88e8c3e3808e5a": {
+      "answers_finding_id": "5f88e8c3e3808e5a",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "66653e8a0057ecd3": {
+      "answers_finding_id": "66653e8a0057ecd3",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "6864df6b797864ea": {
+      "answers_finding_id": "6864df6b797864ea",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "6991443a460828ac": {
+      "answers_finding_id": "6991443a460828ac",
+      "proposed_value": {
+        "direction": "backward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "69e86cc04654b81c": {
+      "answers_finding_id": "69e86cc04654b81c",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "6ae430f2d04e547d": {
+      "answers_finding_id": "6ae430f2d04e547d",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "6c1ac8de80fc6b0c": {
+      "answers_finding_id": "6c1ac8de80fc6b0c",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "7028d05e8e300e2d": {
+      "answers_finding_id": "7028d05e8e300e2d",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "706473b6d53e1c70": {
+      "answers_finding_id": "706473b6d53e1c70",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "72d41a5fee7add32": {
+      "answers_finding_id": "72d41a5fee7add32",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "744442ebbfff8d9f": {
+      "answers_finding_id": "744442ebbfff8d9f",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "7d9d41e703d5051d": {
+      "answers_finding_id": "7d9d41e703d5051d",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "7e3233fee70b86e8": {
+      "answers_finding_id": "7e3233fee70b86e8",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "80bb3ace03b39426": {
+      "answers_finding_id": "80bb3ace03b39426",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "8e163ba6bd94f145": {
+      "answers_finding_id": "8e163ba6bd94f145",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "93a6bccba097fa66": {
+      "answers_finding_id": "93a6bccba097fa66",
+      "proposed_value": [
+        "1cae945509380974",
+        "1f39b9cd20831ad4",
+        "4628081f4cd9922f"
+      ],
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "93bc15bea70cb6b5": {
+      "answers_finding_id": "93bc15bea70cb6b5",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "979ef75a0fdf63b2": {
+      "answers_finding_id": "979ef75a0fdf63b2",
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "989b411397bffef2": {
+      "answers_finding_id": "989b411397bffef2",
+      "proposed_value": {
+        "rejected_movements": [
+          "left",
+          "through"
+        ],
+        "restored_angle_degrees": 5.82,
+        "restored_movement": "through",
+        "turn_permissions": [
+          "right"
+        ]
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "9e594377e965c2ec": {
+      "answers_finding_id": "9e594377e965c2ec",
+      "proposed_value": {
+        "direction": "backward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "9e664a714ab668df": {
+      "answers_finding_id": "9e664a714ab668df",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "a2c4f58d30060498": {
+      "answers_finding_id": "a2c4f58d30060498",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "a5cbb86f76639cce": {
+      "answers_finding_id": "a5cbb86f76639cce",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "a613f89c6aeb66c7": {
+      "answers_finding_id": "a613f89c6aeb66c7",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "a63f18f16f8940aa": {
+      "answers_finding_id": "a63f18f16f8940aa",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "a6b606fbb6699c4e": {
+      "answers_finding_id": "a6b606fbb6699c4e",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "a6fba84e406b2b0c": {
+      "answers_finding_id": "a6fba84e406b2b0c",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "ad04a621be52b759": {
+      "answers_finding_id": "ad04a621be52b759",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "ad9b53caff8326be": {
+      "answers_finding_id": "ad9b53caff8326be",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "b21c9671d777ca1a": {
+      "answers_finding_id": "b21c9671d777ca1a",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "beeec34992c0d9c8": {
+      "answers_finding_id": "beeec34992c0d9c8",
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "c0277dc292f36a25": {
+      "answers_finding_id": "c0277dc292f36a25",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "c1c2a2c5db326605": {
+      "answers_finding_id": "c1c2a2c5db326605",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "c4f21f6900097a36": {
+      "answers_finding_id": "c4f21f6900097a36",
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "c66e9531920b0710": {
+      "answers_finding_id": "c66e9531920b0710",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "caa3e4f4bf22b974": {
+      "answers_finding_id": "caa3e4f4bf22b974",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "d2ed65713d55df3b": {
+      "answers_finding_id": "d2ed65713d55df3b",
+      "proposed_value": {
+        "chain": [
+          "777160375",
+          "777159293",
+          "777160373"
+        ],
+        "removed_connector_ids": [
+          "09326c75a32bd6a9"
+        ],
+        "restriction": "no_u_turn"
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "d73e2f88ebc027a6": {
+      "answers_finding_id": "d73e2f88ebc027a6",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "da338e22fe887ed8": {
+      "answers_finding_id": "da338e22fe887ed8",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "db681ab62c9ce73d": {
+      "answers_finding_id": "db681ab62c9ce73d",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "dd0aa7775aef9db4": {
+      "answers_finding_id": "dd0aa7775aef9db4",
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "dfa14a6699b48802": {
+      "answers_finding_id": "dfa14a6699b48802",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "e3310b279b762800": {
+      "answers_finding_id": "e3310b279b762800",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "e88082ea402873d3": {
+      "answers_finding_id": "e88082ea402873d3",
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "e9074c0db2bb4ad4": {
+      "answers_finding_id": "e9074c0db2bb4ad4",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "ed5f2c3fab38702b": {
+      "answers_finding_id": "ed5f2c3fab38702b",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "ed7537a83f292ae0": {
+      "answers_finding_id": "ed7537a83f292ae0",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "ee92de4ab58df326": {
+      "answers_finding_id": "ee92de4ab58df326",
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "f1454904672bf7af": {
+      "answers_finding_id": "f1454904672bf7af",
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "f3ed6d2e032d92a1": {
+      "answers_finding_id": "f3ed6d2e032d92a1",
+      "proposed_value": {
+        "chain": [
+          "777160373",
+          "39619063",
+          "777160375"
+        ],
+        "removed_connector_ids": [
+          "ed1e8a2432e248dd"
+        ],
+        "restriction": "no_u_turn"
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "f48bf98321d5115d": {
+      "answers_finding_id": "f48bf98321d5115d",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "f54e17b2e32d4e58": {
+      "answers_finding_id": "f54e17b2e32d4e58",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "f59415cc4156503e": {
+      "answers_finding_id": "f59415cc4156503e",
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    },
+    "f61f7b362a38851a": {
+      "answers_finding_id": "f61f7b362a38851a",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "f7b5dc6786362bb4": {
+      "answers_finding_id": "f7b5dc6786362bb4",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "f86f1b4d6f7f31cc": {
+      "answers_finding_id": "f86f1b4d6f7f31cc",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "f9406156ca962ae3": {
+      "answers_finding_id": "f9406156ca962ae3",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "fba5f6f7c281d884": {
+      "answers_finding_id": "fba5f6f7c281d884",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "fbc4f8f28a2ca6e1": {
+      "answers_finding_id": "fbc4f8f28a2ca6e1",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "fd4c1737c7e745c1": {
+      "answers_finding_id": "fd4c1737c7e745c1",
+      "proposed_value": 3.5,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "fe0ad142d9ead1d2": {
+      "answers_finding_id": "fe0ad142d9ead1d2",
+      "proposed_value": 50,
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "ignored",
+      "value": null
+    },
+    "fe3433b60c0c9c65": {
+      "answers_finding_id": "fe3433b60c0c9c65",
+      "proposed_value": {
+        "direction": "forward",
+        "lane_count": 1
+      },
+      "reason": null,
+      "satisfied": true,
+      "state": "decided",
+      "status": "accepted",
+      "value": null
+    }
+  },
+  "findings_still_open": [],
+  "findings_the_review_created": {
+    "blocking": [],
+    "by_rule": {},
+    "total": 0
+  },
+  "findings_the_review_resolved": {
+    "by_rule": {
+      "ambiguous_connector": {
+        "blocker": 31,
+        "warning": 0
+      }
+    },
+    "total": 31
+  },
+  "lanes": {
+    "added": [],
+    "removed": []
+  },
+  "lanes_given_an_exit": [
+    "b3f6c9d7ed8c200f",
+    "d61381effb2ba59a"
+  ],
+  "lanes_left_without_an_exit": [],
+  "lanes_without_an_exit_either_way": 18,
+  "left_open_as_not_applicable": [],
+  "ways_retagged": {}
+}

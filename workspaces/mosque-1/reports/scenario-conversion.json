@@ -1,0 +1,124 @@
+{
+  "artifacts": {
+    "dataset_mapping": {
+      "path": "scenarionet/dataset_mapping.pkl",
+      "sha256": "f7d6da646a0c2442d169345dc9d3aab19418a77cd1f2ff5aa5d0a4688eb98608",
+      "size_bytes": 71
+    },
+    "dataset_summary": {
+      "path": "scenarionet/dataset_summary.pkl",
+      "sha256": "09a9610fb378e8ffa027e193c840753c64a02af85d3c2e2b0e60b7cd82909828",
+      "size_bytes": 6601
+    },
+    "reachability_html": {
+      "path": "inspection/stage-6-reachability.html",
+      "sha256": "9acbc96b82af4bb94327ab0dd08b1f42ebdfa865f4c062167ff960c43afe7956",
+      "size_bytes": 285087
+    },
+    "route_builder_html": {
+      "path": "inspection/stage-6-route-builder.html",
+      "sha256": "584040a3ee6cebd3fdadc03fdc9de0dd48693548c7575226b49c7d8103cb3d7a",
+      "size_bytes": 289397
+    },
+    "scenario:mosque-1-b1fe3e0cc9bc58ec-t": {
+      "path": "scenarionet/sd_osm-scenario_v1_mosque-1-b1fe3e0cc9bc58ec-t.pkl",
+      "sha256": "8b6568cb8d52f80941632d6d582ce174623c1be160e9487468cbe447cbb3d890",
+      "size_bytes": 1137059
+    },
+    "signal_builder_html": {
+      "path": "inspection/stage-6-signal-builder.html",
+      "sha256": "6c35c9a95eccd59a6c323fc4f9ea7d0e28adfff7a8617744c3e59000a9fe6997",
+      "size_bytes": 288728
+    }
+  },
+  "converted": {
+    "connectors_active": 137,
+    "connectors_total": 200,
+    "junction_lanes": 202,
+    "lane_boundaries": 715,
+    "lanes": 405,
+    "phase_groups": 0,
+    "restrictions": 33,
+    "signalled_lanes": 0,
+    "signals": 4,
+    "stop_lines": 14
+  },
+  "generated_at": "2026-08-20T06:22:11.463280+00:00",
+  "inputs": {
+    "reviewed_lane_model": "lane-model/reviewed.json",
+    "reviewed_lane_model_sha256": "fd2e2a31b397549033b6a03ef530feb34a8c76cc1176d0b0ced7108be03facaf",
+    "routes": "routes.json",
+    "signals": null
+  },
+  "map_features": 1322,
+  "report_version": 1,
+  "routes": [
+    {
+      "distance_m": 460.31,
+      "driving_duration_s": 41.74,
+      "duration_s": 41.74,
+      "end_lane": "f72942fa4e2761c2",
+      "junction_movements": 14,
+      "lane_changes": 3,
+      "lanes": [
+        "433fa8957650a8dd",
+        "b3f6c9d7ed8c200f",
+        "cab3280515d4b733",
+        "7fcd934cbee2b9da",
+        "c1465d55f5a0ffe8",
+        "2028b9790521107c",
+        "c101f8ed67cfa129",
+        "5f0db076760efef0",
+        "f97d680eef3168be",
+        "c51b4904edcfce88",
+        "9e6aa3eac0a24298",
+        "228b912d0cfb6359",
+        "2603bce63d3ee855",
+        "d61381effb2ba59a",
+        "5fe50f735e40d7c2",
+        "863caef770461b65",
+        "53022bb86ae16748",
+        "f72942fa4e2761c2"
+      ],
+      "name": "t",
+      "slowest_kph": 11.13,
+      "source": "generated",
+      "speed_kph": 50.0,
+      "start_lane": "433fa8957650a8dd",
+      "stops": [],
+      "waiting_s": 0
+    }
+  ],
+  "routing": {
+    "best_start_lane_id": "fc4189b0b2acf30c",
+    "best_start_reaches": 348,
+    "components_respecting_direction": {
+      "count": 114,
+      "largest": 116
+    },
+    "lane_change_edges": 376,
+    "lane_changes_allowed": true,
+    "lanes_reaching_nothing": 3,
+    "median_reach": 177,
+    "possible_lane_pairs": 163620,
+    "reachable_lane_pairs": 60471,
+    "without_lane_changes": {
+      "best_start_lane_id": "81dbf1caa6ccc530",
+      "best_start_reaches": 148,
+      "components_respecting_direction": {
+        "count": 352,
+        "largest": 54
+      },
+      "lanes_reaching_nothing": 16,
+      "median_reach": 20,
+      "possible_lane_pairs": 163620,
+      "reachable_lane_pairs": 12310
+    }
+  },
+  "scenario_files": [
+    "sd_osm-scenario_v1_mosque-1-b1fe3e0cc9bc58ec-t.pkl"
+  ],
+  "scenario_id": "mosque-1-b1fe3e0cc9bc58ec",
+  "signals": null,
+  "status": "converted"
+}

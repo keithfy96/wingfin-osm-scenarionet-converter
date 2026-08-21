@@ -1,0 +1,21 @@
+{
+  "signals_version": 1,
+  "identity": {
+    "generation_fingerprint": "ce2efbed720afb5e57f69f1a66d50d8fa4d5386eee28e5cbe7e13e4268194ac6",
+    "reviewed_lane_model_sha256": "6902568a1e4188e614ed06e762ff51bcd67755e85a17f48e8cbf5809f65ed6dc"
+  },
+  "cycle_seconds": 60,
+  "groups": [
+    {
+      "name": "phase-a",
+      "lanes": [
+        "9f83d567b07605dc",
+        "bf35774542bb44d6",
+        "d20282ae0fe3c37e"
+      ],
+      "green_seconds": 27,
+      "yellow_seconds": 3,
+      "offset_seconds": 0
+    }
+  ]
+}

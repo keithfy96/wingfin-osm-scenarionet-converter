@@ -1,0 +1,520 @@
+{
+  "connectivity": {
+    "component_count": 2,
+    "components": [
+      {
+        "component_id": "component-1",
+        "directed_edge_count": 187,
+        "highway_counts": {
+          "residential": 14,
+          "secondary": 12,
+          "secondary_link": 4,
+          "tertiary": 10
+        },
+        "is_primary": true,
+        "node_count": 129,
+        "osm_way_ids": [
+          "38951183",
+          "39616769",
+          "39618724",
+          "39619063",
+          "106667716",
+          "107906776",
+          "182502392",
+          "182502406",
+          "182502409",
+          "182502423",
+          "334662874",
+          "756118314",
+          "756118316",
+          "760225055",
+          "776021084",
+          "776021086",
+          "776021087",
+          "776021089",
+          "776021091",
+          "776022253",
+          "776022254",
+          "776370583",
+          "776370584",
+          "777159293",
+          "777159294",
+          "777160373",
+          "777160374",
+          "777160375",
+          "935525164",
+          "1013712948",
+          "1013712950",
+          "1013715114",
+          "1016771782",
+          "1016780741",
+          "1173001826",
+          "1213764873",
+          "1213764874",
+          "1351503426",
+          "1530245742",
+          "1530245743"
+        ],
+        "unique_osm_way_count": 40
+      },
+      {
+        "component_id": "component-2",
+        "directed_edge_count": 9,
+        "highway_counts": {
+          "residential": 1
+        },
+        "is_primary": false,
+        "node_count": 10,
+        "osm_way_ids": [
+          "107911720"
+        ],
+        "unique_osm_way_count": 1
+      }
+    ],
+    "non_primary_component_count": 1
+  },
+  "downstream_readiness": "review_required",
+  "generated_at": "2026-08-15T17:34:31.183630+00:00",
+  "inputs": {
+    "acquisition_report": "reports/acquisition.json",
+    "normalized_graph": "normalized/road-network-local.graphml",
+    "source_osm": "source/map.osm"
+  },
+  "lane_count_coverage": {
+    "details": [
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": "Jalan Kenanga SD 9/6",
+        "oneway": "yes",
+        "osm_way_id": "39616769",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": "Jalan Kenanga SD 9/8",
+        "oneway": null,
+        "osm_way_id": "39618724",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": "Jalan Kenanga SD 9/9",
+        "oneway": "yes",
+        "osm_way_id": "106667716",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": "Jalan SD 9/7B",
+        "oneway": null,
+        "osm_way_id": "107906776",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": "Jalan Damar SD 15/1",
+        "oneway": "yes",
+        "osm_way_id": "107911720",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": "Jalan Ara SD 7/5",
+        "oneway": null,
+        "osm_way_id": "760225055",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": null,
+        "oneway": null,
+        "osm_way_id": "1013712948",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": "Jalan Kenanga SD 9/7A",
+        "oneway": "yes",
+        "osm_way_id": "1013712950",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": "Jalan Kenanga SD 9/7",
+        "oneway": null,
+        "osm_way_id": "1013715114",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": "Jalan Kenanga SD 9/5",
+        "oneway": null,
+        "osm_way_id": "1016771782",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": null,
+        "oneway": "yes",
+        "osm_way_id": "1016780741",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": "Jalan Ara SD 7/4",
+        "oneway": null,
+        "osm_way_id": "1213764873",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": "Jalan Ara SD 7/5",
+        "oneway": null,
+        "osm_way_id": "1213764874",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": "Jalan Kenanga SD 9/5",
+        "oneway": null,
+        "osm_way_id": "1351503426",
+        "source_way_found": true,
+        "width": null
+      }
+    ],
+    "inference_enabled": true,
+    "missing_by_highway": {
+      "residential": 14
+    },
+    "missing_way_count": 14
+  },
+  "report_version": 1,
+  "selected_network": {
+    "directed_edge_count": 196,
+    "node_count": 139,
+    "unique_osm_way_count": 41
+  },
+  "stage_1_preflight": {
+    "blocking_error_count": 0,
+    "warning_counts": {
+      "disconnected_component": 1,
+      "missing_lane_count": 14
+    }
+  },
+  "stage_1b_status": "passed",
+  "stop_line_geometry": {
+    "candidate_way_count": 0,
+    "candidate_way_ids": [],
+    "detection_rule": "normalized source way tag key or value exactly equals stop_line"
+  },
+  "traffic_signals": {
+    "details": [
+      {
+        "component_id": "component-1",
+        "osm_node_id": "1927184932",
+        "retained_in_driving_graph": true,
+        "source_tags": {
+          "highway": "traffic_signals"
+        }
+      }
+    ],
+    "excluded_count": 0,
+    "note": "Graph membership does not prove an unambiguous lanelet association.",
+    "retained_count": 1,
+    "source_count": 1
+  },
+  "turn_restrictions": {
+    "details": [
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "39619063",
+            "role": "via",
+            "type": "way"
+          },
+          {
+            "ref": "777160375",
+            "role": "to",
+            "type": "way"
+          },
+          {
+            "ref": "777160373",
+            "role": "from",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "10421009",
+        "restriction": "no_u_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "776021084",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "474929865",
+            "role": "via",
+            "type": "node"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "10747835",
+        "restriction": "only_straight_on"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "474929865",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "776021086",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "10747836",
+        "restriction": "no_u_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "777160375",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "777159293",
+            "role": "via",
+            "type": "way"
+          },
+          {
+            "ref": "777160373",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "10761640",
+        "restriction": "no_u_turn"
+      },
+      {
+        "fully_retained_way_members": false,
+        "members": [
+          {
+            "ref": "859429322",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "1927184932",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "859429321",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [
+          "859429321",
+          "859429322"
+        ],
+        "osm_relation_id": "12632784",
+        "restriction": "no_straight_on"
+      },
+      {
+        "fully_retained_way_members": false,
+        "members": [
+          {
+            "ref": "859429322",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "1927184932",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "1173001826",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [
+          "859429322"
+        ],
+        "osm_relation_id": "15857896",
+        "restriction": "no_right_turn"
+      },
+      {
+        "fully_retained_way_members": false,
+        "members": [
+          {
+            "ref": "1173001828",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "1927184932",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "859429321",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [
+          "859429321",
+          "1173001828"
+        ],
+        "osm_relation_id": "15857897",
+        "restriction": "no_right_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "777159294",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "7251588323",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "756118316",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "16740674",
+        "restriction": "no_right_turn"
+      }
+    ],
+    "fully_retained_way_member_count": 5,
+    "note": "Retained way members do not replace downstream from/via/to validation.",
+    "partially_or_not_retained_count": 3,
+    "source_count": 8
+  },
+  "width_coverage": {
+    "configured_default_lane_width_metres": 3.5,
+    "missing_way_count": 41,
+    "missing_way_ids": [
+      "38951183",
+      "39616769",
+      "39618724",
+      "39619063",
+      "106667716",
+      "107906776",
+      "107911720",
+      "182502392",
+      "182502406",
+      "182502409",
+      "182502423",
+      "334662874",
+      "756118314",
+      "756118316",
+      "760225055",
+      "776021084",
+      "776021086",
+      "776021087",
+      "776021089",
+      "776021091",
+      "776022253",
+      "776022254",
+      "776370583",
+      "776370584",
+      "777159293",
+      "777159294",
+      "777160373",
+      "777160374",
+      "777160375",
+      "935525164",
+      "1013712948",
+      "1013712950",
+      "1013715114",
+      "1016771782",
+      "1016780741",
+      "1173001826",
+      "1213764873",
+      "1213764874",
+      "1351503426",
+      "1530245742",
+      "1530245743"
+    ],
+    "tagged_way_count": 0,
+    "tagged_way_ids": []
+  }
+}

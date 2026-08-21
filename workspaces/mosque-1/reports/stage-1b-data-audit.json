@@ -1,0 +1,1104 @@
+{
+  "connectivity": {
+    "component_count": 1,
+    "components": [
+      {
+        "component_id": "component-1",
+        "directed_edge_count": 217,
+        "highway_counts": {
+          "residential": 10,
+          "secondary": 28,
+          "secondary_link": 14,
+          "tertiary": 17
+        },
+        "is_primary": true,
+        "node_count": 170,
+        "osm_way_ids": [
+          "39617908",
+          "39619063",
+          "39620642",
+          "107906793",
+          "107911751",
+          "182502377",
+          "182502392",
+          "182502405",
+          "182502406",
+          "182502409",
+          "182502420",
+          "182502423",
+          "184015392",
+          "191861353",
+          "191861354",
+          "334662874",
+          "756118314",
+          "756118316",
+          "756118317",
+          "760225055",
+          "776021084",
+          "776021086",
+          "776021087",
+          "776021090",
+          "776021091",
+          "776022253",
+          "776022254",
+          "776079597",
+          "776079599",
+          "776079600",
+          "776370164",
+          "776370584",
+          "777159293",
+          "777159294",
+          "777160373",
+          "777160374",
+          "777160375",
+          "777816409",
+          "777816410",
+          "859423754",
+          "859423755",
+          "859423756",
+          "859429321",
+          "859429322",
+          "859432210",
+          "935525160",
+          "935525161",
+          "935525162",
+          "935525163",
+          "935525164",
+          "935525165",
+          "1173001826",
+          "1173001827",
+          "1173001828",
+          "1173001829",
+          "1173001830",
+          "1213764873",
+          "1250683198",
+          "1250683199",
+          "1351503423",
+          "1351503424",
+          "1351503428",
+          "1351503429",
+          "1351503430",
+          "1351503431",
+          "1423351116",
+          "1520562390",
+          "1530245742",
+          "1530245743"
+        ],
+        "unique_osm_way_count": 69
+      }
+    ],
+    "non_primary_component_count": 0
+  },
+  "downstream_readiness": "review_required",
+  "generated_at": "2026-08-20T06:15:23.212953+00:00",
+  "inputs": {
+    "acquisition_report": "reports/acquisition.json",
+    "normalized_graph": "normalized/road-network-local.graphml",
+    "source_osm": "source/map.osm"
+  },
+  "lane_count_coverage": {
+    "details": [
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": "Jalan Saga SD 8/6",
+        "oneway": null,
+        "osm_way_id": "39617908",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": "Jalan Saga SD 8/1",
+        "oneway": null,
+        "osm_way_id": "107906793",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": "Jalan Ara SD 7/3",
+        "oneway": null,
+        "osm_way_id": "107911751",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": "Jalan Ara SD 7/5",
+        "oneway": null,
+        "osm_way_id": "760225055",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": "Jalan Ara SD 7/4",
+        "oneway": null,
+        "osm_way_id": "1213764873",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": "Jalan Saga SD 8/1",
+        "oneway": null,
+        "osm_way_id": "1351503428",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": null,
+        "oneway": "yes",
+        "osm_way_id": "1351503429",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": null,
+        "oneway": "yes",
+        "osm_way_id": "1351503430",
+        "source_way_found": true,
+        "width": null
+      },
+      {
+        "highway": "residential",
+        "lanes": null,
+        "lanes_backward": null,
+        "lanes_forward": null,
+        "name": "Jalan Saga SD 8/6",
+        "oneway": "yes",
+        "osm_way_id": "1423351116",
+        "source_way_found": true,
+        "width": null
+      }
+    ],
+    "inference_enabled": true,
+    "missing_by_highway": {
+      "residential": 9
+    },
+    "missing_way_count": 9
+  },
+  "report_version": 1,
+  "selected_network": {
+    "directed_edge_count": 217,
+    "node_count": 170,
+    "unique_osm_way_count": 69
+  },
+  "stage_1_preflight": {
+    "blocking_error_count": 0,
+    "warning_counts": {
+      "missing_lane_count": 9
+    }
+  },
+  "stage_1b_status": "passed",
+  "stop_line_geometry": {
+    "candidate_way_count": 0,
+    "candidate_way_ids": [],
+    "detection_rule": "normalized source way tag key or value exactly equals stop_line"
+  },
+  "traffic_signals": {
+    "details": [
+      {
+        "component_id": "component-1",
+        "osm_node_id": "1927184932",
+        "retained_in_driving_graph": true,
+        "source_tags": {
+          "highway": "traffic_signals"
+        }
+      },
+      {
+        "component_id": "component-1",
+        "osm_node_id": "8010943711",
+        "retained_in_driving_graph": true,
+        "source_tags": {
+          "highway": "traffic_signals"
+        }
+      },
+      {
+        "component_id": "component-1",
+        "osm_node_id": "8010943712",
+        "retained_in_driving_graph": true,
+        "source_tags": {
+          "highway": "traffic_signals"
+        }
+      },
+      {
+        "component_id": "component-1",
+        "osm_node_id": "8010943718",
+        "retained_in_driving_graph": true,
+        "source_tags": {
+          "highway": "traffic_signals"
+        }
+      }
+    ],
+    "excluded_count": 0,
+    "note": "Graph membership does not prove an unambiguous lanelet association.",
+    "retained_count": 4,
+    "source_count": 4
+  },
+  "turn_restrictions": {
+    "details": [
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "39619063",
+            "role": "via",
+            "type": "way"
+          },
+          {
+            "ref": "777160375",
+            "role": "to",
+            "type": "way"
+          },
+          {
+            "ref": "777160373",
+            "role": "from",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "10421009",
+        "restriction": "no_u_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "776021084",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "474929865",
+            "role": "via",
+            "type": "node"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "10747835",
+        "restriction": "only_straight_on"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "474929865",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "776021086",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "10747836",
+        "restriction": "no_u_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "777160375",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "777159293",
+            "role": "via",
+            "type": "way"
+          },
+          {
+            "ref": "777160373",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "10761640",
+        "restriction": "no_u_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "859429322",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "1927184932",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "859429321",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "12632784",
+        "restriction": "no_straight_on"
+      },
+      {
+        "fully_retained_way_members": false,
+        "members": [
+          {
+            "ref": "756118317",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "776369869",
+            "role": "via",
+            "type": "way"
+          },
+          {
+            "ref": "776369868",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [
+          "776369868",
+          "776369869"
+        ],
+        "osm_relation_id": "15336555",
+        "restriction": "no_u_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "859429322",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "1927184932",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "1173001826",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "15857896",
+        "restriction": "no_right_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "1173001828",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "1927184932",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "859429321",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "15857897",
+        "restriction": "no_right_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "1173001830",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "1927184950",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "1520562390",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "15857898",
+        "restriction": "no_left_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "1173001829",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "1983979095",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "859423754",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "15857899",
+        "restriction": "no_left_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "1173001829",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "1173001827",
+            "role": "via",
+            "type": "way"
+          },
+          {
+            "ref": "935525160",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "15857900",
+        "restriction": "no_right_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "1173001830",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "935525160",
+            "role": "via",
+            "type": "way"
+          },
+          {
+            "ref": "935525165",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "15857902",
+        "restriction": "no_u_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "777159294",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "7251588323",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "756118316",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "16740674",
+        "restriction": "no_right_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "756118317",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "474922037",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "776079599",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "17216544",
+        "restriction": "no_right_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "39620642",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "474922037",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "776079599",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "17216545",
+        "restriction": "no_left_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "776079600",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "474922037",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "1250683198",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "17216546",
+        "restriction": "no_left_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "756118317",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "474922037",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "776079600",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "17216547",
+        "restriction": "no_left_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "776079600",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "1928630011",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "182502405",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "17216549",
+        "restriction": "no_right_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "191861354",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "1928630011",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "182502405",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "17216550",
+        "restriction": "no_right_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "191861354",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "1928630011",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "776079600",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "17216551",
+        "restriction": "no_right_turn"
+      },
+      {
+        "fully_retained_way_members": false,
+        "members": [
+          {
+            "ref": "1250683198",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "1239566839",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "776369866",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [
+          "776369866"
+        ],
+        "osm_relation_id": "17477310",
+        "restriction": "no_right_turn"
+      },
+      {
+        "fully_retained_way_members": false,
+        "members": [
+          {
+            "ref": "107949925",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "1239566839",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "776369866",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [
+          "107949925",
+          "776369866"
+        ],
+        "osm_relation_id": "17477313",
+        "restriction": "no_left_turn"
+      },
+      {
+        "fully_retained_way_members": false,
+        "members": [
+          {
+            "ref": "107949925",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "1239566839",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "1272969890",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [
+          "107949925",
+          "1272969890"
+        ],
+        "osm_relation_id": "17477314",
+        "restriction": "no_right_turn"
+      },
+      {
+        "fully_retained_way_members": false,
+        "members": [
+          {
+            "ref": "301872192",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "1301646883",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [
+          "301872192",
+          "1301646883"
+        ],
+        "osm_relation_id": "17841243",
+        "restriction": "no_right_turn"
+      },
+      {
+        "fully_retained_way_members": false,
+        "members": [
+          {
+            "ref": "301872192",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "301872201",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [
+          "301872192",
+          "301872201"
+        ],
+        "osm_relation_id": "17841244",
+        "restriction": "no_right_turn"
+      },
+      {
+        "fully_retained_way_members": false,
+        "members": [
+          {
+            "ref": "1301646883",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "301872201",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [
+          "301872201",
+          "1301646883"
+        ],
+        "osm_relation_id": "17841245",
+        "restriction": "no_right_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "935525160",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "8010943714",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "935525165",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "18555948",
+        "restriction": "no_right_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "1173001827",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "1927184950",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "935525160",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "18555949",
+        "restriction": "no_right_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "859423756",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "8010943714",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "859423755",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "18555950",
+        "restriction": "no_left_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "859423756",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "935525165",
+            "role": "via",
+            "type": "way"
+          },
+          {
+            "ref": "1173001827",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "18555951",
+        "restriction": "no_u_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "935525165",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "1983979095",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "1173001827",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "18555952",
+        "restriction": "no_right_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "1351503429",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "12503933584",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "1351503430",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "18555953",
+        "restriction": "no_right_turn"
+      },
+      {
+        "fully_retained_way_members": true,
+        "members": [
+          {
+            "ref": "1351503423",
+            "role": "from",
+            "type": "way"
+          },
+          {
+            "ref": "1239242579",
+            "role": "via",
+            "type": "node"
+          },
+          {
+            "ref": "1351503429",
+            "role": "to",
+            "type": "way"
+          }
+        ],
+        "missing_way_member_ids": [],
+        "osm_relation_id": "18555954",
+        "restriction": "no_right_turn"
+      }
+    ],
+    "fully_retained_way_member_count": 26,
+    "note": "Retained way members do not replace downstream from/via/to validation.",
+    "partially_or_not_retained_count": 7,
+    "source_count": 33
+  },
+  "width_coverage": {
+    "configured_default_lane_width_metres": 3.5,
+    "missing_way_count": 69,
+    "missing_way_ids": [
+      "39617908",
+      "39619063",
+      "39620642",
+      "107906793",
+      "107911751",
+      "182502377",
+      "182502392",
+      "182502405",
+      "182502406",
+      "182502409",
+      "182502420",
+      "182502423",
+      "184015392",
+      "191861353",
+      "191861354",
+      "334662874",
+      "756118314",
+      "756118316",
+      "756118317",
+      "760225055",
+      "776021084",
+      "776021086",
+      "776021087",
+      "776021090",
+      "776021091",
+      "776022253",
+      "776022254",
+      "776079597",
+      "776079599",
+      "776079600",
+      "776370164",
+      "776370584",
+      "777159293",
+      "777159294",
+      "777160373",
+      "777160374",
+      "777160375",
+      "777816409",
+      "777816410",
+      "859423754",
+      "859423755",
+      "859423756",
+      "859429321",
+      "859429322",
+      "859432210",
+      "935525160",
+      "935525161",
+      "935525162",
+      "935525163",
+      "935525164",
+      "935525165",
+      "1173001826",
+      "1173001827",
+      "1173001828",
+      "1173001829",
+      "1173001830",
+      "1213764873",
+      "1250683198",
+      "1250683199",
+      "1351503423",
+      "1351503424",
+      "1351503428",
+      "1351503429",
+      "1351503430",
+      "1351503431",
+      "1423351116",
+      "1520562390",
+      "1530245742",
+      "1530245743"
+    ],
+    "tagged_way_count": 0,
+    "tagged_way_ids": []
+  }
+}
