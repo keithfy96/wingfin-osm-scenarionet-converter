@@ -608,27 +608,44 @@ out along the way.
 ### Time it: how much real time one simulated second costs
 
 ```bash
-./step-timing.sh junction-1                          # every rate the workspace holds
-./step-timing.sh junction-1 -- --rows 1,2,5          # add the pinned-physics row
+./step-timing.sh junction-1                          # rows 1-6, every rate the workspace holds
+./step-timing.sh junction-1 -- --rows 5              # one row on its own
+./step-timing.sh junction-1 -- --rows 2,6            # the pair that prices the camera
 ./step-timing.sh junction-1 -- --physics-hz 100      # pin the integrator on every row
 ./step-timing.sh mosque -- --label rig-container     # name the machine in the CSV
 ./step-timing.sh -- --list-rows                      # what each row measures, and exit
+
+# price the vehicle's own cameras instead of the single one this tool invents
+./step-timing.sh mosque -- --camera-rig ~/Desktop/work/wingfin/data/cams.txt
 ```
 
 **`docs/step-timing-rows.md` is the reference** for what every row, printed column and CSV
 field means. What follows is how to run it and what it found.
 
-The default is **two rows that differ only in who drives** — row 1 replays the recorded track and
-decides nothing, row 2 puts MetaDrive's IDM in the seat. Put your own model behind `--policy-url`
-and run `--rows 3` and it takes the same seat; nothing else runs unless `--rows` asks for it, which
-is the usual reason a row is absent from a table.
+The default is **every row but 7**, which opens a window and so cannot run unattended — it is one
+`--rows 7` away. Rows 1 and 2 differ only in who drives: row 1 replays the recorded track and
+decides nothing, row 2 puts MetaDrive's IDM in the seat. Row 3 puts *your* model in the same seat
+over `--policy-url`, and skips itself with `needs --policy-url` when nothing is listening rather
+than disappearing from the table. `--rows 5` runs one row on its own.
 
-**Both default rows carry a 320×180 camera**, drawn and read every step — `--render offscreen` is
+**Every offscreen row carries a camera**, drawn and read every step — `--render offscreen` is
 the only way one exists without a window, and MetaDrive builds the observation out of it inside
 `env.step`. It is **about three quarters of what a step costs**, so it is the thing this sweep is
 mostly measuring. `--rows 2,6` prices it: on this laptop the same 10 Hz drive is 16.69 ms a step
 with the camera and **4.06 without**, 5.45x real time against **19.82x** — and at 100 Hz it is the
 difference between 0.51x and **2.30x**, between slower than the clock and twice as fast as it.
+
+**That camera is one the tool invented, until `--camera-rig` names a real one.** Unflagged it is a
+single 320×180 buffer, a size chosen in `step_timing.py` rather than by any vehicle — so an
+unflagged figure is not what *your* car costs. `--camera-rig` takes the same CARLA-shaped spec
+`sensor-survey.sh` takes and mounts those cameras instead. Measured on `junction-1` at 10 Hz over
+200 steps, replay row, same drive each time: the seven-camera spec (six 512×288 and one 1280×720,
+**5.42 MB of image a step** against 0.17) runs at **24.70 ms a step and 3.08x real time**, against
+**10.00 ms and 9.28x** for the invented camera and 3.20 ms / 27.20x with no graphics at all. So the
+rig is about 21.5 ms of a 24.7 ms step, and it is the difference between a sweep that runs at nine
+times the clock and one that runs at three. Reading all seven back out is a further 3.90 ms,
+reported on its own as `rig_ms_median` — a buffer copy rather than a second render, which is why it
+is timed in the loop where a row's own `read` list may not touch a camera.
 
 **Read the `policy` column, not the difference between the rows.** Subtracting one row from the
 other was the intent and it does not survive the machine: measured three times over, row 1 came
@@ -646,12 +663,16 @@ container on another box concatenates with this one and needs nothing lined up b
 Measured on this laptop (RTX 4050, `junction-1`, whole drive):
 
 ```
-  #  render     policy  sensors        decide  physics  rpt   steps   sim s  wall s  x real  ms/step  policy    p95
-  1  offscreen  replay  camera,imu,gps   10 Hz    50 Hz  x5     332    33.2     5.7   5.79x   16.80    0.00  21.39
-  2  offscreen  idm     camera,imu,gps   10 Hz    50 Hz  x5     271    27.1     4.5   6.08x   15.48    0.66  18.18
-  1  offscreen  replay  camera,imu,gps  100 Hz   100 Hz  x1    3496    35.0    57.4   0.61x   16.11    0.00  18.80
-  2  offscreen  idm     camera,imu,gps  100 Hz   100 Hz  x1    2219    22.2    38.6   0.57x   16.79    0.68  21.12
+  #  render     policy  sensors            decide  physics  rpt   steps   sim s  wall s  x real  ms/step  policy    p95
+  1  offscreen  replay  camera,imu,gps       10 Hz    50 Hz  x5     332    33.2     5.7   5.79x   16.80    0.00  21.39
+  2  offscreen  idm     camera,imu,gps       10 Hz    50 Hz  x5     271    27.1     4.5   6.08x   15.48    0.66  18.18
+  1  offscreen  replay  camera,imu,gps      100 Hz   100 Hz  x1    3496    35.0    57.4   0.61x   16.11    0.00  18.80
+  2  offscreen  idm     camera,imu,gps      100 Hz   100 Hz  x1    2219    22.2    38.6   0.57x   16.79    0.68  21.12
 ```
+
+Under `--camera-rig` the `sensors` cell reads `camera x7,imu,gps` and the CSV gains
+`camera_rig`, `camera_count`, `camera_mb_per_step` and `camera_hz`, so a file says which
+vehicle it was measuring rather than leaving it to be remembered.
 
 **The answer in one line: with a camera, 10 Hz runs at about 6x real time on this laptop and
 100 Hz runs at 0.6x** — slower than the clock, so an hour of simulated driving takes over an

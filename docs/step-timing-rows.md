@@ -7,11 +7,11 @@ get wrong. This says what a single row, column or CSV field actually holds.
 The same row table, shorter, is one command away:
 
 ```bash
-./scripts/step-timing.sh -- --list-rows
-
- ./step-timing.sh mosque -- --rows 5
- ./step-timing.sh mosque -- --rows 2,6
-
+./scripts/step-timing.sh -- --list-rows              # what each row measures
+./scripts/step-timing.sh mosque                      # rows 1-6, every rate the workspace holds
+./scripts/step-timing.sh mosque -- --rows 5          # one row on its own
+./scripts/step-timing.sh mosque -- --rows 2,6        # what the camera costs
+./scripts/step-timing.sh mosque -- --camera-rig ~/Desktop/work/wingfin/data/cams.txt
 ```
 
 > This describes MetaDrive's behaviour and our measurements of it. It is not a converter
@@ -24,29 +24,40 @@ The same row table, shorter, is one command away:
 A **row** is one configuration: a render mode, an ego policy, a set of sensors, and
 optionally a pinned physics rate. Each row is driven once per dataset, so a workspace
 holding `scenarionet-10hz` and `scenarionet-100hz` gives two measurements per row.
-`--rows 1,2` picks them; the default is `1,2`.
+**The default is every row but 7**, which needs a display and so cannot run unattended.
+`--rows 5` picks one, `--rows 2,6` picks two, `--rows 7` adds the display row.
 
 **`sensors` is what the drive carries, not what the timing loop reads.** Every offscreen row
-draws a 320×180 RGB camera every step and MetaDrive reads it inside `env.step`, so the
-camera is on the row whether or not this tool touches it — and it is **about three quarters
-of what a step costs**, so a column that left it out was hiding the answer. The loop reads only the
+draws an RGB camera every step and MetaDrive reads it inside `env.step`, so the camera is on
+the row whether or not this tool touches it — and it is **about three quarters of what a step
+costs**, so a column that left it out was hiding the answer. The loop reads only the
 numeric sensors; the camera must not be read there as well, for the reason under
 [Where the camera's cost is](#where-the-cameras-cost-is).
+
+**Unflagged, that camera is one this tool invented** — a single 320×180 buffer, a size chosen
+here rather than by a vehicle. `--camera-rig` mounts the real ones; see
+[The rig](#the-rig--camera-rig). Every figure in a sweep without it describes a car with one
+small forward camera.
 
 | # | `--render` | policy | sensors | physics | isolates | needs |
 |---|---|---|---|---|---|---|
 | **1** | offscreen | replay | camera,imu,gps | the dataset's | the floor: the same step with nothing deciding | a GL context |
 | **2** | offscreen | idm | camera,imu,gps | the dataset's | a training-shaped step, with a controller driving | a GL context |
-| 3 | offscreen | remote | camera,imu,gps | the dataset's | your model in the same seat | a GL context, `--policy-url` |
-| 4 | offscreen | idm | camera | the dataset's | vision only: a camera and MetaDrive's own state, nothing else read | a GL context |
-| 5 | offscreen | idm | camera,imu,gps | **100 Hz** | physics pinned: CARLA-shaped at a 10 Hz dataset | a GL context |
-| 6 | none | idm | imu,gps | the dataset's | no graphics at all: what the camera and the render path cost | nothing |
+| **3** | offscreen | remote | camera,imu,gps | the dataset's | your model in the same seat | a GL context, `--policy-url` |
+| **4** | offscreen | idm | camera | the dataset's | vision only: a camera and MetaDrive's own state, nothing else read | a GL context |
+| **5** | offscreen | idm | camera,imu,gps | **100 Hz** | physics pinned: CARLA-shaped at a 10 Hz dataset | a GL context |
+| **6** | none | idm | imu,gps | the dataset's | no graphics at all: what the camera and the render path cost | nothing |
 | 7 | 3D | replay | — | the dataset's | what `drive.sh` gives you | a display |
 
-Rows 1 and 2 are the default pair; the rest need `--rows`, and row 3 needs a model listening
-as well. A row that cannot run on this machine is **skipped, not fatal** — it still appears
-in the table and in the CSV, with `status=skipped` and the reason in `skip_reason`, so a
-file is never silently short.
+Rows **1–6 are the default**; 7 needs `--rows 7` because it opens a window. Row 3 is in the
+default and **skips itself** with `needs --policy-url` when no model is listening, which is a
+truer thing for the table to say than the row not being there at all. A row that cannot run on
+this machine is **skipped, not fatal** — it still appears in the table and in the CSV, with
+`status=skipped` and the reason in `skip_reason`, so a file is never silently short.
+
+With a rig the `sensors` cell reads `camera x7,imu,gps`; the count is on the word because a
+rig and the single invented camera are not the same measurement and must not print the same
+thing.
 
 The `sensors` cell of a row that actually ran is **read off the live env** — the camera is
 named when `image_observation` is on and one is really registered, and `camera_size` comes
@@ -72,6 +83,19 @@ your model will occupy, which is what makes this "training-shaped".
 **It does not drive the same route as row 1.** A replayed car follows the tape exactly; an
 IDM car follows its own line and may end early as `out_of_road`. So the two rows have
 different `steps` and `sim s`, and that is expected rather than a fault.
+
+**How far it may stray is raised for the whole sweep**, and this row is why. `ScenarioEnv`
+ends an episode when the car is `max_lateral_dist` from the *recorded* route — MetaDrive's
+default is 4 m (`scenario_env.py:84`) and it exists to judge **driving**. This tool measures
+what a step costs, and a car 6 m off its line costs the same per step as one on it. At 4 m
+the IDM rows on `mosque` ended `out_of_road` at step 44 with **24 steps measured**, against
+replay's 380 — and four of the six default rows are IDM, so most of the table would have
+been a median over two dozen samples. The sweep passes **20 m** instead, on every row
+including replay so that no row is measured under different termination rules from the one
+it is compared with. It is in the CSV as `max_lateral_m` rather than applied silently, and
+`ended_by` still says `out_of_road` if a row reaches even that. `--max-lateral-m` changes
+it; `drive.py` keeps MetaDrive's 4 m, because that tool *is* asking whether a drive is
+drivable.
 
 ### Row 3 — offscreen, remote, camera+imu+gps
 
@@ -221,6 +245,55 @@ One frame is drawn per `env.step` whatever the rate (`base_engine.py:458`, uncon
 so the image rate *is* the step rate and a camera costs a full 10x more per simulated second
 at 100 Hz — against 2x for the physics.
 
+### The rig — `--camera-rig`
+
+**Unflagged, the camera every offscreen row draws is one this tool invented**: a single
+320×180 `RGBCamera`, a size named in `step_timing.CAMERA_SIZE` rather than by any vehicle.
+Since the camera is most of what a step costs, that makes an unflagged sweep a measurement
+of a car nobody is building.
+
+`--camera-rig <spec>` takes the same CARLA-shaped file `sensor-survey.sh` takes, read by
+`tools/camera_rig.py`, and mounts the vehicle's own cameras instead. The spec this was
+written against is **7 cameras — six 512×288 and one 1280×720 wide — 5.42 MB of image a
+step**, against 0.17 MB for the invented one. Measured on `junction-1` at 10 Hz, 200 steps,
+row 1 (replay, so nothing is deciding) each time:
+
+| cameras | ms/step | x real |
+|---|---|---|
+| the 7-camera rig | **24.70** | **3.08x** |
+| one 320×180, unflagged | 10.00 / 9.26 | 9.28x / 10.31x |
+| row 6, no graphics at all | 3.20 | 27.20x |
+
+So the rig is about **21.5 ms of a 24.7 ms step** and turns a drive that ran at 9x real time
+into one that runs at 3x. That difference is the whole reason the flag exists.
+
+Five things it does, none of which is a preference:
+
+- **The cameras are mounted, not borrowed.** All seven are parented to the ego and filled by
+  the *same* render pass. MetaDrive's own multi-view example re-aims one camera per view,
+  which costs a `taskMgr.step()` each — measured in `camera_rig.py` at 20.4 ms/step mounted
+  against 77.3 ms borrowed.
+- **`rig_ms_median` is the read-back, and it is not a second render.** `CameraRig.read`
+  calls `perceive` with **no parent node**, so it copies buffers the frame pass already
+  filled. That is why it is allowed in the timing loop where a row's `read` list is not:
+  the bar is against forcing a second render pass, not against touching a camera. Measured
+  at **3.90 ms** for the seven. Only the `image_source` camera reaches the observation; the
+  other six are read here or not at all, and a training loop reads all of them.
+- **`image_source` is pointed at a rig camera.** `image_observation` builds the observation
+  from `config["sensors"][image_source]` (`image_obs.py:68`) and that name defaults to
+  `rgb_camera`, which a rig does not have — left alone, MetaDrive registers a dead 320×240
+  buffer beside the rig and renders it every step.
+- **More than `camera_rig.MAX_IMAGE_BUFFERS` (9) cameras is refused.** Past it `env.reset`
+  fails *intermittently* inside panda3d, which looks like a working rig until it does not.
+- **The spec's `tick_rate` is not honoured, and the run says so.** Cameras draw once per
+  `env.step` whatever the rate, so a rig declaring 0.1 s draws every 0.01 s on a 100 Hz
+  dataset. Nothing here resamples; a line is printed per dataset where the two differ, and
+  `camera_hz` records the rate they really drew at. Resampling is Phase 2 of
+  `docs/implementation-plan/adjustable-simulation-sample-rate.md`.
+
+Row 6 registers no cameras at all, so a rig changes nothing about it — which is what keeps
+it the reference the rig is priced against.
+
 ### Which rows to compare, and for what
 
 | question | read |
@@ -228,6 +301,8 @@ at 100 Hz — against 2x for the physics.
 | does the simulator keep up with nothing deciding? | row 1's `x real` |
 | what does the driver cost? | the `policy` column — **not** row 2 minus row 1 |
 | **what does the camera cost?** | **row 2 against row 6** — the render path and nothing else |
+| what does *my vehicle's* camera cost? | the same pair under `--camera-rig`. Without it the camera being priced is one 320×180 buffer this tool invented |
+| what does reading the rig back out cost? | `rig_ms_median` in the CSV — a buffer copy, not a second render |
 | what do imu/gps cost? | the `sensor` column. Around 0.13 ms, so no row subtracts to find it |
 | what does my model cost over the wire? | row 3's `policy`, which is the model plus the round trip |
 | what would a camera-only model run in? | row 4 |
@@ -280,13 +355,18 @@ own file; nothing is appended to and nothing is overwritten.
 | `row` | the row number |
 | `render` | `none`, `offscreen`, `3D` |
 | `policy` | `replay`, `idm`, `remote` |
-| `sensors` | what the drive carried, off the live env — `camera` when one was really registered and `image_observation` was on, plus this loop's own reads |
+| `sensors` | what the drive carried, off the live env — `camera`, or `camera x7` under a rig, when cameras were really registered and `image_observation` was on, plus this loop's own reads |
 | `camera_read_mode` | `observation` (MetaDrive's own read inside `env.step`, no extra render) or `none` (no camera). No row reads one in the timing loop, which would force a second render |
-| `camera_size` | the image the observation actually carried, `320x180`, from the frame's own shape |
+| `camera_rig` | the `--camera-rig` spec's file name, or empty — **empty means the camera priced was one 320×180 buffer this tool invented, not a vehicle's** |
+| `camera_count` | how many cameras the live env really held, counted by class rather than by name. `1` unflagged, `0` under `--render none` |
+| `camera_size` | the image the observation actually carried, from the frame's own shape. Under a rig this is the `image_source` camera, which is the spec's first |
+| `camera_mb_per_step` | uint8 megabytes the whole rig produces per step — 5.42 for the seven-camera spec. Empty without a rig |
+| `camera_hz` | the rate the cameras really drew at, which is always the step rate: MetaDrive redraws every buffer once per `env.step`, whatever a spec's `tick_rate` says |
 | `stack_size` | frames in the image observation, 3, likewise from the frame |
 | `norm_pixel` | `True`: float32 in [0, 1] rather than uint8 |
 | `observation_kind` | `image+state41` offscreen — a dict of image plus the 41-number state, **with no lidar block** — or `lidarstate161` under `--render none` |
 | `force_fps` | the engine's own `ForceFPS` state. `UnlimitedFPS` means nothing was throttling this row |
+| `max_lateral_m` | how far off the recorded route the car was allowed before the episode ended. 20 m, not MetaDrive's 4 — see [Row 2](#row-2--offscreen-idm-cameraimugps) |
 
 ### The outcome
 
@@ -310,6 +390,7 @@ own file; nothing is appended to and nothing is overwritten.
 | `step_ms_mean`, `step_ms_median`, `step_ms_p95`, `step_ms_p99`, `step_ms_max` | `env.step` alone |
 | `policy_ms_median` | the policy call alone. **The driver's cost** |
 | `sensor_ms_median` | the numeric sensor read alone — **not** the camera, which is inside `step_ms_*`. About 0.13 ms on this map |
+| `rig_ms_median` | reading the mounted rig cameras back out, under `--camera-rig`. A buffer copy and not a second render — 3.90 ms for seven. Effectively zero without a rig |
 
 ---
 

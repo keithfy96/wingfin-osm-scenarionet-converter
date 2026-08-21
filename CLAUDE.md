@@ -877,10 +877,51 @@ older figure timed - `env.step` includes `_get_step_return`, which builds the ob
 evaluates reward and termination, and a measurement around `_step_simulator` alone would come
 out roughly here. Unresolved, and recorded so the older numbers are not trusted as a baseline.
 
-**The default is two rows that differ only in who drives** — `replay`, which writes the car's
-position from the file and decides nothing, and `idm`, which computes. `--rows 3 --policy-url`
-puts a hosted model in the same seat. Both default rows are `--render offscreen`, because a
-camera cannot exist without one.
+**The default is rows 1–6** — everything but the 3D row, which opens a window and so cannot be
+part of an unattended sweep. Rows 1 and 2 differ only in who drives: `replay`, which writes the
+car's position from the file and decides nothing, and `idm`, which computes. Row 3 puts a hosted
+model in the same seat and **skips itself with `needs --policy-url`** when nothing is listening,
+which is a truer thing for the table to say than the row not appearing. One row on its own is
+`./step-timing.sh <ws> -- --rows 5`. Every row but 6 is `--render offscreen`, because a camera
+cannot exist without one.
+
+**The sweep raises `max_lateral_dist` to 20 m (`SWEEP_MAX_LATERAL_M`), and that is not a
+preference.** MetaDrive's 4 m (`scenario_env.py:84`) ends an episode when the car strays from
+the *recorded* route, and it is there to judge driving; this tool measures what a step costs,
+where a car 6 m off its line costs exactly what one on it does. At 4 m the IDM rows on `mosque`
+ended `out_of_road` at step 44 with **24 steps measured** against replay's 380 — and **four of
+the six default rows are IDM**, so most of the table would have been a median over two dozen
+samples. Applied uniformly, replay included, so no row is measured under different termination
+rules from the one it is compared with, and recorded as `max_lateral_m` rather than applied
+silently. `drive.py` keeps the 4 m: that tool *is* asking whether a drive is drivable.
+
+**The camera it prices is one the tool invented, until `--camera-rig` names a real one.**
+Unflagged, every offscreen row registers a single 320×180 `RGBCamera` — a size chosen in
+`step_timing.CAMERA_SIZE`, not by any vehicle — and since the camera is about three quarters of
+a step, an unflagged figure is not what a real car costs. `--camera-rig` takes the same
+CARLA-shaped spec `sensor-survey.sh` takes, read by `tools/camera_rig.py`, and mounts the
+vehicle's own cameras. Measured on `junction-1` at 10 Hz over 200 steps, replay row, same drive:
+the seven-camera spec (six 512×288 and one 1280×720 wide, **5.42 MB of image a step** against
+0.17) runs at **24.70 ms/step and 3.08x real** against **10.00 ms and 9.28x** for the invented
+one, with row 6's no-graphics floor at 3.20 ms / 27.20x. Four things not to re-derive:
+
+- **`rig_ms_median` is allowed in the timing loop and a row's `read` list still is not.** The
+  bar is against forcing a *second render pass* — `SensorPack` reads with a parent node, which
+  costs another `taskMgr.step()`. `CameraRig.read` passes none and copies the buffers the frame
+  pass already filled: **3.90 ms** for the seven. Only the `image_source` camera reaches the
+  observation, so the other six are read there or not at all, and a training loop reads all of
+  them.
+- **`image_source` must name a rig camera**, or MetaDrive registers a dead 320×240 `rgb_camera`
+  beside the rig and renders it every step (`image_obs.py:68`). `agent_env.make_env` already
+  merges `sensors` unless the caller names its own source.
+- **The `sensors` column counts cameras by class, never by the name `rgb_camera`.** A rig's
+  cameras are named by the spec, so a name test reports a seven-camera run as having no camera
+  at all — the same mislabelling the live-env probe was added to prevent, by a different door.
+  It prints `camera x7`.
+- **A spec's `tick_rate` is not honoured and the run says so.** Buffers redraw once per
+  `env.step` whatever the rate, so a rig declaring 0.1 s draws every 0.01 s on a 100 Hz dataset;
+  a line is printed per dataset where the two differ and `camera_hz` records what they really
+  drew at. Resampling is Phase 2 of `docs/implementation-plan/adjustable-simulation-sample-rate.md`.
 
 **Read `policy_ms`, not the difference between the rows, and that was the plan being wrong
 rather than a preference.** Measured three times over on `junction-1`'s 100 Hz dataset: row 1

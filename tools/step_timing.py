@@ -55,6 +55,17 @@ they are missed:
   graphics - so it is what this sweep mostly measures. Row 2 against row 6 prices it, and
   `carried` is what makes the `sensors` column say the camera is there at all.
 
+* **That camera is one this tool invented, until `--camera-rig` names a real one.** Unflagged,
+  every offscreen row registers a single 320x180 `RGBCamera` - a number chosen here, not by
+  the vehicle. A surround rig is what a car carries, and `tools/camera_rig.py` already reads
+  one from a CARLA-shaped spec (`tools/sensor_survey.py --camera-rig` has driven it since
+  Stage 7d). The spec this was written against is **7 cameras at 512x288**: 3.10 MB of image
+  a step against 0.17, 17.9x the pixels. Since the camera is most of what a step costs, an
+  unflagged figure is not what that vehicle costs, and `--camera-rig` is what closes the gap.
+  The rig's cameras are **mounted** on the ego, so one render pass fills all seven, and
+  `rig_ms` times reading them back out - a plain buffer read with no parent node, which is a
+  different thing from the second render pass `read` is barred from causing.
+
 Every run writes its own CSV, named for the moment it started, carrying the machine it was
 measured on in every row - so a file from this laptop and a file from a container on another
 box concatenate into one spreadsheet with nothing to line up by hand.
@@ -88,10 +99,27 @@ WARMUP_STEPS = 20
 # Steps of a throwaway drive before anything is measured. See `prime`.
 PRIME_STEPS = 40
 
-# The camera every offscreen row registers, so that "with sensors" and "without" differ in
-# what is read rather than in what is drawn. `make_env`'s own offscreen default is 320x240;
-# named here so both rows are the same size whatever that default does later.
+# The camera every offscreen row registers when no rig is named, so that "with sensors" and
+# "without" differ in what is read rather than in what is drawn. `make_env`'s own offscreen
+# default is 320x240; named here so both rows are the same size whatever that default does
+# later. `--camera-rig` replaces this with the vehicle's own cameras.
 CAMERA_SIZE = (320, 180)
+
+# How far off its recorded route a car may get before the episode ends, for every row of a
+# sweep, replay included.
+#
+# MetaDrive's own default is 4 m (`scenario_env.py:84`) and it exists to judge *driving*: an
+# agent that has lost the reference line is not doing the task. This tool measures what a step
+# costs, and a car 6 m off its line costs the same per step as one on it - so honouring that
+# rule here buys nothing and costs the sample. Measured on `mosque`: the IDM rows ended
+# `out_of_road` at step 44 with 24 steps measured, against replay's 400. Four of the six
+# default rows are IDM, so at 4 m most of the table would be a median over two dozen samples.
+#
+# Uniform across rows on purpose - no row may be measured under different termination rules
+# from the one it is being compared with. It is recorded in the CSV as `max_lateral_m` rather
+# than applied silently, and `ended_by` still says `out_of_road` if a row hits it anyway.
+# `drive.py` keeps MetaDrive's 4 m: that tool *is* asking whether a drive is drivable.
+SWEEP_MAX_LATERAL_M = 20.0
 
 
 # Each row is one configuration, driven once per dataset. `read` is what this loop reads
@@ -137,10 +165,13 @@ ROWS = {
     ),
 }
 
-DEFAULT_ROWS = (1, 2)
+# Every row but 7, which opens a window and so cannot be part of an unattended default. Row 3
+# is in and skips itself with `needs --policy-url` when no model is listening, which is a
+# truer thing for the table to say than the row not being there.
+DEFAULT_ROWS = (1, 2, 3, 4, 5, 6)
 
 
-def carried(row):
+def carried(row, cameras=1):
     """Everything a row's drive actually has, camera included.
 
     `row["read"]` is only what this loop reads *itself*, and the camera is deliberately not
@@ -154,8 +185,19 @@ def carried(row):
     This is the *declared* list, for `--list-rows`, which has no env to ask. A run reports
     what its own env holds; see `drive`.
     """
-    camera = ("camera",) if row["render"] == "offscreen" else ()
-    return camera + tuple(row["read"])
+    return camera_label(cameras if row["render"] == "offscreen" else 0) + tuple(row["read"])
+
+
+def camera_label(count):
+    """`()`, `("camera",)` or `("camera x7",)` - what a count of cameras is called in a table.
+
+    One entry however many cameras there are, because the `sensors` column lists *kinds*
+    beside `imu` and `gps`. The count is on it because a rig and the single invented camera
+    are not the same measurement and must not print the same word.
+    """
+    if not count:
+        return ()
+    return ("camera" if count == 1 else f"camera x{count}",)
 
 
 def rate_keys(step_hz, physics_hz):
@@ -250,13 +292,15 @@ def machine():
     )
 
 
-def build_env(dataset, row, step_hz, physics_hz):
+def build_env(dataset, row, step_hz, physics_hz, rig=None, max_lateral_m=SWEEP_MAX_LATERAL_M):
     """A `ScenarioEnv` configured for one row, through the same `make_env` a drive uses."""
     from agent_env import make_env
     from metadrive.policy.replay_policy import ReplayEgoCarPolicy
     from policy_client import sensor_config
 
     overrides = dict(rate_keys(step_hz, physics_hz))
+    # Uniform across every row of the sweep, replay included - see `SWEEP_MAX_LATERAL_M`.
+    overrides["max_lateral_dist"] = max_lateral_m
     if row["policy"] == "replay":
         # `make_env` deliberately leaves `agent_policy` alone so the action reaches the car;
         # replay is the one row that wants it set, and it goes through `**overrides` like any
@@ -265,11 +309,20 @@ def build_env(dataset, row, step_hz, physics_hz):
     if row["render"] == "offscreen":
         # Registered on every offscreen row, including the ones that read nothing, so that
         # "with sensors" and "without" differ in what is read rather than in what is drawn.
-        overrides["sensors"] = sensor_config(("camera",), camera_size=CAMERA_SIZE)
+        if rig is None:
+            overrides["sensors"] = sensor_config(("camera",), camera_size=CAMERA_SIZE)
+        else:
+            overrides["sensors"] = rig.sensors()
+            # `image_observation` builds the observation out of `config["sensors"][image_source]`
+            # (`image_obs.py:68`) and that name defaults to `rgb_camera`, which a rig does not
+            # have. Naming a rig camera is what stops `make_env` registering a dead 320x240
+            # buffer beside the rig and rendering it every step. It lives in `vehicle_config`;
+            # at the top level MetaDrive dies at construction.
+            overrides["vehicle_config"] = dict(image_source=rig.image_source())
     return make_env(dataset, render=row["render"], **overrides)
 
 
-def drive(env, row, arguments, url=None):
+def drive(env, row, arguments, url=None, rig=None):
     """Drive one scenario under one row's configuration and return what it cost.
 
     Returns a dict of measurements, or one carrying `skip_reason` when the dataset cannot be
@@ -281,6 +334,13 @@ def drive(env, row, arguments, url=None):
     started = time.perf_counter()
     observation, _ = env.reset(seed=arguments.scenario_index)
     reset_seconds = time.perf_counter() - started
+
+    # After the reset and not before: `mount` parents each camera to `env.agent.origin`, and
+    # the ego does not exist until the scenario is loaded. Only where cameras were built -
+    # row 6 registers none, so there is nothing on the car to mount.
+    mounted = rig if rig is not None and row["render"] == "offscreen" else None
+    if mounted is not None:
+        mounted.mount(env)
 
     scenario = env.engine.data_manager.current_scenario
     length = env.engine.data_manager.current_scenario_length
@@ -304,16 +364,25 @@ def drive(env, row, arguments, url=None):
     # definition. A camera is only real when `image_observation` is on and one is registered,
     # and the frame's own shape is the honest camera size - so if anything ever stops
     # building one, the table says so instead of repeating what it was meant to do.
-    has_camera = bool(env.config.get("image_observation")) and "rgb_camera" in (
-        env.config.get("sensors") or {}
-    )
+    #
+    # Counted by class rather than by the name `rgb_camera`, which is what the single invented
+    # camera happens to be called: a rig's cameras are named by the spec (`cam_front`, ...),
+    # so a name test reports a seven-camera run as having no camera at all - the mislabelling
+    # this probe exists to prevent, returning by a different door.
+    from metadrive.component.sensors.base_camera import BaseCamera
+
+    cameras = 0
+    if env.config.get("image_observation"):
+        for entry in (env.config.get("sensors") or {}).values():
+            if isinstance(entry, (tuple, list)) and entry and isinstance(entry[0], type):
+                cameras += issubclass(entry[0], BaseCamera)
     camera_size = ""
     stack_size = ""
     if isinstance(observation, dict) and "image" in observation:
         shape = observation["image"].shape
         camera_size = f"{int(shape[1])}x{int(shape[0])}"
         stack_size = int(shape[3]) if len(shape) > 3 else ""
-    sensors = ",".join((("camera",) if has_camera else ()) + read)
+    sensors = ",".join(camera_label(cameras) + read)
 
     pack = SensorPack(env, read) if read else None
     policy = None
@@ -336,6 +405,7 @@ def drive(env, row, arguments, url=None):
     step_samples = []
     policy_samples = []
     sensor_samples = []
+    rig_samples = []
     info = {}
     steps = 0
     gl_renderer = ""
@@ -362,6 +432,15 @@ def drive(env, row, arguments, url=None):
         if pack is not None:
             pack()
         read_done = time.perf_counter()
+        if mounted is not None:
+            # Not a second render pass, which is why this is allowed where `read` is not:
+            # `CameraRig.read` calls `perceive` with no parent node, so it copies the buffer
+            # the frame pass has already filled rather than re-aiming the camera and stepping
+            # the task manager again (`base_camera.py:188`). Only the `image_source` camera
+            # reaches the observation; the other six are read here or not at all, and a
+            # training loop reads all of them.
+            mounted.read()
+        rig_done = time.perf_counter()
         action = policy(observation) if policy is not None else [0.0, 0.0]
         decided = time.perf_counter()
         observation, _, terminated, truncated, info = env.step(action)
@@ -369,7 +448,8 @@ def drive(env, row, arguments, url=None):
 
         if steps >= arguments.warmup:
             sensor_samples.append(read_done - mark)
-            policy_samples.append(decided - read_done)
+            rig_samples.append(rig_done - read_done)
+            policy_samples.append(decided - rig_done)
             step_samples.append(stepped - decided)
             measured += 1
         steps += 1
@@ -386,7 +466,9 @@ def drive(env, row, arguments, url=None):
         gl_renderer=gl_renderer,
         force_fps=force_fps_state,
         sensors=sensors,
+        camera_count=cameras,
         camera_size=camera_size,
+        camera_mb_per_step=round(mounted.megabytes, 3) if mounted is not None else "",
         stack_size=stack_size,
         # Named the same way the declared fallback names it, so a skipped row and a row that
         # ran describe the same thing: `LidarStateObservation`'s 161 floats are what
@@ -411,6 +493,7 @@ def drive(env, row, arguments, url=None):
         step=percentiles(step_samples),
         policy=percentiles(policy_samples),
         sensor=percentiles(sensor_samples),
+        rig=percentiles(rig_samples),
         arrive_dest="yes" if info.get("arrive_dest") else "no",
         ended_by=ended_by,
     )
@@ -438,29 +521,30 @@ FIELDS = [
     "gl_renderer", "os", "python", "numpy", "metadrive", "timestamp",
     "dataset", "scenario_id", "step_hz", "sim_dt_s", "physics_hz", "physics_dt_s",
     "decision_repeat", "physics_ticks_per_sim_second",
-    "row", "render", "policy", "sensors", "camera_read_mode", "camera_size", "stack_size",
-    "norm_pixel", "observation_kind", "force_fps",
+    "row", "render", "policy", "sensors", "camera_read_mode", "camera_rig", "camera_count",
+    "camera_size", "camera_mb_per_step", "camera_hz", "stack_size",
+    "norm_pixel", "observation_kind", "force_fps", "max_lateral_m",
     "status", "skip_reason", "steps", "measured_steps", "warmup_steps",
     "sim_seconds", "wall_seconds",
     "realtime_factor", "reset_seconds",
     "step_ms_mean", "step_ms_median", "step_ms_p95", "step_ms_p99", "step_ms_max",
-    "policy_ms_median", "sensor_ms_median", "arrive_dest", "ended_by",
+    "policy_ms_median", "sensor_ms_median", "rig_ms_median", "arrive_dest", "ended_by",
 ]
 
 HEADER = (
-    "  #  render     policy  sensors        decide  physics  rpt   steps   sim s  wall s"
+    "  #  render     policy  sensors            decide  physics  rpt   steps   sim s  wall s"
     "  x real  ms/step  policy    p95"
 )
 
 
 def table_line(record):
     if record["status"] != "ok":
-        return "  {:<2} {:<10} {:<7} {:<14} {:>6} Hz   skipped: {}".format(
+        return "  {:<2} {:<10} {:<7} {:<18} {:>6} Hz   skipped: {}".format(
             record["row"], record["render"], record["policy"], record["sensors"] or "-",
             _hz(record["step_hz"]), record["skip_reason"],
         )
     return (
-        "  {:<2} {:<10} {:<7} {:<14} {:>4} Hz {:>5} Hz  x{:<3} {:>5}  {:>6.1f}  {:>6.1f}"
+        "  {:<2} {:<10} {:<7} {:<18} {:>4} Hz {:>5} Hz  x{:<3} {:>5}  {:>6.1f}  {:>6.1f}"
         "  {:>6.2f}x {:>7.2f} {:>7.2f} {:>6.2f}".format(
             record["row"], record["render"], record["policy"], record["sensors"] or "-",
             _hz(record["step_hz"]), _hz(record["physics_hz"]), record["decision_repeat"],
@@ -480,23 +564,23 @@ def _hz(value):
 ROWS_DOC = "docs/step-timing-rows.md"
 
 
-def row_listing():
+def row_listing(cameras=1):
     """Every row, rendered from `ROWS` itself.
 
     From the dict rather than from a copy, so a row added later cannot be missing here -
     the failure this exists to prevent is a listing that describes a tool from last month.
     """
-    lines = ["  #  render     policy  sensors         physics  isolates"]
+    lines = ["  #  render     policy  sensors             physics  isolates"]
     for number, row in sorted(ROWS.items()):
         marks = "  [default]" if number in DEFAULT_ROWS else ""
         if row["policy"] == "remote":
             marks += "  [needs --policy-url]"
         lines.append(
-            "  {:<2} {:<10} {:<7} {:<15} {:<8} {}{}".format(
+            "  {:<2} {:<10} {:<7} {:<19} {:<8} {}{}".format(
                 number,
                 row["render"] or "none",
                 row["policy"],
-                ",".join(carried(row)) or "-",
+                ",".join(carried(row, cameras)) or "-",
                 f"{_hz(row['physics_hz'])} Hz" if row.get("physics_hz") else "dataset",
                 row["isolates"],
                 marks,
@@ -524,8 +608,9 @@ def main():
     parser.add_argument(
         "--rows", default=",".join(str(number) for number in DEFAULT_ROWS),
         help="Which configurations to run, comma separated - see --list-rows, or "
-        f"{ROWS_DOC}. The default pair differs only in who drives; read `policy` rather "
-        "than the difference between them.",
+        f"{ROWS_DOC}. One row on its own is `--rows 5`. The default is every row but 7, "
+        "which needs a display; rows 1 and 2 differ only in who drives, so read `policy` "
+        "rather than the difference between them.",
     )
     parser.add_argument(
         "--label", default=None,
@@ -545,6 +630,19 @@ def main():
     )
     parser.add_argument("--policy-url", default=None, help="Where row 3's model is listening.")
     parser.add_argument(
+        "--camera-rig", default=None,
+        help="A CARLA-shaped camera spec (see tools/camera_rig.py), the same file "
+        "sensor-survey.sh takes. Its cameras replace the single invented 320x180 one on "
+        "every offscreen row, so the sweep prices the vehicle's own vision rather than a "
+        "size chosen here. Their read-back is timed separately as rig_ms.",
+    )
+    parser.add_argument(
+        "--max-lateral-m", type=float, default=SWEEP_MAX_LATERAL_M,
+        help="How far off its recorded route a car may get before the episode ends. "
+        "MetaDrive's own 4 m judges driving and cuts the IDM rows off after a couple of "
+        "dozen steps; a benchmark wants the sample. Recorded in the CSV as max_lateral_m.",
+    )
+    parser.add_argument(
         "--warmup", type=int, default=WARMUP_STEPS,
         help="Steps driven before the clock starts, so no row is charged for the graphics "
         "driver warming up. They are outside wall_seconds as well as outside the "
@@ -557,8 +655,32 @@ def main():
     parser.add_argument("--no-csv", action="store_true", help="Print the table and write nothing.")
     arguments = parser.parse_args()
 
+    rig = None
+    rig_tick_s = None
+    if arguments.camera_rig:
+        from camera_rig import MAX_IMAGE_BUFFERS, STEP_S, RigError, load_rig
+
+        rig_tick_s = STEP_S
+
+        # Read before any env is built: a spec that will be refused should cost nothing, and
+        # the cameras have to be in `sensors` at construction - `engine_core.setup_sensors`
+        # runs once.
+        try:
+            rig = load_rig(arguments.camera_rig)
+        except RigError as error:
+            print(f"result       FAILED: camera rig rejected: {error}")
+            return 1
+        if len(rig) > MAX_IMAGE_BUFFERS:
+            print(
+                f"result       FAILED: camera rig rejected: {len(rig)} cameras is more than "
+                f"the {MAX_IMAGE_BUFFERS} image buffers panda3d holds reliably. Past it "
+                "MetaDrive's reset fails intermittently, which looks like a working rig "
+                f"until it does not. Drop {len(rig) - MAX_IMAGE_BUFFERS} camera(s)."
+            )
+            return 1
+
     if arguments.list_rows:
-        print(row_listing())
+        print(row_listing(len(rig) if rig else 1))
         return 0
     if not arguments.dataset:
         print(
@@ -597,12 +719,21 @@ def main():
     # Said here because it is the largest single thing being measured and was invisible: the
     # camera is drawn and read on every offscreen row, and its cost lands inside ms/step.
     if any(ROWS[number]["render"] == "offscreen" for number in wanted):
-        print("  cam  {}x{} RGB, 3-frame stack, drawn and read inside env.step on every "
-              "offscreen row".format(*CAMERA_SIZE))
+        if rig is None:
+            print("  cam  {}x{} RGB, 3-frame stack, drawn and read inside env.step on every "
+                  "offscreen row".format(*CAMERA_SIZE))
+            print("       one camera, invented here rather than by a vehicle - "
+                  "--camera-rig prices a real rig")
+        else:
+            # `describe` resolves each camera's real aim, which is worth printing every run:
+            # the spec this was built for disagrees with itself about the sign of `yaw`, so
+            # two of its four side cameras are named backwards whichever reading is taken.
+            for line in rig.describe():
+                print(f"  {line}" if line.startswith(" ") else f"  rig  {line}")
     print("")
     print(HEADER)
 
-    prime(arguments, wanted)
+    prime(arguments, wanted, rig)
 
     records = []
     measured = 0
@@ -613,6 +744,23 @@ def main():
         except Exception as error:  # noqa: BLE001 - reported per dataset, never fatal
             print(f"  {dataset} could not be read: {error}")
             continue
+
+        # Said rather than refused. `load_rig` rejects a spec whose `tick_rate` is not
+        # `camera_rig.STEP_S`, because nothing there resamples - but this sweep drives every
+        # rate a workspace holds, and what a rig costs at 100 Hz is one of the most useful
+        # numbers in the table. So the cameras draw at whatever the dataset's rate is, and the
+        # run says so instead of quietly delivering ten frames where the spec asked for one.
+        # Resampling a rig to its own tick is Phase 2 of the adjustable-sample-rate plan.
+        if rig is not None:
+            drawn_hz = arguments.step_hz or native_hz
+            if abs(drawn_hz - 1.0 / rig_tick_s) > 1e-9:
+                name = os.path.basename(os.path.normpath(dataset))
+                print(
+                    f"  rig  {name}: the spec ticks at {rig_tick_s:g} s "
+                    f"({1.0 / rig_tick_s:g} Hz) and these cameras draw every step, so at "
+                    f"{drawn_hz:g} Hz they draw {drawn_hz * rig_tick_s:g}x that. "
+                    "Nothing resamples."
+                )
 
         for number in wanted:
             row = ROWS[number]
@@ -629,16 +777,28 @@ def main():
                 row=number, render=row["render"] or "none", policy=row["policy"],
                 # Declared, so a row that never gets as far as an env still says what it
                 # would have carried. A row that runs overwrites all four from its own env.
-                sensors=",".join(carried(row)),
+                sensors=",".join(carried(row, len(rig) if rig else 1)),
                 # MetaDrive draws the camera and reads it inside `env.step` when
                 # `image_observation` is on (`image_obs.py:85`), so the image costs what it
                 # costs there on every offscreen row. No row reads one in the timing loop as
                 # well: that forces a second render pass and would charge the benchmark for a
                 # frame no training loop draws.
                 camera_read_mode="observation" if offscreen else "none",
-                camera_size="x".join(str(one) for one in CAMERA_SIZE) if offscreen else "",
+                camera_rig=os.path.basename(rig.path) if rig is not None else "",
+                camera_count=(len(rig) if rig else 1) if offscreen else 0,
+                camera_size=(
+                    "x".join(str(one) for one in (
+                        (rig.cameras[0].width, rig.cameras[0].height) if rig else CAMERA_SIZE))
+                    if offscreen else ""),
+                camera_mb_per_step=round(rig.megabytes, 3) if rig and offscreen else "",
+                # The rate the cameras really draw at, which is the step rate: MetaDrive
+                # redraws every buffer once per `env.step` (`base_engine.py:458`), whatever a
+                # spec's `tick_rate` says. Recorded because a rig declaring 0.1 s is driven at
+                # 0.01 s on a 100 Hz dataset and nothing here resamples.
+                camera_hz=step_hz if offscreen else "",
                 stack_size=3 if offscreen else "", norm_pixel="True" if offscreen else "",
                 observation_kind="image+state41" if offscreen else "lidarstate161",
+                max_lateral_m=arguments.max_lateral_m,
                 step_hz=step_hz, physics_hz=physics_hz or (1.0 / step_config(step_hz)[
                     "physics_world_step_size"]),
                 status="skipped",
@@ -655,8 +815,11 @@ def main():
             env = None
             if not reason:
                 try:
-                    env = build_env(dataset, row, step_hz, physics_hz)
-                    result = drive(env, row, arguments, url=arguments.policy_url)
+                    env = build_env(
+                        dataset, row, step_hz, physics_hz, rig=rig,
+                        max_lateral_m=arguments.max_lateral_m,
+                    )
+                    result = drive(env, row, arguments, url=arguments.policy_url, rig=rig)
                     reason = result.pop("skip_reason", "")
                 except Exception as error:  # noqa: BLE001 - one row failing is not the run
                     reason = f"{type(error).__name__}: {error}"
@@ -678,9 +841,11 @@ def main():
                     step_ms_max=result["step"]["max"],
                     policy_ms_median=result["policy"]["median"],
                     sensor_ms_median=result["sensor"]["median"],
+                    rig_ms_median=result["rig"]["median"],
                 )
                 for key in (
-                    "sensors", "camera_size", "stack_size", "observation_kind",
+                    "sensors", "camera_count", "camera_size", "camera_mb_per_step",
+                    "stack_size", "observation_kind",
                     "gl_renderer", "force_fps", "scenario_id", "sim_dt_s", "physics_dt_s",
                     "decision_repeat", "steps", "measured_steps", "warmup_steps", "sim_seconds",
                     "wall_seconds", "realtime_factor", "reset_seconds", "arrive_dest",
@@ -704,6 +869,12 @@ def main():
     print("  across rates - x real is. Every offscreen row draws and reads a camera; MetaDrive")
     print("  builds the observation out of it inside env.step, so that cost is in ms/step and")
     print("  never in the policy or sensor columns. Row 2 against row 6 is what it costs.")
+    if rig is None:
+        print("  that camera is one 320x180 buffer this tool registers, not a vehicle's rig:")
+        print("  --camera-rig <spec> mounts the real cameras and prices them instead.")
+    else:
+        print("  rig_ms in the CSV is reading the mounted cameras back out - a buffer copy,")
+        print("  not a second render; the drawing of them is inside ms/step with everything else.")
     print(f"  what every row and column means: {ROWS_DOC}  (or --list-rows)")
 
     if not arguments.no_csv and records:
@@ -725,7 +896,7 @@ def main():
     return 0 if measured else 1
 
 
-def prime(arguments, wanted):
+def prime(arguments, wanted, rig=None):
     """Build and throw away one env before anything is measured.
 
     Measured and not guessed: the **first** env of a process is systematically dearer than
@@ -736,17 +907,20 @@ def prime(arguments, wanted):
 
     Never fatal: if this cannot run, the row that follows will say why properly.
     """
-    if not wanted:
+    # The first row that drives itself, not simply the first: a remote row needs a server, so
+    # keying off `wanted[0]` alone would skip the warm-up whenever row 3 came first and leave
+    # the first-use cost on whichever row followed it.
+    number = next((one for one in wanted if ROWS[one]["policy"] != "remote"), None)
+    if number is None:
         return
-    row = ROWS[wanted[0]]
-    if row["policy"] == "remote":
-        return
+    row = ROWS[number]
     env = None
     try:
         native_hz = dataset_step_hz(arguments.dataset[0], arguments.scenario_index)
         env = build_env(
             arguments.dataset[0], row, arguments.step_hz or native_hz,
-            arguments.physics_hz or row.get("physics_hz"),
+            arguments.physics_hz or row.get("physics_hz"), rig=rig,
+            max_lateral_m=arguments.max_lateral_m,
         )
         env.reset(seed=arguments.scenario_index)
         for _ in range(PRIME_STEPS):

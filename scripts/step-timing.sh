@@ -4,14 +4,20 @@
 #
 #   ./scripts/step-timing.sh                       # workspace from .env, every rate it holds
 #   ./scripts/step-timing.sh junction-1            # override the workspace for this run
-#   ./scripts/step-timing.sh junction-1 -- --rows 1,2,5       # add the pinned-physics row
+#   ./scripts/step-timing.sh junction-1 -- --rows 5           # one row on its own
+#   ./scripts/step-timing.sh junction-1 -- --rows 2,6         # the pair that prices the camera
 #   ./scripts/step-timing.sh junction-1 -- --physics-hz 100   # pin the integrator
 #   ./scripts/step-timing.sh mosque -- --label rig-container  # name the machine in the CSV
+#   ./scripts/step-timing.sh mosque -- --camera-rig ~/Desktop/work/wingfin/data/cams.txt
 #   GPU=integrated ./scripts/step-timing.sh        # force the built-in graphics
 #
-# The default is two rows that differ only in who drives -- replay decides nothing, idm drives
-# -- so row 2 minus row 1 is what the driver costs, with every other cost held identical. Put a
-# model behind --policy-url and --rows 3 says whether it or the simulator is the slow part.
+# The default is rows 1-6; row 7 opens a window, so it is one --rows 7 away. Rows 1 and 2 differ
+# only in who drives -- replay decides nothing, idm drives -- and row 3 puts a model behind
+# --policy-url in the same seat, skipping itself with a reason when nothing is listening.
+#
+# Unflagged, every offscreen row draws one 320x180 camera this tool invented, and that is most of
+# what a step costs. --camera-rig takes the same spec sensor-survey.sh takes and mounts the
+# vehicle's own cameras instead, so the sweep prices the car being built rather than a stand-in.
 #
 # Every run prints a table and writes its own CSV into <workspace>/reports/, stamped with the
 # moment it started. Nothing is appended to and nothing is overwritten, so two runs -- or two
@@ -39,7 +45,7 @@ PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --) shift; PASSTHROUGH=("$@"); break ;;
-        -h|--help) sed -n '2,31p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
+        -h|--help) sed -n '2,38p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
         -*) die "unknown option: $1
   This script takes only a workspace. To pass $1 to step_timing.py, put it after --:
     ./scripts/step-timing.sh ${POSITIONAL:-<workspace>} -- $1" ;;

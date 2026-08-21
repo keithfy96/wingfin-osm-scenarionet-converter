@@ -24,6 +24,7 @@ from step_timing import (  # noqa: E402
     DEFAULT_ROWS,
     FIELDS,
     ROWS,
+    camera_label,
     carried,
     percentiles,
     rate_keys,
@@ -172,6 +173,30 @@ def test_the_listing_marks_the_default_rows():
         for number in ROWS:
             if line.strip().startswith(f"{number} "):
                 assert ("[default]" in line) == (number in DEFAULT_ROWS)
+
+
+def test_the_default_rows_all_run_unattended():
+    """`./step-timing.sh <workspace>` with no flags must not try to open a window. Row 7 is
+    the display row; a default that included it would block on a machine with no screen and
+    would put a window in front of whoever started an overnight sweep."""
+    for number in DEFAULT_ROWS:
+        assert ROWS[number]["render"] != "3D", f"row {number} needs a display"
+
+
+def test_a_rig_is_counted_in_the_sensors_column():
+    """The count is on the word because a seven-camera rig and the single 320x180 camera this
+    tool invents are not the same measurement, and printing `camera` for both is exactly the
+    mislabelling `carried` exists to prevent."""
+    assert camera_label(0) == ()
+    assert camera_label(1) == ("camera",)
+    assert camera_label(7) == ("camera x7",)
+    for number, row in ROWS.items():
+        if row["render"] == "offscreen":
+            assert "camera x7" in carried(row, 7), f"row {number} loses the rig's count"
+        else:
+            assert not any(one.startswith("camera") for one in carried(row, 7)), (
+                f"row {number} builds no camera and must not claim a rig"
+            )
 
 
 def test_no_row_reads_a_camera_in_the_loop():
