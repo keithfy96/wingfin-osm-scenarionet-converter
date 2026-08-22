@@ -33,10 +33,34 @@ from osm_scenario.conversion import (
     _read,
     _sha256,
 )
-from osm_scenario.ego_route import RouteError, plan_route, route_polyline
+from osm_scenario.ego_route import RouteError, plan_route, route_polyline, speed_profile
 from osm_scenario.lane_model import PreliminaryLaneModel
 
-TRAFFIC_VERSION = 1
+TRAFFIC_VERSION = 2
+"""2 added `speed_step_m` / `speeds` to every route. A version 1 file has no speed profile,
+so a car reading it would drive every corner at `TrajectoryIDMPolicy.NORMAL_SPEED` - which is
+the fault the profile exists to fix - and it is refused rather than driven."""
+
+TRAFFIC_LATERAL_ACCEL_MPS2 = 4.0
+"""How hard a traffic car is asked to corner, against `ego_route.LATERAL_ACCEL_MPS2`'s 8.5.
+
+**Not a comfort figure, and not the ego's.** 8.5 is pinned to the ego's 30°-per-step gate,
+and the ego's drive is a *recording* - the positions are replayed, so nothing has to steer to
+them. A traffic car is steered there by MetaDrive's IDM, whose `steering_control` is two PIDs
+aimed at a point a fixed **1 m** ahead, and at 8.5 it arrives at the corner too fast to hold
+the line. Swept on `junction-1`, three episodes of 25 cars, counting cars that left the
+tarmac: flat 40 km/h **26**, profile at 8.5 **19**, at 4.0 **13**, at 2.5 **16** - and 2.5
+halves the number of routes completed per episode (25 to 14), which is the throughput live
+traffic exists to keep up. 4.0 is the knee."""
+
+SPEED_STEP_M = 2.0
+"""Spacing of the stored speed profile, min-pooled from `speed_profile`'s own 0.1 m.
+
+The raw profile is 517,750 samples over `junction-1`'s 60 routes - it would be most of the
+file. Pooled at 2 m it is 25,887, and taking the **minimum** of each interval rather than a
+mean or a sample keeps every pool conservative: no car is ever told it may go faster than the
+finest reading said. A car covers 2 m in under half a second at these speeds."""
+
 
 DEFAULT_COUNT = 60
 """How many routes to keep. A pool, not a car count - one route may carry several cars."""
@@ -66,6 +90,33 @@ class TrafficError(RuntimeError):
     """Raised when a traffic pool cannot be built from this lane model."""
 
 
+def _pooled_speeds(polyline: np.ndarray, *, cruise_mps: float) -> np.ndarray:
+    """The route's speed profile, min-pooled onto an even `SPEED_STEP_M` grid from zero.
+
+    `ego_route.speed_profile` is called rather than reimplemented, and that is the whole point
+    of computing this here: it is the one place that knows curvature is turn per metre and not
+    a circumradius, that the braking pass has to run backwards so the car slows *before* the
+    corner, and what `MIN_SPEED_MPS` is for. `tools/traffic.py` runs on MetaDrive's 3.8 and
+    cannot import it, so it gets the numbers - the same split `signal_control` makes against
+    `signal_plan`, and for the same reason.
+
+    Min-pooled, never sampled: a sample can land either side of the one tight vertex in a
+    junction and report the speed of the straight beside it.
+    """
+    _dense, travelled, speed = speed_profile(
+        polyline,
+        cruise_mps=cruise_mps,
+        lateral_accel_mps2=TRAFFIC_LATERAL_ACCEL_MPS2,
+    )
+    edges = np.arange(0.0, float(travelled[-1]) + SPEED_STEP_M, SPEED_STEP_M)
+    # `searchsorted` puts every fine sample in exactly one pool; `minimum.at` then takes the
+    # slowest of each. Pools past the last sample keep the final speed rather than `inf`.
+    pools = np.full(len(edges), float(speed[-1]))
+    where = np.clip(np.searchsorted(edges, travelled, side="right") - 1, 0, len(edges) - 1)
+    np.minimum.at(pools, where, speed)
+    return pools
+
+
 @dataclass(frozen=True)
 class TrafficRoute:
     """One path a car may drive, and the line it drives along."""
@@ -76,6 +127,8 @@ class TrafficRoute:
     distance_m: float
     speed_mps: float
     polyline: np.ndarray
+    speeds: np.ndarray
+    """How fast a car may be at each `SPEED_STEP_M` along the line, from zero."""
 
 
 @dataclass(frozen=True)
@@ -266,6 +319,7 @@ def plan_traffic(
                 distance_m=route.distance_m,
                 speed_mps=route.speed_mps,
                 polyline=polyline,
+                speeds=_pooled_speeds(polyline, cruise_mps=route.speed_mps),
             )
         )
 
@@ -321,6 +375,8 @@ def payload(
                 "end_lane": route.end_lane,
                 "distance_m": round(route.distance_m, 3),
                 "speed_mps": round(route.speed_mps, 3),
+                "speed_step_m": SPEED_STEP_M,
+                "speeds": [round(float(v), 3) for v in route.speeds],
                 # Rounded to the millimetre. The polyline is the bulk of this file and a
                 # micrometre of a lane position is not a fact about anything.
                 "polyline": [[round(float(x), 3), round(float(y), 3)] for x, y in route.polyline],

@@ -7,6 +7,41 @@ both extracts. The design is as planned with two changes, both recorded below: t
 manager reads a **file** rather than importing the package, and `--traffic live`
 **composes onto** whatever `--lights` chose rather than replacing it.
 
+**Second round, 2026-08-22, branch `stage-8-traffic-follows-lanes`.** Keith drove it
+and reported cars driving on the grass, not keeping to lanes, and hitting each other.
+Three faults, all in `tools/traffic.py`, none of them in the routes - `traffic.json`
+did not change and did not need regenerating - plus a give-way rule, which the "Known
+limits" section below had deliberately left unwritten until the collisions had been
+measured without it. The full record is in `CLAUDE.md`; the short version:
+
+1. **The plan was read in the file's coordinate frame, not the simulator's.**
+   `centralize=True` moves every loaded scenario so the ego starts at the origin.
+   Cars were placed **93.8 m** from the road on `junction-1`: 0 of 10 on the tarmac
+   before, 10 of 10 after.
+2. **`arrive_destination` is a 2 m circle around the last point**, so a car that
+   arrived even slightly wide never arrived and drove straight for ever - 36 cars over
+   three episodes, worst 245 m clear of any road. Retirement is now measured along the
+   route, with the same margin.
+3. **Spacing was per route, and 60 routes share 10 start points.** Two cars spawned
+   **0.97 m** apart. It is now measured between the cars.
+4. **Traffic drives its route's own speed profile** (`--traffic-speed`, on by
+   default), because nothing in MetaDrive steers a traffic car by the road:
+   `steering_control` is two PIDs chasing the polyline with a 1 m preview, and
+   `NORMAL_SPEED` is a flat 40 km/h while **29.5%** of `junction-1`'s route distance
+   allows less on curvature alone. Measured, 25 cars over 5 episodes, cars that left
+   the tarmac: `junction-1` **41 -> 25** (worst 9.39 -> 3.80 m), `mosque` **56 -> 24**
+   (9.51 -> 3.08 m). It costs pace - mean speed roughly halves - and that is the trade.
+   `traffic_version` is 2; a version 1 plan is refused by name. A car more than 5 m off
+   its route is taken off the map and counted as `cars_lost`, never as an arrival.
+5. **Traffic gives way where two routes cross**, to other traffic and to the ego
+   (`--traffic-give-way`, on by default). Collisions with 25 cars: `junction-1` over
+   16 episodes **79 -> 60** with head-on **23 -> 4**, `mosque` over 12 episodes
+   **24 -> 9**, the same number of cars completing routes either way, and about 3 ms a
+   step at 25 cars. Sixteen episodes rather than five because one episode ranges from
+   2 to 10 collisions; repeatable across separate processes, which took a second round
+   to achieve, because the tie-break was on `vehicle.name` and MetaDrive names objects
+   with a fresh `uuid.uuid4()` per process.
+
 **One acceptance criterion is not measured and cannot be here.** Traffic stopping at
 a red light needs a dataset built with `--signals`, and `workspaces/junction-1/signals/signals.json`
 is bound to an older lane model - `convert` refuses it by fingerprint. Re-drawing the
@@ -196,7 +231,12 @@ than being managed.
        which also asserts the pool is still 60 - a version that reached zero by
        refusing routes the map permits would be worse than what it replaced.
     3. **Collisions per episode, unsignalled.** Three episodes per row, the ego
-       driving, cars on the road held at the count asked for:
+       driving, cars on the road held at the count asked for. **Superseded by the
+       second round above** - this table was measured with the coordinate-frame
+       fault in place, so the cars were driving the right geometry in the wrong
+       place, and with the per-route spacing that let two of them spawn inside each
+       other. It is kept because it is the number the give-way rule was judged
+       against:
 
        | map | ego | cars | steps | collisions | per car-minute |
        |---|---|---|---|---|---|
@@ -235,14 +275,18 @@ than being managed.
 
 ## Known limits, stated rather than hidden
 
-- **IDM has no give-way, and this plan does not add one.** It brakes only for
-  what is within 20 m and geometrically on its own polyline
-  (`idm_policy.py:136`), so two cars approaching an unsignalled junction on
-  crossing paths may see each other late. What separates conflicting movements
-  is the **signal plan**, and it costs nothing here because a red light is a
-  physics wall - so training runs should use `--signals`. Collisions per episode
-  is measured **before** any give-way rule is written. MetaDrive's own IDM has
-  no give-way either, so this is not a shortfall against an existing baseline.
+- **IDM has no give-way. The second round adds one, outside the policy.** IDM
+  brakes only for what is within 20 m and geometrically on its own lane
+  (`idm_policy.py:161-164`), so a car crossing from the side is not an obstacle to
+  it at any distance. `_yielders` looks 40 m ahead along each car's own route,
+  finds the first place two routes pass within 4 m *at an angle*, and holds the
+  car with further to run - taking `min(idm_acc, brake)`, so it can only ever slow
+  a car down. It takes a third off `junction-1` and two thirds off `mosque`, and
+  removes every head-on.
+  What separates conflicting movements *properly* is still the **signal plan**,
+  and it costs nothing here because a red light is a physics wall - so training
+  runs should still use `--signals`. The collision rate was measured **before** the
+  rule was written, and `--traffic-give-way off` keeps that comparison available.
 - **Live traffic is not in the dataset.** A stock ScenarioNet consumer opening
   `workspaces/mosque/scenarionet` still sees an empty map. This is the same split
   the repo already made for signals - `--lights tape` portable, `--lights live`

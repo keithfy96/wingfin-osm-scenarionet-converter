@@ -708,6 +708,23 @@ def main() -> int:
         "seed is mixed in beside it, which is what makes two resets differ.",
     )
     parser.add_argument(
+        "--traffic-speed",
+        choices=("profile", "flat"),
+        default="profile",
+        help="Whether traffic slows for the corners its route actually turns through. On by "
+        "default: MetaDrive's IDM aims for a flat 40 km/h everywhere, and 29.5%% of "
+        "junction-1's route distance allows less than that on curvature alone. `flat` is for "
+        "measuring what the profile is worth, not for driving.",
+    )
+    parser.add_argument(
+        "--traffic-give-way",
+        choices=("on", "off"),
+        default="on",
+        help="Whether traffic gives way where two routes cross. On by default: IDM brakes "
+        "only for cars on its own lane, so a junction full of it collides. `off` is for "
+        "measuring what the rule is worth, not for driving.",
+    )
+    parser.add_argument(
         "--traffic-file",
         default=None,
         help="traffic.json to read. Defaults to <workspace>/traffic/traffic.json, worked out "
@@ -886,6 +903,7 @@ def main() -> int:
     if arguments.traffic == "live":
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from traffic import DEFAULT_COUNT as TRAFFIC_DEFAULT_COUNT
+        from traffic import LOST_LATERAL_M as TRAFFIC_LOST_LATERAL_M
         from traffic import TrafficError, load_plan, traffic_env
 
         traffic_path = arguments.traffic_file or _default_traffic_file(dataset)
@@ -906,7 +924,12 @@ def main() -> int:
         # whole env classes, so assigning here would silently drop the lights - and a red
         # light is the only thing separating conflicting movements, IDM having no give-way.
         environment_class = traffic_env(
-            environment_class, plan=traffic_plan, count=cars, seed=arguments.traffic_seed
+            environment_class,
+            plan=traffic_plan,
+            count=cars,
+            seed=arguments.traffic_seed,
+            give_way=arguments.traffic_give_way == "on",
+            follow_speed_profile=arguments.traffic_speed == "profile",
         )
         print(
             f"traffic      {cars} car(s) from {len(traffic_plan['routes'])} route(s) "
@@ -1353,8 +1376,20 @@ def main() -> int:
                     f"             traffic: {len(cars.spawned_objects)} car(s) on the road, "
                     f"{cars.cars_spawned} spawned and {cars.cars_retired} retired over the "
                     f"episode, {cars.collisions} collision(s), episode "
-                    f"{cars.episode_index} of seed {arguments.traffic_seed}"
+                    f"{cars.episode_index} of seed {arguments.traffic_seed}, "
+                    f"give way {arguments.traffic_give_way}, "
+                    f"speed {arguments.traffic_speed}"
                 )
+                if cars.cars_lost:
+                    # Reported apart from the arrivals, because it is a fault rather than a
+                    # completed route: nothing steers a traffic car by the road, so one
+                    # carried wide of its line is taken off the map rather than left to drive
+                    # across whatever is there.
+                    print(
+                        f"             {cars.cars_lost} car(s) strayed more than "
+                        f"{TRAFFIC_LOST_LATERAL_M:.0f} m off their own route and were taken "
+                        "off the map; each was replaced at a route start"
+                    )
                 if cars.on_road_low < cars.car_count:
                     # A road that empties is the fault baked traffic has and live traffic is
                     # meant not to have, so it is said rather than left in the numbers.
