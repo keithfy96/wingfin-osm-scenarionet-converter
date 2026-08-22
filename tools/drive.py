@@ -119,6 +119,17 @@ HEIGHT_SCALE = 1
 MAX_LATERAL_DIST_M = 4.0
 
 
+def _default_traffic_file(dataset: str) -> str:
+    """`<workspace>/traffic/traffic.json`, worked out from the dataset directory.
+
+    A dataset lives at `<workspace>/scenarionet-<rate>hz`, so the workspace is its parent -
+    the same relationship `routes.json` and `signals.json` already sit in. The plan is *not*
+    per rate: `traffic.json` carries geometry and no timing at all, so one file serves every
+    rate a workspace holds, exactly as one `routes.json` does.
+    """
+    return os.path.join(os.path.dirname(os.path.abspath(dataset)), "traffic", "traffic.json")
+
+
 def _next_power_of_two(value: float) -> int:
     size = MIN_REGION_M
     while size < value and size < MAX_REGION_M:
@@ -663,6 +674,34 @@ def main() -> int:
         default=None,
         help="Seed for --lights live, so a run can be repeated.",
     )
+    parser.add_argument(
+        "--traffic",
+        default="none",
+        choices=["none", "live"],
+        help="`live` puts other cars on the road, generated from the reviewed lane graph and "
+        "driven by MetaDrive's own IDM. They are not in the dataset - a recorded track has to "
+        "be as long as the episode, so the road would empty around a slow agent - so this is "
+        "the only way to see them. Needs `osm-scenario traffic` to have been run.",
+    )
+    parser.add_argument(
+        "--traffic-count",
+        type=int,
+        default=None,
+        help="How many cars are on the road at once under --traffic live.",
+    )
+    parser.add_argument(
+        "--traffic-seed",
+        type=int,
+        default=0,
+        help="Seed for --traffic live, so a run can be repeated. The engine's own scenario "
+        "seed is mixed in beside it, which is what makes two resets differ.",
+    )
+    parser.add_argument(
+        "--traffic-file",
+        default=None,
+        help="traffic.json to read. Defaults to <workspace>/traffic/traffic.json, worked out "
+        "from the dataset directory.",
+    )
     arguments = parser.parse_args()
 
     # Refused rather than worked around. `ManualControlPolicy.__init__` reads the keyboard
@@ -831,6 +870,37 @@ def main() -> int:
         from signal_control import live_signal_env
 
         environment_class = live_signal_env(arguments.light_seed)
+
+    traffic_plan = None
+    if arguments.traffic == "live":
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from traffic import DEFAULT_COUNT as TRAFFIC_DEFAULT_COUNT
+        from traffic import TrafficError, load_plan, traffic_env
+
+        traffic_path = arguments.traffic_file or _default_traffic_file(dataset)
+        try:
+            traffic_plan = load_plan(traffic_path)
+        except (OSError, ValueError, TrafficError) as error:
+            print(f"result       FAILED: --traffic live needs a traffic plan: {error}")
+            print(
+                "             Build one with: uv run osm-scenario traffic -w <workspace>"
+            )
+            return 1
+        cars = (
+            arguments.traffic_count
+            if arguments.traffic_count is not None
+            else TRAFFIC_DEFAULT_COUNT
+        )
+        # Composed onto whatever `--lights` already chose rather than replacing it. Both are
+        # whole env classes, so assigning here would silently drop the lights - and a red
+        # light is the only thing separating conflicting movements, IDM having no give-way.
+        environment_class = traffic_env(
+            environment_class, plan=traffic_plan, count=cars, seed=arguments.traffic_seed
+        )
+        print(
+            f"traffic      {cars} car(s) from {len(traffic_plan['routes'])} route(s) "
+            f"in {traffic_path}"
+        )
 
     count = get_number_of_scenarios(dataset)
     if arguments.scenario_index is not None and not 0 <= arguments.scenario_index < count:
@@ -1239,6 +1309,23 @@ def main() -> int:
                 # rather than "the model drove it".
                 if arguments.agent_policy not in ("manual", "remote"):
                     failures += 1
+
+            cars = getattr(env.engine, "live_traffic_manager", None)
+            if cars is not None:
+                print(
+                    f"             traffic: {len(cars.spawned_objects)} car(s) on the road, "
+                    f"{cars.cars_spawned} spawned and {cars.cars_retired} retired over the "
+                    f"episode, {cars.collisions} collision(s), episode "
+                    f"{cars.episode_index} of seed {arguments.traffic_seed}"
+                )
+                if cars.on_road_low < cars.car_count:
+                    # A road that empties is the fault baked traffic has and live traffic is
+                    # meant not to have, so it is said rather than left in the numbers.
+                    print(
+                        f"             the road fell to {cars.on_road_low} car(s) at its "
+                        f"emptiest, against the {cars.car_count} asked for: the pool has no "
+                        "free start to release a replacement onto"
+                    )
 
             if lights is not None and lights.spawned_objects:
                 offset = getattr(lights, "episode_offset_seconds", None)

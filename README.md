@@ -439,6 +439,48 @@ step(s) of 0.01 s), 0 window(s) over 30 deg` — against `24.7 deg per 0.1 s win
 step(s) of 0.1 s)` at the default. Step 4's drive reaches completion 0.950, against
 0.953 for the same route at 10 Hz.
 
+### Put other cars on the road
+
+The roads in a converted dataset hold exactly one moving object, the ego. `--traffic live`
+puts other cars on them, generated from the reviewed lane graph and driven by MetaDrive's own
+IDM. Two steps — work out the routes once, then drive:
+
+```bash
+uv run osm-scenario traffic -w workspaces/junction-1 --count 60 --seed 1
+```
+
+then from inside `scripts/`:
+
+```bash
+./drive.sh junction-1 -- --traffic live --traffic-count 25 --render 3D
+```
+
+`--count` is a pool of *routes*, not cars; `--traffic-count` is how many cars are on the road
+at once, and one route can carry several. `traffic.json` holds geometry and no timing, so the
+same file serves every rate the workspace holds — like `routes.json`, and unlike a dataset.
+A different seed costs a second rather than a re-conversion, because none of this touches the
+dataset.
+
+**The cars are not in the dataset**, so a stock ScenarioNet consumer still sees an empty map.
+That is deliberate and it is the same split as `--lights tape` against `--lights live`: a
+recorded track has to be as long as the episode, so a slow agent would run off the end of the
+tape and the road would empty around it. Live cars have no end — one that reaches the edge of
+the map is retired and another enters where a road begins. Measured across 24 episodes on both
+extracts, under a replayed ego and a slow `--agent-policy idm` one, the road never fell below
+the number of cars asked for.
+
+**Cars do collide, and the number is measured rather than claimed.** Unsignalled, three
+episodes a row: **0.30–0.34 collisions per car-minute on `junction-1`**, and **none at all at
+10 cars on `mosque`**, rising to 0.18–0.20 at 25. IDM brakes only for what is within 20 m and
+on its own path — it has no give-way rule, and MetaDrive's own traffic manager has none either.
+What separates conflicting movements at a junction is the signal, so a training run wants
+`--signals` on the dataset and `--lights live` beside `--traffic live`. The two compose; they
+are not alternatives.
+
+`--traffic-seed` repeats a run. Two resets of the same scenario deliberately do **not** produce
+the same traffic — an agent that meets identical cars at identical times learns the step number
+rather than the traffic.
+
 ### Drive it yourself
 
 `--agent-policy manual` hands the wheel to the keyboard instead of to the tape. From

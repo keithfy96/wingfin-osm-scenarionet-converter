@@ -15,6 +15,7 @@ from osm_scenario.generation import GenerationError, generate_lane_model
 from osm_scenario.inspection import InspectionError, generate_inspection
 from osm_scenario.logging import configure_logging
 from osm_scenario.normalization import NormalizationError, normalize_workspace
+from osm_scenario.traffic_routes import DEFAULT_COUNT, TrafficError, build_traffic
 from osm_scenario.validation import ValidationError, validate_map
 
 app = typer.Typer(
@@ -311,6 +312,57 @@ def convert(
     typer.echo(f"Stage 6 reachability map: {reachability}")
     typer.echo(f"Stage 6 route builder:    {builder}")
     typer.echo(f"Stage 6 signal builder:   {signals}")
+
+
+@app.command()
+def traffic(
+    workspace: Workspace,
+    count: Annotated[
+        int,
+        typer.Option(
+            "--count",
+            min=1,
+            help="How many routes to keep in the pool. Not a car count - one route can "
+            "carry several cars, and how many drive is chosen at drive time.",
+        ),
+    ] = DEFAULT_COUNT,
+    seed: Annotated[
+        int,
+        typer.Option(
+            "--seed",
+            help="Chooses which lane pairs are tried, so two seeds give two different "
+            "pools over the same map.",
+        ),
+    ] = 0,
+) -> None:
+    """Work out routes for other cars to drive, and write traffic/traffic.json.
+
+    Stage 8. The file is read by `tools/traffic.py` inside MetaDrive, which is why it is a
+    file at all: that runs on Python 3.8 and cannot import this package. Nothing here
+    touches the dataset, so a different seed costs a second rather than a re-conversion.
+    """
+    try:
+        path, plan = build_traffic(workspace=workspace, count=count, seed=seed)
+    except (TrafficError, ConversionError, ValueError, KeyError) as error:
+        typer.echo(f"Stage 8 failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    lengths = sorted(route.distance_m for route in plan.routes)
+    typer.echo(f"Stage 8 complete: {len(plan.routes)} route(s) -> {path}")
+    typer.echo(
+        f"  {lengths[0]:.0f}-{lengths[-1]:.0f} m, median {lengths[len(lengths) // 2]:.0f} m; "
+        f"{plan.pairs_tried} lane pair(s) tried, {plan.pairs_with_no_drive} with no drive"
+    )
+    # Named rather than counted. An unfed lane is either a road the extract cut - where
+    # traffic genuinely arrives from off the map - or a starved lane inside a junction,
+    # where a car would appear in the middle of crossing traffic. Only the first is an
+    # entry, and which lanes fell each way is the thing worth reading.
+    typer.echo(f"  entry lanes ({len(plan.entries)}): {', '.join(plan.entries)}")
+    if plan.entries_rejected:
+        typer.echo(f"  not entries ({len(plan.entries_rejected)}):")
+        for lane_id, reason in plan.entries_rejected:
+            typer.echo(f"    {lane_id}  {reason}")
+    typer.echo(f"  exit lanes ({len(plan.exits)}): {', '.join(plan.exits)}")
 
 
 if __name__ == "__main__":

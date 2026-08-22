@@ -1291,6 +1291,82 @@ leaving the road in 13.
 `read` list rather than ROWS being edited**: what a hosted model is sent is the model's business,
 and changing the row definition would make every CSV taken under it mean something else.
 
+### Other cars are placed by this repo and driven by MetaDrive (2026-08-22)
+
+Stage 8. `osm-scenario traffic` writes `workspaces/<ws>/traffic/traffic.json`; `drive.py
+--traffic live` reads it and puts cars on the road. **The only thing this repo supplies is
+placement.** Every route is built by `ego_route.plan_route` and `ego_route.route_polyline`,
+unchanged and uncopied - so traffic drives the *same* junction geometry the recorded car does,
+cubics laid between the two lanes' own tangents rather than the connector marker - and every
+car is a MetaDrive vehicle running `TrajectoryIDMPolicy`, which takes a `PointLane` and
+nothing else (`idm_policy.py:442`).
+
+```bash
+uv run osm-scenario traffic -w workspaces/junction-1 --count 60 --seed 1
+cd scripts && ./drive.sh junction-1 -- --traffic live --traffic-count 25 --render 3D
+```
+
+**It is a file because of the interpreter, not because of taste** - the same reason
+`signal_control.py:9` gives for the live light manager. The planner is 3.10 and the manager
+runs in MetaDrive's 3.8 venv, so `tools/traffic.py` reads the numbers rather than importing
+`osm_scenario.traffic_routes`. `traffic.json` carries geometry and **no timing at all**, so
+one file serves every rate a workspace holds, exactly as one `routes.json` does.
+
+**`traffic_env` takes a class; `live_signal_env` returns one.** That asymmetry is deliberate
+and load-bearing: both are whole `ScenarioEnv` subclasses, so composing them by assignment
+would leave only the last one standing, and `--traffic live --lights live` would silently drop
+the lights. A red light is a physics wall and the **only** thing separating conflicting
+movements, because IDM has no give-way rule. `drive.py` therefore passes whatever `--lights`
+chose into `traffic_env`.
+
+Six things not to re-derive:
+
+- **A lane with no feeder is not automatically a place a car may appear.** `junction-1` has 19
+  (not the 21 `CLAUDE.md` used to read), and only **11** are roads the extract cut; the other 8
+  are starved lanes inside junctions, where a car materialises on tarmac other traffic is
+  crossing and nothing raises. The test is on the node - *does any other lane end where this one
+  begins* - and it was checked before it was trusted: **all 11** sit at an OSM node **outside**
+  `source/map.osm`'s own `<bounds>`, which is what a truncated way looks like, while most of the
+  8 are inside it. `mosque` splits 16 into 9 and 7. Exit lanes get **no** node test, deliberately:
+  nothing appears there, so a lane that leads nowhere is a fine place to stop however it got that
+  way.
+- **`POLYLINE_TOLERANCE_M` is 5 mm and the 30-degrees gate pins it, not the file size.**
+  `route_polyline` samples finely enough for `speed_profile` to read curvature - 55,842 points
+  over 60 `junction-1` routes - and every one becomes a `PointLane` vertex for every car on that
+  route. Measured worst vertex turn: **18.3 degrees** undecimated, **18.5 at 5 mm** for 23.4% of
+  the points, **34.3 at 2 cm** (over the gate) and **47.9 at 5 cm**. The next tolerance up is not
+  a cheaper version of this one; it is a different road. The file goes 3.2 MB -> 761 KB.
+- **The manager keeps its own generator, seeded once and advanced per episode.**
+  `BaseEngine.seed` reseeds every manager from the scenario index at each reset, and
+  `junction-1` holds exactly **one** scenario - so `global_random_seed` is 0 on every reset and a
+  manager drawing from `self.np_random` places identical traffic forever. Found by measuring two
+  resets, not by reading. Same trap, same fix, as `signal_control.LiveSignalManager`.
+- **A replacement enters at the *start* of a route, never partway along.** Every route in the
+  pool begins at a lane the extract cut, so the start is the one place a car may arrive from off
+  the map; dropped anywhere else it appears in the middle of a road other cars are on. Measured:
+  across 24 episodes on both maps the road never once fell below the count asked for, under a
+  replayed ego and under a slow `--agent-policy idm` one. **That is the fault that ruled out
+  baking traffic into `tracks`** - a recorded track is as long as the episode, so the road empties
+  around a slow agent - so it is the row that mattered.
+- **Collisions are counted once per car per episode, not once per step.** A crash flag stays up
+  while two cars are still touching, so a per-step count reports one collision as thirty and the
+  number describes the frame rate. Measured unsignalled, three episodes a row, ego driving:
+  **0.30-0.34 collisions per car-minute on `junction-1`** and **0.00 at 10 cars / 0.18-0.20 at 25
+  on `mosque`**. Flat across car count and across which policy drives the ego, so it is a property
+  of the junctions. **IDM has no give-way and this does not add one** - it brakes only for what is
+  within 20 m and geometrically on its own polyline (`idm_policy.py:136`). MetaDrive's own IDM has
+  no give-way either, so this is not a shortfall against a baseline; it is the number to improve
+  against, and it was measured before any rule was written.
+- **Traffic is not in the dataset**, so a stock ScenarioNet consumer still sees an empty map - the
+  same split as `--lights tape` against `--lights live`. And **it is what finally fills the lidar**:
+  `Lidar.perceive` scans `physics_world.dynamic_world`, which is why the 120-laser block reads a
+  constant 1.0 on a scenario holding one car.
+
+**Traffic stopping at a red is the one thing not measured**, and it cannot be here:
+`workspaces/junction-1/signals/signals.json` is bound to an older lane model and `convert`
+refuses it by fingerprint. Re-draw the phases in `inspection/stage-6-signal-builder.html` and
+rebuild with `--signals` - choosing signal timing is a person's job because OSM supplies none.
+
 ### A junction is bare inside and kerbed outside, and both halves are deliberate
 
 `_map_features` writes boundary features for `model.lanes` only, so a `ConnectorFeature` — a

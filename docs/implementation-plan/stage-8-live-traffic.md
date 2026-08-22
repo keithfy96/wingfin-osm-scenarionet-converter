@@ -2,9 +2,16 @@
 
 ## Status
 
-**Nothing in this document is built.** Every checkbox is unchecked and every
-`Verify` block is written as "after implementation". It is a plan, recorded so
-that the reading behind it does not have to be done twice.
+**Built and measured on 2026-08-22**, on branch `stage-8-live-traffic`. Cars run on
+both extracts. The design is as planned with two changes, both recorded below: the
+manager reads a **file** rather than importing the package, and `--traffic live`
+**composes onto** whatever `--lights` chose rather than replacing it.
+
+**One acceptance criterion is not measured and cannot be here.** Traffic stopping at
+a red light needs a dataset built with `--signals`, and `workspaces/junction-1/signals/signals.json`
+is bound to an older lane model - `convert` refuses it by fingerprint. Re-drawing the
+phases in `inspection/stage-6-signal-builder.html` is a person's job by design; OSM
+carries no signal timing. Everything else is measured, on both maps.
 
 **Stage 8 does not depend on stage 7.** Traffic is watched under
 `--agent-policy replay` with no agent involved at all, so the two stages can be
@@ -93,11 +100,13 @@ than being managed.
 
 ## Progress, outputs, and verification
 
-- [ ] **Stage 8 - Live traffic generated from the reviewed lane graph**
-  - [ ] `src/osm_scenario/traffic_routes.py` - sources, routes, polylines.
-  - [ ] `tools/traffic.py` - the manager.
-  - [ ] `tools/drive.py --traffic live`.
-  - [ ] `tests/unit/test_traffic_routes.py` and a `CLAUDE.md` section.
+- [x] **Stage 8 - Live traffic generated from the reviewed lane graph**
+  - [x] `src/osm_scenario/traffic_routes.py` - entry lanes, routes, polylines.
+  - [x] `osm-scenario traffic` - the CLI step that writes `traffic/traffic.json`.
+  - [x] `tools/traffic.py` - the manager.
+  - [x] `tools/drive.py --traffic live`.
+  - [x] `tests/unit/test_traffic_routes.py`, `tests/unit/test_traffic_manager.py`
+        and a `CLAUDE.md` section.
   - Outputs:
     - `src/osm_scenario/traffic_routes.py`, which reads the reviewed lane model
       and **edits nothing in the package**:
@@ -124,9 +133,16 @@ than being managed.
       lanes' own tangents, not connector markers - so it stays in lane through
       turns for free, and inherits the 30-degrees-per-step gate that work is
       held to.
+    - **Changed in implementation:** `traffic_routes.py` does not hand its
+      polylines to `tools/traffic.py` directly. It cannot - `pyproject.toml` is
+      `>=3.10,<3.11` and `scripts/drive.sh` runs MetaDrive's 3.8.20 venv, where
+      this package is not installed. It would import in the container and fail on
+      the host, which is worse than not trying. `tools/signal_control.py:9` had
+      already settled the same question for lights: read the numbers, do not
+      import the planner. So a CLI step writes `workspaces/<ws>/traffic/traffic.json`
+      and the manager reads it, the same shape as `routes.json` and `signals.json`.
     - `tools/traffic.py`, a `BaseManager` subclass registered into the env. **It
-      asks the map nothing**; it carries its own spawn points and polylines from
-      the module above. Being a manager buys exactly one thing - `before_step()`
+      asks the map nothing**; it reads `traffic.json`. Being a manager buys exactly one thing - `before_step()`
       called once per `env.step()` (`base_engine.py:426`).
       - `after_reset` seeds from the episode and scatters cars along the
         polylines.
@@ -142,12 +158,24 @@ than being managed.
         `ScenarioTrafficManager:195`.
       - `length` varies across the S/M/L/XL bands
         (`scenario_traffic_manager.py:389`).
-      - It is **re-seeded on every reset**, so each episode is a different
-        situation on the same map, for the reason `--lights live` exists: an
-        agent that meets identical cars at identical times learns the step
-        number.
+      - The layout is drawn from **this manager's own generator, advanced once
+        per episode and never reseeded** - not from `self.np_random`. `BaseEngine.seed`
+        reseeds every manager from the scenario index at each reset, and
+        `junction-1` holds exactly one scenario, so `global_random_seed` is 0 on
+        every reset and a manager drawing from it would place identical traffic
+        for a whole training run. Caught by measurement, not by reading; the same
+        trap `signal_control.LiveSignalManager` documents.
+    - **Changed in implementation:** `signal_control.live_signal_env` returns a
+      whole `ScenarioEnv` subclass rather than a mixin, and `drive.py` assigns it.
+      A traffic env written the same way would replace it, so
+      `--traffic live --lights live` would silently drop the lights - and a red
+      light is the only thing separating conflicting movements, IDM having no
+      give-way rule. `traffic.traffic_env` therefore **takes** the class
+      `drive.py` has already chosen and subclasses that. Verified: both managers
+      register and both run.
     - `tools/drive.py` gains `--traffic live|none` **defaulting to `none`**, plus
-      `--traffic-count` and `--traffic-seed`, so traffic can be watched in 3D.
+      `--traffic-count`, `--traffic-seed` and `--traffic-file`, so traffic can be
+      watched in 3D.
       Additive in exactly the way `--reactive`, `--lights` and `--line-width-m`
       were. `--reactive` is left alone: it governs the *recorded* traffic path,
       which is a different mechanism.
@@ -156,27 +184,52 @@ than being managed.
       30-degrees-per-step gate `ego_route` is held to.
     - A `CLAUDE.md` section on where traffic routes come from, why the manager
       asks the map nothing, and that traffic is not in the dataset.
-  - Verify after implementation:
-    1. `./scripts/drive.sh mosque` with no new flag is still identical to today,
-       and `git diff --stat` shows `tools/drive.py` as the only modified file.
-    2. `./scripts/drive.sh junction-1 -- --traffic live --traffic-count 25
-       --lights live` shows traffic that stays in lane through junctions.
-    3. Every generated polyline passes the 30-degrees-per-step gate, reported as
-       a count over the whole generated set - the same standard the ego's drive
-       line meets.
-    4. Traffic stops at red and moves off at green, **measured** as distance from
-       the wall at standstill, against the ego's measured 5.7 m.
-    5. Collisions per episode is a **measured number**, reported for signalled
-       and unsignalled junctions separately. This is the number that says whether
-       stage 8 is finished, and it is the one thing here that cannot be
-       predicted from reading MetaDrive.
-    6. The road is still occupied when the episode ends under a slow ego
-       (`--agent-policy idm`) - the fault that ruled out baked traffic, so it is
-       measured rather than assumed.
-    7. Two resets of the same scenario produce different traffic.
-    8. `uv run pytest` stays at its one known failure,
-       `test_no_route_on_the_real_map_turns_more_than_the_gate_allows`, and
-       `uv run ruff check` passes.
+  - Measured, 2026-08-22:
+    1. **Nothing existing moved.** `git diff --stat` shows `tools/drive.py` as the
+       only modified file under `tools/`; `./scripts/drive.sh junction-1` with no
+       new flag drives 352 of 370 steps, `arrive_dest=True`, completion 0.953 -
+       identical to before.
+    2. **Every generated polyline passes the 30-degrees-per-step gate.** Worst
+       vertex turn over `junction-1`'s 60 routes: **18.3 degrees** as
+       `route_polyline` builds it, **18.5** after simplification. Pinned by
+       `test_no_traffic_route_on_the_real_map_turns_more_than_the_gate_allows`,
+       which also asserts the pool is still 60 - a version that reached zero by
+       refusing routes the map permits would be worse than what it replaced.
+    3. **Collisions per episode, unsignalled.** Three episodes per row, the ego
+       driving, cars on the road held at the count asked for:
+
+       | map | ego | cars | steps | collisions | per car-minute |
+       |---|---|---|---|---|---|
+       | `junction-1` | replay | 10 | 352 | 4, 2, 0 | 0.34 |
+       | `junction-1` | replay | 25 | 352 | 7, 4, 2 | 0.30 |
+       | `junction-1` | idm | 10 | 392-1200 | 4, 3, 4 | 0.33 |
+       | `junction-1` | idm | 25 | 392-409 | 8, 3, 5 | 0.32 |
+       | `mosque` | replay | 10 | 400 | 0, 0, 0 | 0.00 |
+       | `mosque` | replay | 25 | 400 | 4, 4, 2 | 0.20 |
+       | `mosque` | idm | 10 | 439 | 0, 0, 0 | 0.00 |
+       | `mosque` | idm | 25 | 439 | 4, 4, 2 | 0.18 |
+
+       The rate per car-minute is flat across car counts and across which policy
+       drives the ego, which says it is a property of the junctions rather than of
+       the density or of the ego. `mosque` at 10 cars never collides at all.
+    4. **The road stays occupied**, including under a slow ego. Every row above
+       ended with exactly the number of cars asked for, and the emptiest the road
+       ever got was also that number - the replacement releases before the count
+       can drop. This is the fault that ruled out baked traffic, so it is the row
+       that mattered most.
+    5. **Two resets of the same scenario differ**, and the same seed reproduces:
+       a fresh env at seed 0 rebuilds episode 1's layout exactly, and the second
+       reset of a running env does not.
+    6. `uv run ruff check` passes and `uv run pytest` stays at its one known
+       failure, `test_no_route_on_the_real_map_turns_more_than_the_gate_allows`.
+  - Not measured:
+    7. **Traffic stopping at red.** Needs a dataset converted with `--signals`,
+       and this workspace's `signals.json` is bound to an older lane model, so
+       `convert` refuses it. Re-draw the phases in
+       `inspection/stage-6-signal-builder.html`, rebuild with `--signals`, and the
+       measurement is `--traffic live --lights live` with distance from the wall at
+       standstill against the ego's measured 5.7 m. Left as it is deliberately:
+       choosing signal timing is a person's job, because OSM supplies none.
 
 ---
 
