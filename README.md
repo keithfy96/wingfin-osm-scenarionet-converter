@@ -469,13 +469,31 @@ the map is retired and another enters where a road begins. Measured across 24 ep
 extracts, under a replayed ego and a slow `--agent-policy idm` one, the road never fell below
 the number of cars asked for.
 
-**Cars do collide, and the number is measured rather than claimed.** Unsignalled, three
-episodes a row: **0.30–0.34 collisions per car-minute on `junction-1`**, and **none at all at
-10 cars on `mosque`**, rising to 0.18–0.20 at 25. IDM brakes only for what is within 20 m and
-on its own path — it has no give-way rule, and MetaDrive's own traffic manager has none either.
-What separates conflicting movements at a junction is the signal, so a training run wants
+**The cars give way where two routes cross.** MetaDrive's IDM brakes only for what is on its
+own lane, so a car entering a junction from the side is not an obstacle to it at any distance —
+which is why a junction full of it collides. Traffic looks 40 m ahead along its own route, finds
+the first place another car's route crosses it at an angle, and holds one of the two back; the
+nearer car goes. It only ever slows a car down — steering, following distance and everything
+else is still MetaDrive's.
+
+**Cars still do collide, and the number is measured rather than claimed.** Unsignalled, 25 cars,
+ego replayed, over sixteen episodes on `junction-1` and twelve on `mosque` — one episode varies
+too much to compare on:
+
+| | give way off | give way on |
+|---|---|---|
+| `junction-1` | 79 collisions, 0.34 per car-minute | **60, 0.26** |
+| `junction-1`, head-on only | 23 | **4** |
+| `mosque` | 24 collisions, 0.12 per car-minute | **9, 0.04** |
+
+`--traffic-give-way off` is how the left column is produced; it is for measuring the rule, not
+for driving. The same number of cars complete their routes either way, so nothing is gridlocked,
+and the rule costs about 3 ms a step at 25 cars.
+
+What separates conflicting movements properly is still the signal, so a training run wants
 `--signals` on the dataset and `--lights live` beside `--traffic live`. The two compose; they
-are not alternatives.
+are not alternatives, and traffic stops at a red without anything extra — a MetaDrive light is
+a physical object on the lane, which is the same thing IDM brakes for.
 
 `--traffic-seed` repeats a run. Two resets of the same scenario deliberately do **not** produce
 the same traffic — an agent that meets identical cars at identical times learns the step number

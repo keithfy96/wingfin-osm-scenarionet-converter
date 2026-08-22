@@ -25,11 +25,22 @@ ScenarioNet consumer reading the pickles sees an empty map.
 **It fills the lidar.** `Lidar.perceive` scans `physics_world.dynamic_world`, and a scenario
 holding one car returns 120 lasers of exactly 1.0. That is not a misconfiguration and this is
 what fixes it.
+
+**The file's coordinates are not the simulator's, and the difference is the width of the
+map.** `traffic.json` is written in the same frame as the scenario on disk, but
+`ScenarioDataManager` loads every scenario with `centralize=True`
+(`scenario_data_manager.py:76`), which moves the whole world so the recorded car starts at
+the origin. So a point taken from the file and handed to MetaDrive unshifted lands
+`metadata.old_origin_in_current_coordinate` away from the road it was computed for -
+measured `[55.725, -75.469]` on `junction-1`, 93.8 m, which is the grass. `_episode_shift`
+reads that field every reset, for the same reason `geodesy.py` and `policy_client.py` do.
 """
 
 import json
 import math
 import random
+
+import numpy as np
 
 TRAFFIC_VERSION = 1
 
@@ -38,17 +49,63 @@ DEFAULT_COUNT = 25
 route may carry several cars."""
 
 MIN_GAP_M = 15.0
-"""Least distance between two cars placed on the same route.
+"""Least distance between two cars being placed, measured **between the cars**.
 
 A car is about 4.5 m long, so this is roughly two car lengths of clear road either side. It
 is a *placement* rule only: once the episode is running, how close cars get is IDM's business
-and it is allowed to close right up in a queue."""
+and it is allowed to close right up in a queue.
+
+**Between the cars, not along one route**, and that distinction is the whole of it: the pool
+holds many more routes than the map has ways onto it - 60 routes over **10 distinct start
+points** on `junction-1`, the busiest carrying 8 - so two routes are usually the same tarmac
+for their first hundred metres. Spaced per route, two cars on different routes were measured
+**0.97 m** apart at reset, which is one car inside another, and about half of every episode's
+collisions were the rear-end that followed. A car cannot see which route another car is
+following; it can only see where it is."""
 
 END_MARGIN_M = 20.0
 """No car is placed within this of a route's end.
 
 `TrajectoryIDMPolicy.arrive_destination` fires within `DEST_REGION_RADIUS` (2 m) of the last
 point, so a car placed at the end would be cleared on the frame it appeared."""
+
+
+YIELD_LOOKAHEAD_M = 40.0
+"""How far ahead a car looks along its own route for somewhere another car will cross it.
+
+Long enough to see a junction from the approach at the speeds this map is posted at - 40 m
+is about 3 s at 50 km/h - and short enough that a car is not held for a crossing two
+junctions away."""
+
+YIELD_SAMPLE_M = 2.0
+"""Spacing of the look-ahead samples. Half a car length, so a crossing cannot fall between
+two samples of one path and be missed."""
+
+CONFLICT_WIDTH_M = 4.0
+"""Two paths conflict where they pass within this of each other.
+
+A lane is 3.5 m and a car about 2 m wide, so paths closer than this cannot both be used at
+the same moment. It is a *path* separation, not a car separation: the cars are nowhere near
+each other yet when the yield is decided, which is the point of deciding it early."""
+
+CROSSING_MIN_DEG = 30.0
+CROSSING_MAX_DEG = 150.0
+"""The angle band that counts as crossing.
+
+Below `CROSSING_MIN_DEG` the two paths are running together - the same lane, or a merge -
+and that is IDM's own business: `FrontBackObjects.get_find_front_back_objs_single_lane`
+tests `lane.point_on_lane` on the *other* car's bounding box, so it sees anything sharing
+the tarmac ahead whatever route object that car is following. Yielding there instead would
+be a follower and its leader each waiting for the other. Above `CROSSING_MAX_DEG` is
+head-on, which on a correct one-way lane model does not happen and is not something a
+give-way rule can fix."""
+
+YIELD_BRAKE_MPS2 = 4.0
+"""The deceleration a full brake command is taken to be worth, when working out how hard to
+brake for a conflict this far off. Firm, and short of an emergency stop."""
+
+STOP_MARGIN_M = 3.0
+"""Where a yielding car aims to stop, short of the crossing point."""
 
 
 class TrafficError(RuntimeError):
@@ -116,7 +173,94 @@ def _pose_at(points, lengths, distance):
     return position, math.atan2(second[1] - first[1], second[0] - first[0])
 
 
-def build_manager(plan, count=DEFAULT_COUNT, seed=0):
+def _look_ahead(points, lengths, distance):
+    """Where a car will be over the next `YIELD_LOOKAHEAD_M`, and which way it faces.
+
+    Sampled along the route rather than integrated forward in time: the shape of what is
+    coming is fixed and known, and only *when* the car gets there depends on its speed.
+    Returns the sample positions, the distance along the route of each, and the heading of
+    each, so a conflict can be tested for angle as well as position.
+
+    **Vectorised, and that is not a micro-optimisation.** This runs for every car every step,
+    and a route carries about 900 vertices - `_pose_at` walks them from the start, so the
+    first version cost **6.9 ms a step** at 25 cars, two thirds again on top of the 10.8 ms
+    the same drive costs without it. `np.searchsorted` over the cumulative lengths makes it
+    **0.5 ms**. The arrays are built once a reset by `_localised_routes`, so `asarray` here
+    is free on the real path and only copies for a caller passing lists.
+    """
+    points = np.asarray(points, dtype=float)
+    lengths = np.asarray(lengths, dtype=float)
+    stops = distance + np.arange(0.0, YIELD_LOOKAHEAD_M + YIELD_SAMPLE_M, YIELD_SAMPLE_M)
+    stops = stops[stops <= lengths[-1]]
+    if len(stops) < 2:
+        return None
+    index = np.clip(np.searchsorted(lengths, stops, side="right") - 1, 0, len(points) - 2)
+    first, second = points[index], points[index + 1]
+    span = lengths[index + 1] - lengths[index]
+    # A repeated vertex leaves a zero-length segment - `ego_route.COINCIDENT_M`'s subject -
+    # and dividing by it would put NaN into a comparison that silently answers False.
+    fraction = np.where(span > 0.0, (stops - lengths[index]) / np.where(span > 0.0, span, 1.0), 0.0)
+    step = second - first
+    here = first + step * fraction[:, None]
+    heading = np.arctan2(step[:, 1], step[:, 0])
+    return np.column_stack((here[:, 0], here[:, 1], stops, heading))
+
+
+def _conflict(mine, theirs):
+    """Where two look-aheads cross, as (my distance, their distance), or None.
+
+    The *first* crossing along my own path, not the closest one: a car has to give way at the
+    first place its path is taken, and a nearer conflict behind a further one is not something
+    it will ever reach.
+
+    Two prunings, in this order, because this runs for every pair of cars every step. The
+    bounding boxes settle most pairs on a road network - two cars on different streets share no
+    ground - and the angle is then worked out only for the samples that are actually close,
+    rather than over the whole grid: the trig was two thirds of the cost when it was not.
+    """
+    if (
+        mine[:, 0].max() + CONFLICT_WIDTH_M < theirs[:, 0].min()
+        or theirs[:, 0].max() + CONFLICT_WIDTH_M < mine[:, 0].min()
+        or mine[:, 1].max() + CONFLICT_WIDTH_M < theirs[:, 1].min()
+        or theirs[:, 1].max() + CONFLICT_WIDTH_M < mine[:, 1].min()
+    ):
+        return None
+    gap = np.hypot(
+        mine[:, 0][:, None] - theirs[None, :, 0],
+        mine[:, 1][:, None] - theirs[None, :, 1],
+    )
+    rows, columns = np.nonzero(gap < CONFLICT_WIDTH_M)
+    if not len(rows):
+        return None
+    delta = mine[rows, 3] - theirs[columns, 3]
+    angle = np.abs(np.degrees(np.arctan2(np.sin(delta), np.cos(delta))))
+    keep = (angle >= CROSSING_MIN_DEG) & (angle <= CROSSING_MAX_DEG)
+    if not keep.any():
+        return None
+    rows, columns = rows[keep], columns[keep]
+    first = rows == rows.min()
+    rows, columns = rows[first], columns[first]
+    nearest = int(np.argmin(gap[rows, columns]))
+    return float(mine[rows[nearest], 2]), float(theirs[columns[nearest], 2])
+
+
+def _yield_brake(speed, distance_to_conflict):
+    """The brake command that stops this car short of a crossing it must give way at.
+
+    Worked out from the room left rather than applied flat, so a car that sees a
+    conflict 40 m off lifts off and one that sees it at 5 m stands on the brakes. It
+    is combined with IDM's own acceleration by taking the smaller of the two, so
+    giving way can only ever slow a car down - everything else about how it drives is
+    still MetaDrive's.
+    """
+    room = distance_to_conflict - STOP_MARGIN_M
+    if room <= 0.0:
+        return -1.0
+    
+    return -min(1.0, (speed * speed) / (2.0 * room) / YIELD_BRAKE_MPS2)
+
+
+def build_manager(plan, count=DEFAULT_COUNT, seed=0, give_way=True):
     """A `BaseManager` subclass that keeps `count` cars on the roads in `plan`.
 
     Imports live in here rather than at module scope so this file can be read - and its
@@ -128,6 +272,8 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0):
     from metadrive.manager.scenario_traffic_manager import ScenarioTrafficManager
     from metadrive.policy.idm_policy import TrajectoryIDMPolicy
 
+    # In the file's frame. The simulator's frame is this one moved by the ego's start
+    # position, and `after_reset` is where that is applied - see `_episode_shift`.
     routes = []
     for entry in plan["routes"]:
         points = [(float(x), float(y)) for x, y in entry["polyline"]]
@@ -149,9 +295,12 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0):
         def __init__(self):
             super().__init__()
             self.plan_routes = routes
+            # The same routes moved into this episode's world. Rebuilt every reset, because
+            # the shift belongs to the scenario and a dataset may hold more than one.
+            self.routes = routes
             self.car_count = count
             self.episode_seed = seed
-            self._placed = {}
+            self._placed = []
             self._policy_index = 0
             self._to_clear = []
             self._episode = 0
@@ -159,8 +308,12 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0):
             self.cars_retired = 0
             self.collisions = 0
             self.on_road_low = 0
+            self.gave_way = 0
+            self.conflicts_seen = 0
+            self.give_way = give_way
             self._crashed = set()
             self._route_of = {}
+            self._order = {}
             # This manager's own generator, seeded once and **not** reseeded per episode.
             # `BaseEngine.seed` reseeds every manager from the scenario index at each reset,
             # so a manager drawing from `self.np_random` would place the traffic identically
@@ -176,6 +329,48 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0):
         @property
         def ego_vehicle(self):
             return self.engine.agents[DEFAULT_AGENT]
+
+        def _episode_shift(self):
+            """Where the file's coordinates land in this episode's world.
+
+            `centralize=True` moves the loaded scenario so the recorded car starts at the
+            origin and records the move as `metadata.old_origin_in_current_coordinate`.
+            Everything MetaDrive shows - the map, the ego, the lights - is in the moved
+            frame; `traffic.json` is not, because it was written beside the pickle rather
+            than by it. Read per reset rather than once, since the shift is the *scenario's*
+            and a dataset may hold several.
+            """
+            manager = getattr(self.engine, "data_manager", None)
+            if manager is None:
+                return 0.0, 0.0
+            shift = manager.current_scenario_summary.get("old_origin_in_current_coordinate")
+            if shift is None:
+                return 0.0, 0.0
+            return float(shift[0]), float(shift[1])
+
+        def _localised_routes(self):
+            """`plan_routes` moved into this episode's frame.
+
+            Lengths are not recomputed: a translation does not change a distance along a
+            line, and recomputing them would let the two frames disagree by rounding.
+            """
+            offset_x, offset_y = self._episode_shift()
+            out = []
+            for route in self.plan_routes:
+                points = [(x + offset_x, y + offset_y) for x, y in route["points"]]
+                out.append(
+                    {
+                        "name": route["name"],
+                        "points": points,
+                        "lengths": route["lengths"],
+                        # Built once here rather than per car per step: `_look_ahead` runs for
+                        # every car on every step and is the only hot path in this module.
+                        "xy": np.asarray(points, dtype=float),
+                        "cumulative": np.asarray(route["lengths"], dtype=float),
+                        "speed_mps": route["speed_mps"],
+                    }
+                )
+            return out
 
         def _clear_of_ego(self, position):
             """MetaDrive's own rule, and its own constants.
@@ -193,9 +388,15 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0):
                 and abs(sideways) < ScenarioTrafficManager.GENERATION_SIDE_CONSTRAINT
             )
 
-        def _free_at(self, index, distance):
+        def _free_at(self, position):
+            """Whether a car may be put here: far enough from every car already placed.
+
+            Every car, not every car on this route - see `MIN_GAP_M`. The ego is checked
+            separately by `_clear_of_ego`, with MetaDrive's own constants.
+            """
             return all(
-                abs(taken - distance) >= MIN_GAP_M for taken in self._placed.get(index, ())
+                math.hypot(position[0] - taken[0], position[1] - taken[1]) >= MIN_GAP_M
+                for taken in self._placed
             )
 
         def _choose_placements(self, rng):
@@ -214,24 +415,22 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0):
             while len(placements) < self.car_count and attempts < budget:
                 index = order[len(placements) % len(order)] if order else 0
                 attempts += 1
-                route = self.plan_routes[index]
+                route = self.routes[index]
                 usable = route["lengths"][-1] - END_MARGIN_M
                 if usable <= 0.0:
                     continue
                 distance = rng.uniform(0.0, usable)
-                if not self._free_at(index, distance):
-                    continue
                 position, heading = _pose_at(route["points"], route["lengths"], distance)
-                if not self._clear_of_ego(position):
+                if not self._free_at(position) or not self._clear_of_ego(position):
                     continue
-                self._placed.setdefault(index, []).append(distance)
+                self._placed.append(position)
                 placements.append((index, distance, position, heading))
             return placements
 
         def _spawn(self, index, position, heading, rng):
             from metadrive.component.lane.point_lane import PointLane
 
-            route = self.plan_routes[index]
+            route = self.routes[index]
             vehicle_class = self.SIZES[rng.randrange(len(self.SIZES))]
             config = ScenarioTrafficManager.get_traffic_v_config()
             vehicle = self.spawn_object(
@@ -254,6 +453,13 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0):
             self._policy_index += 1
             self.cars_spawned += 1
             self._route_of[vehicle.name] = index
+            # A stable name for this car. **Not `vehicle.name`**, which is
+            # `str(uuid.uuid4())` (`nameable.py:12`) - a fresh random id every process - so a
+            # give-way tie broken on it is decided differently on every run. That was measured
+            # before it was fixed: with the rule off the same five episodes gave 26 collisions
+            # four times over, and with it on they gave 13, 19, 20 and 22, because a different
+            # car of each tied pair went first and the physics amplified it from there.
+            self._order[vehicle.name] = self._policy_index
             return vehicle
 
         @property
@@ -269,16 +475,22 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0):
         # --- the episode ------------------------------------------------------------------
 
         def after_reset(self):
-            self._placed = {}
+            self._placed = []
             self._policy_index = 0
             self._to_clear = []
             self._episode += 1
             self.cars_spawned = 0
             self.cars_retired = 0
             self.collisions = 0
+            self.gave_way = 0
+            self.conflicts_seen = 0
             self.on_road_low = self.car_count
             self._crashed = set()
             self._route_of = {}
+            self._order = {}
+            # Before any placement: every position, heading and `PointLane` below comes off
+            # these points, and in the file's frame all of them are off the map.
+            self.routes = self._localised_routes()
             for index, _distance, position, heading in self._choose_placements(self._rng):
                 self._spawn(index, position, heading, self._rng)
 
@@ -292,6 +504,10 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0):
             """
             self._to_clear = []
             self.on_road_low = min(self.on_road_low, len(self.spawned_objects))
+            brakes = self._yielders() if self.give_way else {}
+            # Counted over the episode rather than held as a snapshot: a rule that fires
+            # twice and a rule that never fires look the same on the last step of a drive.
+            self.gave_way += len(brakes)
             for vehicle in list(self.spawned_objects.values()):
                 # Counted once per car per episode, not once per step: a crash flag stays up
                 # while the two cars are still touching, so a per-step count would report one
@@ -303,11 +519,17 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0):
                 if not self.engine.has_policy(vehicle.id, TrajectoryIDMPolicy):
                     continue
                 policy = self.engine.get_policy(vehicle.name)
-                if policy.arrive_destination:
+                if policy.arrive_destination or self._past_the_end(vehicle, policy):
                     self._to_clear.append(vehicle.name)
                     continue
                 speed_control = self.episode_step % self.IDM_ACT_BATCH_SIZE == policy.policy_index
-                vehicle.before_step(policy.act(speed_control))
+                action = policy.act(speed_control)
+                brake = brakes.get(vehicle.name)
+                if brake is not None:
+                    # Taking the smaller of the two, so giving way only ever slows a car:
+                    # steering, following distance and everything else stays IDM's.
+                    action = [action[0], min(action[1], brake)]
+                vehicle.before_step(action)
 
         def after_step(self, *args, **kwargs):
             """Retire the arrived cars and put the same number back on the road.
@@ -320,16 +542,16 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0):
                 self.clear_objects([name])
                 self._crashed.discard(name)
                 self._route_of.pop(name, None)
+                self._order.pop(name, None)
             replacements = len(self._to_clear)
             self.cars_retired += replacements
             self._to_clear = []
             if not replacements:
                 return {}
-            self._placed = {}
-            for vehicle in self.spawned_objects.values():
-                index, distance = self._where(vehicle)
-                if index is not None:
-                    self._placed.setdefault(index, []).append(distance)
+            # Where the cars actually are, rather than where their routes say they should be:
+            # a replacement must not land on a car, and a car's position is the only thing
+            # that decides whether it has.
+            self._placed = [tuple(v.position[:2]) for v in self.spawned_objects.values()]
             for _index, _distance, position, heading in self._choose_replacements(replacements):
                 self._spawn(_index, position, heading, self._rng)
             return {}
@@ -347,15 +569,141 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0):
             for index in order:
                 if len(out) >= wanted:
                     break
-                route = self.plan_routes[index]
-                if not self._free_at(index, 0.0):
-                    continue
+                route = self.routes[index]
                 position, heading = _pose_at(route["points"], route["lengths"], 0.0)
-                if not self._clear_of_ego(position):
+                if not self._free_at(position) or not self._clear_of_ego(position):
                     continue
-                self._placed.setdefault(index, []).append(0.0)
+                self._placed.append(position)
                 out.append((index, 0.0, position, heading))
             return out
+
+        # --- giving way --------------------------------------------------------------------
+
+        def _yielders(self):
+            """Which cars must give way this step, and how hard each must brake.
+
+            **IDM cannot see a car crossing its path.** `get_find_front_back_objs_single_lane`
+            keeps only objects whose bounding box is on the follower's *own* lane, so a car
+            entering the junction from the side is not an obstacle to it at any distance -
+            which is why a junction full of IDM cars collides, and why MetaDrive's own traffic
+            manager never meets the problem: it replays recorded tracks that were driven by
+            people who did give way.
+
+            **The nearer car goes.** Priority is the distance each has left to run to the
+            crossing, not the time - a car that has stopped has an infinite time to arrive and
+            would give way to everything for ever, including to the car waiting for it. Ties
+            break on the **spawn ordinal**, so the answer cannot depend on iteration order, two
+            cars never both decide they are the one to go, and the same seed gives the same
+            drive - see `_order` in `_spawn` for why it is not the vehicle's name.
+            """
+            ahead, brakes = {}, {}
+            found_any = 0
+            ego = self._ego_look_ahead()
+            for vehicle in self.spawned_objects.values():
+                index, distance = self._where(vehicle)
+                if index is None:
+                    continue
+                route = self.routes[index]
+                samples = _look_ahead(route["xy"], route["cumulative"], distance)
+                if samples is not None and len(samples) > 1:
+                    ahead[vehicle.name] = (vehicle, distance, samples)
+            names = sorted(ahead, key=self._order.get)
+            for position, name in enumerate(names):
+                vehicle, distance, samples = ahead[name]
+                # The ego first, and it is never the one told to brake: nothing here drives
+                # it. Under `--agent-policy replay` it is a tape and cannot yield at all, and
+                # under any other policy it has its own reason to brake and does not need
+                # ours. Before this, traffic could not see the ego at all - it is not in the
+                # plan - and 5 of 16 collisions measured over four `junction-1` episodes were
+                # with it.
+                if ego is not None:
+                    against_ego = _conflict(samples, ego)
+                    if against_ego is not None:
+                        found_any += 1
+                        room = against_ego[0] - distance
+                        if room > 0.0:
+                            brakes[name] = min(
+                                brakes.get(name, 0.0),
+                                _yield_brake(float(vehicle.speed), room),
+                            )
+                for other in names[position + 1 :]:
+                    their_vehicle, their_distance, their_samples = ahead[other]
+                    separation = math.hypot(
+                        vehicle.position[0] - their_vehicle.position[0],
+                        vehicle.position[1] - their_vehicle.position[1],
+                    )
+                    if separation > 2 * YIELD_LOOKAHEAD_M:
+                        continue
+                    found = _conflict(samples, their_samples)
+                    if found is None:
+                        continue
+                    found_any += 1
+                    my_room = found[0] - distance
+                    their_room = found[1] - their_distance
+                    if my_room <= 0.0 or their_room <= 0.0:
+                        continue
+                    # The spawn ordinal is the tie-break, and it is why `names` is sorted by
+                    # it: this car's ordinal is always the smaller here, so an exact tie is
+                    # always resolved the same way round - and unlike `vehicle.name` it is the
+                    # same on every run of the same seed.
+                    if (my_room, self._order[name]) > (their_room, self._order[other]):
+                        loser, room = name, my_room
+                    else:
+                        loser, room = other, their_room
+                    brake = _yield_brake(float(ahead[loser][0].speed), room)
+                    brakes[loser] = min(brakes.get(loser, 0.0), brake)
+            self.conflicts_seen += found_any
+            return brakes
+
+        def _ego_look_ahead(self):
+            """Where the ego will be over the next `YIELD_LOOKAHEAD_M`, as look-ahead samples.
+
+            **Extrapolated from where it is going, not read off its recorded track**, and that
+            is deliberate: the tape is the ego's future only while it is being replayed, and
+            `--agent-policy idm`, `manual` and `remote` all drive it somewhere else. A
+            straight line at the current heading is right enough for all four over the second
+            or two that decides a give-way, and wrong in the same way for all four.
+
+            A stationary ego yields no samples: it is not going anywhere to be given way to,
+            and IDM already brakes for a car standing on its own lane.
+            """
+            try:
+                ego = self.ego_vehicle
+            except (KeyError, AttributeError):
+                return None
+            if float(ego.speed) < 0.5:
+                return None
+            heading = float(ego.heading_theta)
+            reach = np.arange(0.0, YIELD_LOOKAHEAD_M + YIELD_SAMPLE_M, YIELD_SAMPLE_M)
+            return np.column_stack(
+                (
+                    ego.position[0] + np.cos(heading) * reach,
+                    ego.position[1] + np.sin(heading) * reach,
+                    reach,
+                    np.full(len(reach), heading),
+                )
+            )
+
+        def _past_the_end(self, vehicle, policy):
+            """Whether the car has driven off the end of its route.
+
+            `TrajectoryIDMPolicy.arrive_destination` is a `DEST_REGION_RADIUS` circle around
+            the trajectory's **last point**, so a car that arrives even slightly wide never
+            enters it - and nothing else stops it, because `steering_control` asks
+            `heading_theta_at(long + 1)`, which clamps to the final segment: the car then
+            drives dead straight for ever, through whatever is in front of it. Measured on
+            `junction-1` before this test existed, three episodes of 25 cars: **36 cars ran
+            past their last point and stayed**, against 27 retired by the circle, two of them
+            reaching 245 m and 131 m clear of any road.
+
+            The same margin, measured **along the route** rather than across the plane, so a
+            car that gets to the end wide is still a car that got to the end. No new
+            constant: arriving is still `DEST_REGION_RADIUS` from the end, and this only
+            stops asking the car to arrive laterally as well.
+            """
+            line = policy.traj_to_follow
+            along, _lateral = line.local_coordinates(vehicle.position)
+            return along >= line.length - TrajectoryIDMPolicy.DEST_REGION_RADIUS
 
         def _where(self, vehicle):
             """Which route a car is on and how far along it is.
@@ -377,7 +725,7 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0):
     return LiveTrafficManager
 
 
-def traffic_env(base_class, *, plan, count=DEFAULT_COUNT, seed=0):
+def traffic_env(base_class, *, plan, count=DEFAULT_COUNT, seed=0, give_way=True):
     """`base_class` with a live traffic manager registered beside whatever it already has.
 
     **It takes a class rather than returning one from scratch**, which
@@ -392,7 +740,7 @@ def traffic_env(base_class, *, plan, count=DEFAULT_COUNT, seed=0):
     episode's cars unmanaged, `before_reset` having already run for every manager the engine
     knew about.
     """
-    manager_class = build_manager(plan, count=count, seed=seed)
+    manager_class = build_manager(plan, count=count, seed=seed, give_way=give_way)
 
     class TrafficScenarioEnv(base_class):
         def setup_engine(self):

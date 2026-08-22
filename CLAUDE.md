@@ -1355,17 +1355,146 @@ Six things not to re-derive:
   around a slow agent - so it is the row that mattered.
 - **Collisions are counted once per car per episode, not once per step.** A crash flag stays up
   while two cars are still touching, so a per-step count reports one collision as thirty and the
-  number describes the frame rate. Measured unsignalled, three episodes a row, ego driving:
-  **0.30-0.34 collisions per car-minute on `junction-1`** and **0.00 at 10 cars / 0.18-0.20 at 25
-  on `mosque`**. Flat across car count and across which policy drives the ego, so it is a property
-  of the junctions. **IDM has no give-way and this does not add one** - it brakes only for what is
-  within 20 m and geometrically on its own polyline (`idm_policy.py:136`). MetaDrive's own IDM has
-  no give-way either, so this is not a shortfall against a baseline; it is the number to improve
-  against, and it was measured before any rule was written.
+  number describes the frame rate.
 - **Traffic is not in the dataset**, so a stock ScenarioNet consumer still sees an empty map - the
   same split as `--lights tape` against `--lights live`. And **it is what finally fills the lidar**:
   `Lidar.perceive` scans `physics_world.dynamic_world`, which is why the 120-laser block reads a
   constant 1.0 on a scenario holding one car.
+
+### Three reasons the traffic looked like it was ignoring the road (2026-08-22, second round)
+
+Keith: *"the cars look good, but they seem to be just driving around aimlessly on the grass,
+i need them to follow lane and traffic rules and not bump into other vehicles."* Three separate
+faults, none of them in the routes: `traffic.json` is unchanged and did not need regenerating,
+and nothing in `src/osm_scenario/` moved, so no fingerprint moved either. All three are in
+`tools/traffic.py`.
+
+**1. The file's frame is not the simulator's, and everything written beside a pickle inherits
+this.** `ScenarioDataManager` loads every scenario with `centralize=True`
+(`scenario_data_manager.py:76`), which moves the whole world so the recorded car starts at the
+origin, and records the move as `metadata.old_origin_in_current_coordinate`. `traffic.json` is
+written in the *file's* frame, so a point handed to MetaDrive unshifted lands exactly that far
+from the road it was computed for - **`[55.725, -75.469]` on `junction-1`, 93.8 m**. Measured
+against the road surface itself rather than against a nearest-vertex distance, which is
+meaningless when a lane feature carries only a polygon: **0 of 10 cars on the tarmac, a median
+47.7 m clear of it, and 60 of 65 sampled route points off the road**; after, **10 of 10 and 0 of
+65**. `_episode_shift` reads the field every reset, because the shift belongs to the *scenario*
+and a dataset may hold several. `tools/geodesy.py:20` and `policy_client.py:160` already read the
+same field for the same reason - traffic was the one thing written beside the pickle that did
+not.
+
+**2. `arrive_destination` is a circle around the last point, so a car that arrived wide never
+arrived.** `TrajectoryIDMPolicy.arrive_destination` (`idm_policy.py:464`) is `DEST_REGION_RADIUS`
+2 m from `traj.end` in the plane, and nothing else ends a car's run - `steering_control` asks
+`heading_theta_at(long + 1)`, which clamps to the final segment, so a car that misses the circle
+drives dead straight for ever through whatever is in front of it. Measured over three episodes of
+25 cars: **36 cars ran past their last point and stayed**, against 27 retired by the circle, two
+of them reaching **245 m and 131 m** clear of any road. `_past_the_end` measures the same margin
+**along the route** instead. It is not a new constant - arriving is still `DEST_REGION_RADIUS`
+from the end; it just stops asking the car to arrive laterally as well. Worst distance off the
+road, same drive: **244.85 m -> 7.23 m**.
+
+**3. `MIN_GAP_M` spaced cars along one route, and the pool has far more routes than the map has
+ways in.** `junction-1`'s 60 routes start at **10 distinct points**, the busiest carrying 8, so
+two routes are usually the same tarmac for their first hundred metres - and two cars on different
+routes were spaced by nothing at all. Measured at reset: **closest pair 0.97 m**, four pairs under
+5 m, and about half of every episode's collisions were the rear-end that followed. The rule is now
+between the *cars* (`_free_at` takes a position, and `after_step` rebuilds the list from where the
+cars actually are rather than from where their routes project them): **closest pair 15.19-20.11 m
+over four resets, still 25 of 25 placed**. A car cannot see which route another car is following;
+it can only see where it is.
+
+### Traffic gives way where two routes cross, because IDM cannot see across its own lane
+
+**`get_find_front_back_objs_single_lane` keeps only objects whose bounding box is on the
+follower's own lane** (`idm_policy.py:161-164`, `lane.point_on_lane`). That is geometric, not by
+lane identity, so a car ahead on the same tarmac *is* seen whatever route object it is following -
+which is why rear-end collisions were a placement fault and not a driving one. But a car entering
+from the side is on no part of that lane at any distance, so it is not an obstacle at all.
+MetaDrive's own traffic manager never meets this: it replays recorded tracks driven by people who
+did give way.
+
+`_yielders` runs once per `before_step` and is the only thing in this repo that decides how a car
+drives. It looks `YIELD_LOOKAHEAD_M` (40 m, about 3 s at 50 km/h) ahead along each car's own
+route, finds the first place two look-aheads pass within `CONFLICT_WIDTH_M` (4 m) **at an angle**,
+and holds one of the two back. `--traffic-give-way off` measures what it is worth.
+
+Measured 25 cars, unsignalled, ego replayed. **Sixteen episodes on `junction-1` and twelve on
+`mosque`, and the length is not padding**: a single `junction-1` episode ranges from 2 to 10
+collisions with the rule off, so a five-episode window moves by more than the rule is worth and
+an earlier version of this table read the difference backwards. The runs are exactly repeatable
+across separate processes - the same episode list came back from two independent 8- and
+16-episode runs of each column - which is the point of the tie-break below.
+
+| | give way off | give way on |
+|---|---|---|
+| `junction-1`, collisions over 16 episodes | 79 (0.34 /car-min) | **60 (0.26)** |
+| ... of which head-on, traffic only | 23 | **4** |
+| ... of which crossing, traffic only | 47 | **38** |
+| ... of which rear-end, traffic only | 0 | 12 |
+| ... of which with the ego | 9 | **6** |
+| `mosque`, collisions over 12 episodes | 24 (0.12 /car-min) | **9 (0.04)** |
+
+**The head-on column is where the rule pays**, and it is not the column it was aimed at: a
+give-way rule declines to act above `CROSSING_MAX_DEG`, so it never brakes for a head-on. What it
+removes is the *crossing* collision upstream that knocks a car into the oncoming carriageway in
+the first place. 23 to 4.
+
+**The rear-end count goes up and that is the rule's own doing**, not noise: a car that brakes for
+a crossing is a car the one behind it has to brake for, and `do_speed_control` runs a fifth of
+the cars per step (`IDM_ACT_BATCH_SIZE`), so a follower can be up to 0.5 s late noticing. It is
+still a net 19 fewer, and the twelve it costs are the shunt rather than the T-bone.
+
+Cars retired per episode is unchanged either way, which is the check that matters against a rule
+that brakes: nothing is gridlocked, the same traffic completes the same routes.
+
+**It costs 3.1 ms a step at 25 cars** - 11.3 ms against 14.4 on `junction-1` headless - and the
+first version cost **6.9**. Two prunings halved it, and neither was the obvious one: `_look_ahead`
+was vectorised with `searchsorted` (`_pose_at` walks a ~900-vertex route from the start, and it
+was being called 525 times a step) for 1 ms, and `_conflict` gained a bounding-box rejection and
+stopped computing the crossing angle over the whole 21x21 grid rather than over the samples that
+are actually close, for 2.8 ms. The arrays it reads are built once a reset in `_localised_routes`.
+
+Five things not to re-derive:
+
+- **The angle band is what makes it safe to run at all.** Below `CROSSING_MIN_DEG` (30 deg) two
+  paths are running together - the same lane, or a merge - and treating that as a conflict would
+  have a follower and its leader each waiting for the other for ever. IDM already owns that case,
+  per `point_on_lane` above. Above `CROSSING_MAX_DEG` (150 deg) is head-on, which a give-way rule
+  cannot fix and a correct one-way lane model does not produce.
+- **The nearer car goes, decided on distance and not on time.** A car that has stopped has an
+  infinite time to arrive, so a time-based priority makes it give way to everything for ever -
+  including to the car that is waiting for it.
+- **Ties break on the spawn ordinal, and `vehicle.name` will not do**, which cost a full round of
+  measurement to find. `nameable.py:12` is `self.name = str(uuid.uuid4())` - a fresh random id
+  every process - so a tie broken on it sends a different car first on every run, and the physics
+  amplifies that from there. Measured: with the rule **off** the same five episodes gave **26
+  collisions four times over**, and with it **on** they gave **13, 19, 20 and 22**. It was the
+  give-way column being the only unrepeatable one that gave it away. On the ordinal, three runs
+  of each now give 26 and 18 exactly. Anything in this repo that breaks a tie between two
+  MetaDrive objects has the same trap waiting in it.
+- **Giving way can only ever slow a car down.** `before_step` takes `min(idm_acc, brake)`;
+  steering, following distance and everything else is still MetaDrive's. `_yield_brake` sizes the
+  brake from the room left and the car's own speed, so a stationary car asks for nothing and is
+  held by the throttle cap alone.
+- **Traffic gives way to the ego as well, and the ego is never the one braked.** The ego is not
+  in the plan, so nothing in the look-ahead could see it: 9 of `junction-1`'s 79 collisions were
+  with it. `_ego_look_ahead` extrapolates a straight line from where it is going rather than
+  reading its recorded track - the tape is the ego's future only under `--agent-policy replay`,
+  and `idm`, `manual` and `remote` all drive it somewhere else, so a straight line is right
+  enough for all four over the second that decides a give-way and wrong in the same way for all
+  four. Worth **67 to 60** over 16 episodes, measured on its own by disabling that one method.
+  The ego never receives a brake: under replay it is a tape and cannot yield, and under any other
+  policy it brakes for its own reasons.
+- **It is measured by counting collisions, not by counting yields.** Over a five-episode run the
+  rule holds a car back on a few hundred car-steps out of 8,800; genuine crossings are rare on a
+  map this size, and a third of the collisions going for that handful of interventions is the
+  result, not a sign it is not firing.
+- **Traffic stops at a red without any of this**, and that was checked rather than assumed:
+  `TrajectoryIDMPolicy.act` has no light logic, but a MetaDrive light is a physical object on the
+  lane, so `get_find_front_back_objs_single_lane` returns it as the front object and
+  `acceleration()` brakes for it. It is the same path that already stops the ego 5.7 m short of a
+  red under `--agent-policy idm`.
 
 **Traffic stopping at a red is the one thing not measured**, and it cannot be here:
 `workspaces/junction-1/signals/signals.json` is bound to an older lane model and `convert`

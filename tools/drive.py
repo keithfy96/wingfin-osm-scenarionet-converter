@@ -697,6 +697,14 @@ def main() -> int:
         "seed is mixed in beside it, which is what makes two resets differ.",
     )
     parser.add_argument(
+        "--traffic-give-way",
+        choices=("on", "off"),
+        default="on",
+        help="Whether traffic gives way where two routes cross. On by default: IDM brakes "
+        "only for cars on its own lane, so a junction full of it collides. `off` is for "
+        "measuring what the rule is worth, not for driving.",
+    )
+    parser.add_argument(
         "--traffic-file",
         default=None,
         help="traffic.json to read. Defaults to <workspace>/traffic/traffic.json, worked out "
@@ -895,7 +903,11 @@ def main() -> int:
         # whole env classes, so assigning here would silently drop the lights - and a red
         # light is the only thing separating conflicting movements, IDM having no give-way.
         environment_class = traffic_env(
-            environment_class, plan=traffic_plan, count=cars, seed=arguments.traffic_seed
+            environment_class,
+            plan=traffic_plan,
+            count=cars,
+            seed=arguments.traffic_seed,
+            give_way=arguments.traffic_give_way == "on",
         )
         print(
             f"traffic      {cars} car(s) from {len(traffic_plan['routes'])} route(s) "
@@ -1316,7 +1328,8 @@ def main() -> int:
                     f"             traffic: {len(cars.spawned_objects)} car(s) on the road, "
                     f"{cars.cars_spawned} spawned and {cars.cars_retired} retired over the "
                     f"episode, {cars.collisions} collision(s), episode "
-                    f"{cars.episode_index} of seed {arguments.traffic_seed}"
+                    f"{cars.episode_index} of seed {arguments.traffic_seed}, "
+                    f"give way {arguments.traffic_give_way}"
                 )
                 if cars.on_road_low < cars.car_count:
                     # A road that empties is the fault baked traffic has and live traffic is
