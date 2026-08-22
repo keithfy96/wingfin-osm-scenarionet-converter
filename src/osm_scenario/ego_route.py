@@ -995,7 +995,11 @@ def _densify(polyline: np.ndarray, *, spacing: float) -> tuple[np.ndarray, np.nd
 
 
 def speed_profile(
-    polyline: np.ndarray, *, cruise_mps: float, stops_at: Sequence[float] = ()
+    polyline: np.ndarray,
+    *,
+    cruise_mps: float,
+    stops_at: Sequence[float] = (),
+    lateral_accel_mps2: float = LATERAL_ACCEL_MPS2,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """The drive resampled evenly, how far along each point is, and how fast the car is there.
 
@@ -1009,6 +1013,13 @@ def speed_profile(
     producing a crawl and has nothing to say about a car that is deliberately stationary. The
     same two passes then brake into the stop and pull away from it, so a baked stop is a real
     approach rather than a speed that steps to zero between two samples.
+
+    `lateral_accel_mps2` defaults to the module constant, so the ego's drive is unchanged.
+    It is a parameter because **`LATERAL_ACCEL_MPS2` is not a comfort figure** - it is pinned
+    to the ego's own 30°-per-step gate, and a caller driving something other than the recorded
+    car may need a gentler one. `traffic_routes` passes 4.0: MetaDrive's IDM tracks the line
+    with a PID that has a fixed 1 m preview, and at 8.5 it runs wide on the corners this same
+    geometry asks the ego to slow for.
     """
     dense, travelled = _densify(polyline, spacing=PROFILE_SAMPLE_M)
     steps = np.diff(travelled)
@@ -1026,7 +1037,7 @@ def speed_profile(
         bends = turn > 1e-9
         radius = np.full(len(turn), np.inf)
         radius[bends] = span[bends] / turn[bends]
-        limit[1:-1] = np.minimum(limit[1:-1], np.sqrt(LATERAL_ACCEL_MPS2 * radius))
+        limit[1:-1] = np.minimum(limit[1:-1], np.sqrt(lateral_accel_mps2 * radius))
 
     limit = np.clip(limit, min(MIN_SPEED_MPS, cruise_mps), cruise_mps)
     for stop in stops_at:

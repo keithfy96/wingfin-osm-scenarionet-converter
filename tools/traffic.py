@@ -42,7 +42,7 @@ import random
 
 import numpy as np
 
-TRAFFIC_VERSION = 1
+TRAFFIC_VERSION = 2
 
 DEFAULT_COUNT = 25
 """Cars on the road at once. Not the number of routes - the pool is usually larger, and one
@@ -107,6 +107,21 @@ brake for a conflict this far off. Firm, and short of an emergency stop."""
 STOP_MARGIN_M = 3.0
 """Where a yielding car aims to stop, short of the crossing point."""
 
+LOST_LATERAL_M = 5.0
+"""How far off its own route a car may be before it is taken off the map.
+
+A car is not steered by anything that knows where the road is - `steering_control` is two
+PIDs chasing the polyline - so one that has been carried wide does not necessarily come back,
+and what it does instead is drive across whatever is there. Measured over three `junction-1`
+episodes with the speed profile in force: the lateral error is 0.11 m at the median and
+1.80 m at p90, and there were **7 excursions past 5 m against 11 past 3 m**. 3 m would pick up
+cars still going round a junction; 5 m is a lane and a half, which nothing driving its route
+needs.
+
+It is a retirement, not a rescue: the car is cleared and a replacement enters at a route
+start, the same path an arrival takes. Counted separately from `cars_retired`, because a car
+picked up off the grass did not complete a route and must not be reported as one."""
+
 
 class TrafficError(RuntimeError):
     """Raised when a traffic plan cannot be used with this dataset."""
@@ -125,8 +140,19 @@ def load_plan(path):
         raise TrafficError(f"{path} is not a traffic plan")
     version = raw.get("traffic_version")
     if version != TRAFFIC_VERSION:
+        # Named, not just numbered. A version 1 file is the common case and it is one
+        # rebuild away, so the message says what is missing rather than leaving the reader to
+        # work out what a version number means.
+        missing = (
+            " - it carries no speed profile, so every car would take every corner at"
+            " MetaDrive's flat 40 km/h"
+            if version == 1
+            else ""
+        )
         raise TrafficError(
-            f"unsupported traffic_version {version!r}; this reader understands {TRAFFIC_VERSION}"
+            f"{path} is traffic_version {version!r} and this reader understands "
+            f"{TRAFFIC_VERSION}{missing}. Rebuild it with: "
+            f"uv run osm-scenario traffic -w <workspace>"
         )
     routes = raw.get("routes")
     if not isinstance(routes, list) or not routes:
@@ -260,7 +286,7 @@ def _yield_brake(speed, distance_to_conflict):
     return -min(1.0, (speed * speed) / (2.0 * room) / YIELD_BRAKE_MPS2)
 
 
-def build_manager(plan, count=DEFAULT_COUNT, seed=0, give_way=True):
+def build_manager(plan, count=DEFAULT_COUNT, seed=0, give_way=True, follow_speed_profile=True):
     """A `BaseManager` subclass that keeps `count` cars on the roads in `plan`.
 
     Imports live in here rather than at module scope so this file can be read - and its
@@ -283,6 +309,8 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0, give_way=True):
                 "points": points,
                 "lengths": _cumulative(points),
                 "speed_mps": float(entry.get("speed_mps", 0.0)),
+                "speed_step_m": float(entry["speed_step_m"]),
+                "speeds": np.asarray(entry["speeds"], dtype=float),
             }
         )
 
@@ -311,6 +339,9 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0, give_way=True):
             self.gave_way = 0
             self.conflicts_seen = 0
             self.give_way = give_way
+            self.follow_speed_profile = follow_speed_profile
+            self.cars_lost = 0
+            self._lost = set()
             self._crashed = set()
             self._route_of = {}
             self._order = {}
@@ -368,6 +399,10 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0, give_way=True):
                         "xy": np.asarray(points, dtype=float),
                         "cumulative": np.asarray(route["lengths"], dtype=float),
                         "speed_mps": route["speed_mps"],
+                        # A translation does not change how fast a corner may be taken, so
+                        # the profile is carried across unchanged rather than recomputed.
+                        "speed_step_m": route["speed_step_m"],
+                        "speeds": route["speeds"],
                     }
                 )
             return out
@@ -484,6 +519,8 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0, give_way=True):
             self.collisions = 0
             self.gave_way = 0
             self.conflicts_seen = 0
+            self.cars_lost = 0
+            self._lost = set()
             self.on_road_low = self.car_count
             self._crashed = set()
             self._route_of = {}
@@ -522,6 +559,18 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0, give_way=True):
                 if policy.arrive_destination or self._past_the_end(vehicle, policy):
                     self._to_clear.append(vehicle.name)
                     continue
+                index, along, lateral = self._on_route(vehicle, policy)
+                if abs(lateral) > LOST_LATERAL_M:
+                    self._to_clear.append(vehicle.name)
+                    self._lost.add(vehicle.name)
+                    continue
+                if self.follow_speed_profile and index is not None:
+                    # IDM's own lever, read every step it computes an acceleration:
+                    # `acceleration()` uses `self.target_speed` and `TrajectoryIDMPolicy.act`
+                    # never resets it, because it does not call `lane_change_policy`.
+                    # `NORMAL_SPEED` is a flat 40 km/h and 29.5% of `junction-1`'s route
+                    # distance allows less than that on curvature alone.
+                    policy.target_speed = 3.6 * self._allowed_mps(index, along)
                 speed_control = self.episode_step % self.IDM_ACT_BATCH_SIZE == policy.policy_index
                 action = policy.act(speed_control)
                 brake = brakes.get(vehicle.name)
@@ -544,7 +593,12 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0, give_way=True):
                 self._route_of.pop(name, None)
                 self._order.pop(name, None)
             replacements = len(self._to_clear)
-            self.cars_retired += replacements
+            # A car picked up off the grass did not complete a route, so it is counted apart
+            # from the arrivals. Both are replaced: the road must not empty either way.
+            lost = len(self._lost & set(self._to_clear))
+            self.cars_lost += lost
+            self._lost -= set(self._to_clear)
+            self.cars_retired += replacements - lost
             self._to_clear = []
             if not replacements:
                 return {}
@@ -684,6 +738,41 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0, give_way=True):
                 )
             )
 
+        def _on_route(self, vehicle, policy):
+            """Which route the car is on, how far along it is, and how far off it is.
+
+            The route index is **remembered from the spawn**, not recovered from the policy's
+            destination: several routes in a pool end on the same exit lane and therefore at
+            the same point - 60 routes over 18 exit lanes on `junction-1` - so matching on the
+            endpoint would silently name the wrong one, and every measurement made from it
+            would then be against a road the car is not on. Along and lateral are measured,
+            because they are the parts that move.
+
+            One projection for all three callers - the speed profile, the lost-car test and
+            the give-way spacing. `local_coordinates` walks the line and is the second most
+            expensive thing in this module after `_look_ahead`.
+            """
+            index = self._route_of.get(vehicle.name)
+            if index is None:
+                return None, 0.0, 0.0
+            along, lateral = policy.traj_to_follow.local_coordinates(vehicle.position)
+            return index, float(along), float(lateral)
+
+        def _allowed_mps(self, index, along):
+            """How fast the route says a car may be at `along` metres.
+
+            The profile is min-pooled onto an even grid by `traffic_routes._pooled_speeds`, so
+            this is an index rather than a search, and the pool a car is *in* is the one that
+            applies - never interpolated toward the next one, which on the approach to a
+            corner would hand back a speed the corner does not allow.
+            """
+            route = self.routes[index]
+            speeds = route["speeds"]
+            if not len(speeds):
+                return float(route["speed_mps"])
+            step = int(max(along, 0.0) // route["speed_step_m"])
+            return float(speeds[min(step, len(speeds) - 1)])
+
         def _past_the_end(self, vehicle, policy):
             """Whether the car has driven off the end of its route.
 
@@ -706,26 +795,19 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0, give_way=True):
             return along >= line.length - TrajectoryIDMPolicy.DEST_REGION_RADIUS
 
         def _where(self, vehicle):
-            """Which route a car is on and how far along it is.
-
-            The route index is **remembered from the spawn**, not recovered from the policy's
-            destination: several routes in a pool end on the same exit lane and therefore at
-            the same point - 60 routes over 18 exit lanes on `junction-1` - so matching on the
-            endpoint would silently name the wrong one, and the spacing check would then be
-            made against a road the car is not on. How far along is measured, because that is
-            the part that moves.
-            """
-            index = self._route_of.get(vehicle.name)
-            if index is None or not self.engine.has_policy(vehicle.id, TrajectoryIDMPolicy):
+            """`_on_route` for a caller that has the vehicle but not its policy."""
+            if not self.engine.has_policy(vehicle.id, TrajectoryIDMPolicy):
                 return None, 0.0
-            policy = self.engine.get_policy(vehicle.name)
-            along, _lateral = policy.traj_to_follow.local_coordinates(vehicle.position)
-            return index, float(along)
+            index, along, _lateral = self._on_route(
+                vehicle, self.engine.get_policy(vehicle.name)
+            )
+            return index, along
 
     return LiveTrafficManager
 
 
-def traffic_env(base_class, *, plan, count=DEFAULT_COUNT, seed=0, give_way=True):
+def traffic_env(base_class, *, plan, count=DEFAULT_COUNT, seed=0, give_way=True,
+                follow_speed_profile=True):
     """`base_class` with a live traffic manager registered beside whatever it already has.
 
     **It takes a class rather than returning one from scratch**, which
@@ -740,7 +822,10 @@ def traffic_env(base_class, *, plan, count=DEFAULT_COUNT, seed=0, give_way=True)
     episode's cars unmanaged, `before_reset` having already run for every manager the engine
     knew about.
     """
-    manager_class = build_manager(plan, count=count, seed=seed, give_way=give_way)
+    manager_class = build_manager(
+        plan, count=count, seed=seed, give_way=give_way,
+        follow_speed_profile=follow_speed_profile,
+    )
 
     class TrafficScenarioEnv(base_class):
         def setup_engine(self):

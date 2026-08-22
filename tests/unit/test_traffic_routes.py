@@ -18,12 +18,16 @@ import numpy as np
 import pytest
 
 from osm_scenario.conversion import _lane_neighbours
-from osm_scenario.ego_route import COINCIDENT_M
+from osm_scenario.ego_route import COINCIDENT_M, LATERAL_ACCEL_MPS2, speed_profile
 from osm_scenario.lane_model import ConnectorFeature, LaneFeature, Point2D, PreliminaryLaneModel
 from osm_scenario.traffic_routes import (
     MIN_ROUTE_M,
     POLYLINE_TOLERANCE_M,
+    SPEED_STEP_M,
+    TRAFFIC_LATERAL_ACCEL_MPS2,
+    TRAFFIC_VERSION,
     TrafficError,
+    _pooled_speeds,
     _simplify,
     entry_lanes,
     exit_lanes,
@@ -316,6 +320,61 @@ def test_the_written_file_is_bound_to_the_lane_model_it_was_built_from() -> None
         "generation_fingerprint": model.metadata.generation_fingerprint,
         "reviewed_lane_model_sha256": "abc",
     }
-    assert written["traffic_version"] == 1
+    assert written["traffic_version"] == TRAFFIC_VERSION
     assert len(written["routes"]) == 3
     assert math.isfinite(written["routes"][0]["distance_m"])
+
+
+# --- the speed profile a traffic car drives ---------------------------------------------
+
+
+def test_traffic_corners_more_gently_than_the_recorded_car() -> None:
+    """`ego_route.LATERAL_ACCEL_MPS2` is pinned to the ego's 30-degrees-per-step gate, and the
+    ego's drive is *replayed* - nothing has to steer to those positions.
+
+    A traffic car is steered there by MetaDrive's IDM, whose `steering_control` aims at a
+    point a fixed 1 m ahead. Measured on `junction-1`, five episodes of 25 cars, counting
+    cars that left the tarmac: 8.5 gives 54 and a worst of 45.22 m, 6.0 gives 38 and 12.36 m,
+    4.0 gives 27 and 3.76 m.
+    """
+    assert TRAFFIC_LATERAL_ACCEL_MPS2 < LATERAL_ACCEL_MPS2
+
+
+def test_a_pooled_speed_is_never_faster_than_the_profile_it_came_from() -> None:
+    """Min-pooled, never sampled.
+
+    A sample can land either side of the one tight vertex in a junction and report the speed
+    of the straight beside it, which would hand a car a speed the corner does not allow. Every
+    pool must be no faster than every fine sample inside it.
+    """
+    line = np.array([(0.0, 0.0), (40.0, 0.0), (44.0, 4.0), (44.0, 40.0)], dtype=float)
+    pooled = _pooled_speeds(line, cruise_mps=13.9)
+    _dense, travelled, fine = speed_profile(
+        line, cruise_mps=13.9, lateral_accel_mps2=TRAFFIC_LATERAL_ACCEL_MPS2
+    )
+    for index, value in enumerate(pooled):
+        inside = fine[
+            (travelled >= index * SPEED_STEP_M) & (travelled < (index + 1) * SPEED_STEP_M)
+        ]
+        if len(inside):
+            assert value == pytest.approx(inside.min())
+
+
+def test_the_pooled_profile_covers_the_whole_line() -> None:
+    """A car that runs off the end of the profile has no speed to be held to.
+
+    `_allowed_mps` clamps to the last pool, so the profile must reach the end of the route
+    rather than stopping a pool short of it.
+    """
+    line = np.array([(0.0, 0.0), (37.0, 0.0)], dtype=float)
+    pooled = _pooled_speeds(line, cruise_mps=13.9)
+    assert (len(pooled) - 1) * SPEED_STEP_M >= 37.0
+
+
+def test_a_corner_is_pooled_slower_than_the_straight_before_it() -> None:
+    """The whole point of carrying a profile rather than a single `speed_mps`."""
+    line = np.array([(0.0, 0.0), (60.0, 0.0), (63.0, 3.0), (63.0, 60.0)], dtype=float)
+    pooled = _pooled_speeds(line, cruise_mps=13.9)
+    corner = int(60.0 // SPEED_STEP_M)
+    assert pooled[corner] < pooled[2]
+    assert pooled.min() < 13.9

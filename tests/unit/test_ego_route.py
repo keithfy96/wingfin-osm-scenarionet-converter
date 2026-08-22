@@ -961,3 +961,22 @@ def test_the_summary_records_where_the_car_stopped_and_for_how_long() -> None:
     assert summary["stops"][0]["lane_id"] == "b"
     assert summary["waiting_s"] == pytest.approx(summary["stops"][0]["waited_s"])
     assert summary["duration_s"] > summary["driving_duration_s"]
+
+
+def test_the_lateral_limit_defaults_to_the_ego_s_own() -> None:
+    """`speed_profile` gained a `lateral_accel_mps2` keyword for `traffic_routes`, which needs
+    a gentler one - MetaDrive's IDM has to *steer* to the line, while the ego's positions are
+    replayed.
+
+    Defaulted, so the recorded drive is unchanged: passing the module constant explicitly must
+    give the identical profile.
+    """
+    line = np.array([(0.0, 0.0), (40.0, 0.0), (44.0, 4.0), (44.0, 40.0)], dtype=float)
+    _a, _b, implied = speed_profile(line, cruise_mps=13.9)
+    _c, _d, explicit = speed_profile(
+        line, cruise_mps=13.9, lateral_accel_mps2=LATERAL_ACCEL_MPS2
+    )
+    assert implied == pytest.approx(explicit)
+
+    _e, _f, gentler = speed_profile(line, cruise_mps=13.9, lateral_accel_mps2=4.0)
+    assert gentler.min() < implied.min()

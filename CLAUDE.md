@@ -1496,6 +1496,94 @@ Five things not to re-derive:
   `acceleration()` brakes for it. It is the same path that already stops the ego 5.7 m short of a
   red under `--agent-policy idm`.
 
+### Nothing steers a traffic car by the road, so it has to be slowed for the corner (2026-08-23)
+
+Keith, after the three fixes above: *"although the vehicles keep within the lanes, there are
+still some instances of them going onto the grass, why does this happen?"*
+
+**No part of MetaDrive is keeping a traffic car on the road, and there is nothing to
+misconfigure.** `TrajectoryIDMPolicy.act` returns two numbers: an acceleration from IDM's
+car-following, and a steering angle from `steering_control` (`idm_policy.py:463`), which is a
+heading PID aimed at `heading_theta_at(long + 1)` - a **fixed 1 m preview** - plus a lateral
+PID on the projection error. Road edges, lane lines and the drivable surface are not inputs to
+it. So "the lane is clear" cannot help: it is tracking a polyline, not reading a road. And
+nothing notices when it fails - `out_of_road` termination is the **ego's**, and a traffic car
+has no road constraint at all.
+
+Measured, `junction-1`, three episodes of 25 cars, before this change:
+
+- **26 cars left the tarmac and 26 of 26 were touching nothing at the time.** Not collisions.
+- Tracking is excellent until it is not: **median lateral error 0.08 m**, p90 2.16 m, worst 16 m.
+- **`NORMAL_SPEED` is 40 km/h, flat, everywhere** - while these are the same routes the ego
+  drives under `speed_profile`. **29.5% of `junction-1`'s 51.8 km of route distance allows less
+  than 40 km/h on curvature alone**; every one of the 60 routes has a point allowing under
+  20 km/h and 29 of 60 go under 10 (slowest point: median 10.2 km/h).
+- At the moment of departure **17 of 26** were faster than the corner allows - median **29.8
+  km/h into a corner allowing 19.5**. The other candidate, a backward jump in
+  `PointLane.local_coordinates`, accounted for 2 of 26.
+
+**And the routes are partly at fault, which is worth separating from the controller.** They
+are on the road - only **95.1 m of 51,766 m** (0.18%) lies off the drivable surface, worst
+1.97 m - but they are not all drivable. Measured over a window the length of the car, against
+its own minimum turning radius of **2.94 m** (wheelbase 2.47 m at 40 deg of lock): routes with
+a lane change have a tightest radius of **2.00 m median**, 28 of 45 tighter than the car can
+physically turn; routes without measure **6.02 m**, 2 of 15. That is `ego_route._lane_change`
+fitting a 3.5 m shift inside one pair of 5.8-7 m lanes, already recorded above as why the ego
+crawls to 10 km/h on a lane change. It is **not** the main trigger, and that was checked rather
+than assumed: 78% of cars drove lane-change routes and 69% of departures were on them, so they
+are slightly *under*-represented, and only 10 of 26 departures were within 20 m of a kink
+tighter than the car can turn.
+
+`traffic.json` gained a **speed profile** per route (`traffic_version` 2 - a version 1 file is
+refused by name, because it would drive every corner at 40 km/h), min-pooled to
+`SPEED_STEP_M` 2 m from `ego_route.speed_profile`'s own 0.1 m, and `tools/traffic.py` writes it
+to `policy.target_speed` each step. `--traffic-speed flat` measures what it is worth.
+
+| `junction-1`, 25 cars, 5 episodes | before | after |
+|---|---|---|
+| cars that left the tarmac | 41 | **25** |
+| worst distance off it | 9.39 m | **3.80 m** |
+| collisions | 20 | **17** |
+| routes completed | 48 | 35 |
+| mean speed | 29.2 km/h | 17.6 km/h |
+
+| `mosque`, same | before | after |
+|---|---|---|
+| cars that left the tarmac | 56 | **24** |
+| worst distance off it | 9.51 m | **3.08 m** |
+| collisions | 5 | **0** |
+| routes completed | 44 | 24 |
+| mean speed | 33.4 km/h | 18.0 km/h |
+
+Six things not to re-derive:
+
+- **`TRAFFIC_LATERAL_ACCEL_MPS2` is 4.0 against `ego_route`'s 8.5, and the sweep is monotonic
+  and steep.** Same five episodes, cars off the tarmac and the worst distance: 8.5 gives **54
+  and 45.22 m**, 6.0 gives **38 and 12.36 m**, 4.0 gives **27 and 3.76 m**. 8.5 is not a comfort
+  figure - it is pinned to the ego's 30-degrees-per-step gate - and it works for the ego because
+  the ego's positions are **replayed**, so nothing has to steer to them.
+- **The pace and the throughput are what it costs, and the cost is real**: mean speed roughly
+  halves and routes completed per five episodes fall from 48 to 35. That is the trade for
+  keeping cars on the road with a controller that has a 1 m preview. It is one constant and a
+  `osm-scenario traffic` rebuild away if a future map wants it different.
+- **Min-pooled, never sampled.** A sample can land either side of the one tight vertex in a
+  junction and report the speed of the straight beside it. The raw profile is 517,750 samples
+  over 60 routes and would be most of the file; pooled at 2 m it is 25,887, and the file goes
+  761 KB to 1.17 MB.
+- **`_allowed_mps` reads the pool the car is *in*, and must not interpolate toward the next
+  one** - on the approach to a corner that hands back a speed the corner does not allow.
+- **`target_speed` is set before `policy.act` reads it.** `act` computes an acceleration on one
+  step in five (`IDM_ACT_BATCH_SIZE`), so a step late is up to half a second late into a corner.
+  Pinned by a test that walks the AST.
+- **A car more than `LOST_LATERAL_M` (5 m) off its own route is taken off the map**, and
+  replaced at a route start like an arrival - but counted as `cars_lost`, never as a completed
+  route. With the profile in force the lateral error is 0.11 m at the median and 1.80 m at p90,
+  with **7 excursions past 5 m against 11 past 3 m**, so 3 m would pick up cars still going
+  round a junction. **It confounds any collision measurement taken with it on**: it culls
+  exactly the cars that were about to crash, and the first sweep of the profile read 5
+  collisions against 17 purely because the flat column had 33 cars removed and the profile
+  column 4. Isolate it before comparing anything.
+
 **Traffic stopping at a red is the one thing not measured**, and it cannot be here:
 `workspaces/junction-1/signals/signals.json` is bound to an older lane model and `convert`
 refuses it by fingerprint. Re-draw the phases in `inspection/stage-6-signal-builder.html` and

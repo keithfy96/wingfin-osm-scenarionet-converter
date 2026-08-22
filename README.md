@@ -476,6 +476,26 @@ the first place another car's route crosses it at an angle, and holds one of the
 nearer car goes. It only ever slows a car down — steering, following distance and everything
 else is still MetaDrive's.
 
+**The cars slow for the corners their route actually turns through.** MetaDrive's IDM aims for
+a flat 40 km/h everywhere and steers with a PID looking 1 m ahead — it has no idea where the
+road is — so on `junction-1`, where 29.5% of the route distance allows less than 40 km/h on
+curvature alone, cars simply ran wide. Each route now carries a speed profile and the cars are
+held to it; `--traffic-speed flat` is how the left column below was produced.
+
+| 25 cars, 5 episodes | before | after |
+|---|---|---|
+| `junction-1`, cars that left the tarmac | 41 | **25** |
+| `junction-1`, worst distance off it | 9.39 m | **3.80 m** |
+| `mosque`, cars that left the tarmac | 56 | **24** |
+| `mosque`, worst distance off it | 9.51 m | **3.08 m** |
+
+It costs pace: traffic averages about 18 km/h rather than 30, which is the trade for keeping it
+on the road. A car that strays more than 5 m off its route anyway is taken off the map and
+replaced at a route start, and reported separately — it did not complete a route.
+
+**A traffic plan built before this needs rebuilding** — `osm-scenario traffic` — and `drive.py`
+says so by name rather than driving it.
+
 **Cars still do collide, and the number is measured rather than claimed.** Unsignalled, 25 cars,
 ego replayed, over sixteen episodes on `junction-1` and twelve on `mosque` — one episode varies
 too much to compare on:

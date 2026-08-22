@@ -24,7 +24,16 @@ measured without it. The full record is in `CLAUDE.md`; the short version:
    route, with the same margin.
 3. **Spacing was per route, and 60 routes share 10 start points.** Two cars spawned
    **0.97 m** apart. It is now measured between the cars.
-4. **Traffic gives way where two routes cross**, to other traffic and to the ego
+4. **Traffic drives its route's own speed profile** (`--traffic-speed`, on by
+   default), because nothing in MetaDrive steers a traffic car by the road:
+   `steering_control` is two PIDs chasing the polyline with a 1 m preview, and
+   `NORMAL_SPEED` is a flat 40 km/h while **29.5%** of `junction-1`'s route distance
+   allows less on curvature alone. Measured, 25 cars over 5 episodes, cars that left
+   the tarmac: `junction-1` **41 -> 25** (worst 9.39 -> 3.80 m), `mosque` **56 -> 24**
+   (9.51 -> 3.08 m). It costs pace - mean speed roughly halves - and that is the trade.
+   `traffic_version` is 2; a version 1 plan is refused by name. A car more than 5 m off
+   its route is taken off the map and counted as `cars_lost`, never as an arrival.
+5. **Traffic gives way where two routes cross**, to other traffic and to the ego
    (`--traffic-give-way`, on by default). Collisions with 25 cars: `junction-1` over
    16 episodes **79 -> 60** with head-on **23 -> 4**, `mosque` over 12 episodes
    **24 -> 9**, the same number of cars completing routes either way, and about 3 ms a

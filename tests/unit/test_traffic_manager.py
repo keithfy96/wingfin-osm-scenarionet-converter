@@ -23,6 +23,7 @@ sys.path.insert(0, str(REPO / "tools"))
 from traffic import (  # noqa: E402
     CONFLICT_WIDTH_M,
     END_MARGIN_M,
+    LOST_LATERAL_M,
     MIN_GAP_M,
     STOP_MARGIN_M,
     TRAFFIC_VERSION,
@@ -67,7 +68,7 @@ def test_a_plan_from_this_writer_is_accepted(tmp_path: Path) -> None:
 
 
 def test_a_plan_from_a_future_writer_is_refused_rather_than_guessed_at(tmp_path: Path) -> None:
-    with pytest.raises(TrafficError, match="unsupported traffic_version"):
+    with pytest.raises(TrafficError, match="this reader understands"):
         load_plan(_plan_file(tmp_path, traffic_version=TRAFFIC_VERSION + 1))
 
 
@@ -323,3 +324,75 @@ def test_a_stationary_car_is_not_asked_to_brake() -> None:
     crossing asks for nothing more - the yield holds it there by capping IDM's throttle,
     which `before_step` does by taking the smaller of the two."""
     assert _yield_brake(0.0, 10.0) == 0.0
+
+
+# --- the speed profile, and the car that has lost its route ------------------------------
+
+
+def test_a_plan_without_a_speed_profile_is_refused_by_name(tmp_path: Path) -> None:
+    """A version 1 file loads and drives - every car simply takes every corner at MetaDrive's
+    flat 40 km/h, which is the fault the profile exists to fix.
+
+    So it is refused, and the message says what is missing and how to rebuild it rather than
+    quoting two version numbers at a reader who has no reason to know what they mean.
+    """
+    stale = tmp_path / "traffic.json"
+    stale.write_text(
+        json.dumps(
+            {
+                "traffic_version": 1,
+                "routes": [{"name": "a", "polyline": [[0.0, 0.0], [10.0, 0.0]]}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(TrafficError) as raised:
+        load_plan(stale)
+    message = str(raised.value)
+    assert "speed profile" in message
+    assert "osm-scenario traffic" in message
+
+
+def test_the_lost_car_threshold_clears_a_junction_swing() -> None:
+    """5 m is a lane and a half, which nothing driving its own route needs.
+
+    Measured over three `junction-1` episodes with the profile in force: the lateral error is
+    0.11 m at the median and 1.80 m at p90, with 7 excursions past 5 m against 11 past 3 m -
+    so 3 m would pick up cars still going round a junction.
+    """
+    assert LOST_LATERAL_M > 3.0
+    assert LOST_LATERAL_M >= CONFLICT_WIDTH_M
+
+
+def test_the_speed_profile_is_applied_before_the_policy_decides() -> None:
+    """`policy.target_speed` is read inside `act()`, so setting it afterwards would take
+    effect a step late - and `act` only computes an acceleration on one step in five
+    (`IDM_ACT_BATCH_SIZE`), so a step late is up to half a second late into a corner."""
+    source = (REPO / "tools" / "traffic.py").read_text(encoding="utf-8")
+    before_step = next(
+        node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.FunctionDef) and node.name == "before_step"
+    )
+    body = ast.dump(before_step)
+    assert "target_speed" in body
+    assert body.index("target_speed") < body.index("'act'"), (
+        "target_speed must be set before policy.act() reads it"
+    )
+
+
+def test_a_lost_car_is_not_counted_as_a_completed_route() -> None:
+    """A car picked up off the grass did not complete a route.
+
+    Counting it as one would hide the fault behind the throughput number that is used to check
+    a slowing rule has not gridlocked the map.
+    """
+    source = (REPO / "tools" / "traffic.py").read_text(encoding="utf-8")
+    after_step = next(
+        node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.FunctionDef) and node.name == "after_step"
+    )
+    body = ast.dump(after_step)
+    assert "cars_lost" in body
+    assert "cars_retired" in body
