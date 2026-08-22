@@ -826,8 +826,11 @@ Then drive against it, either headless or watching in 3D:
   --policy-url http://127.0.0.1:8642 --sensors imu,gps,camera
 ```
 
-`--sensors` takes any of `imu, gps, camera, depth, semantic, point-cloud`; the observation is
-always sent. `/spec` tells the server the real `step_seconds` for the run — the two MetaDrive
+`--sensors` takes any of `imu, gps, route, camera, depth, semantic, point-cloud`; the
+observation is always sent. `route` is the recorded route ahead of the car in **metres** —
+25 points at 2 m, ego frame, x ahead and y to the left — read straight off the object
+`TrajectoryNavigation` steers by. The observation carries a route too, but normalised and cut
+off at 30 m, which a controller cannot undo. `/spec` tells the server the real `step_seconds` for the run — the two MetaDrive
 keys multiplied out, not a literal 0.1 — so a model integrating anything is in the right units
 whether or not `--step-hz` was passed. `remote` is the same code path as `manual`, so it has no
 step budget and neither rate warning applies to it.
@@ -873,6 +876,58 @@ a slow model**: it is Nagle's algorithm meeting delayed ACK because one end of t
 The client refuses an action MetaDrive would have swallowed. `action_check` is off by default and
 `EnvInputPolicy` simply clips, so an output in [0, 1] silently loses the ability to brake and
 `NaN` is not clipped at all. Those are raised instead.
+
+### Drive it with openpilot
+
+`examples/openpilot_server.py` puts wing-sim's openpilot bridge behind that same
+`--policy-url`. The bridge is a **controller**, not a driver: it takes a predicted path and
+three ego scalars and returns pedals, and never sees an image. So the path comes from the
+`route` sensor, and `--sensors imu,route` is not optional.
+
+Start with the stand-in bridge, which needs no fork, no Docker and no SSH key:
+
+```bash
+python examples/openpilot_server.py --backend stub --port 8642
+```
+
+```bash
+./drive.sh junction-1 -- --agent-policy remote --policy-url http://127.0.0.1:8642 \
+  --sensors imu,route --render none
+```
+
+Measured: **380 steps, `arrive_dest=True`, route completion 0.951** on `junction-1` and 435 /
+0.951 on `mosque`, at 0.5 ms and 2.5 KB a step. That is what proves the plumbing — the frame,
+both sign conventions and the round trip — before there is a real bridge to blame.
+`--backend constant --steering 1.0` leaves the road in 13 steps, so a drive that reaches the
+destination is not an accident.
+
+With the fork built and its bridge listening, point at it instead:
+
+```bash
+python examples/openpilot_server.py --backend bridge --bridge 127.0.0.1:5558 --port 8642
+```
+
+and for row 3 of the sweep, which is the thing this exists for:
+
+```bash
+./step-timing.sh junction-1 -- --rows 1,3 --policy-url http://127.0.0.1:8642 \
+  --policy-sensors imu,route
+```
+
+Four things worth knowing before tuning anything:
+
+- **`target_speed` is sent every tick because a missing one means stop.** The bridge reads an
+  absent target as `0.0`. `--target-speed-mps` sets it; the default is 10 m/s.
+- **The bridge is written for 20 Hz.** `_DT_MDL = 0.05` is what its lag compensation and its
+  curvature-rate limit are counted against. The server prints a note when the drive's rate is
+  anything else; `uv run osm-scenario convert … --step-hz 20` is the dataset that matches, off
+  the same `routes.json`.
+- **Its pedal map is CARLA calibration**, measured on Town10HD with a Tesla M3. Speed tracking
+  will be poor here until it is re-measured. Steering is unaffected — that path is geometric,
+  which is what `carla_steer_curvature_gain: 0` selects.
+- **The openpilot fork itself is private.** `wing-sim/openpilot/pull.sh` clones
+  `zapetaai/openpilot` with private submodules, so `--backend bridge` needs access that the
+  stub does not.
 
 ---
 

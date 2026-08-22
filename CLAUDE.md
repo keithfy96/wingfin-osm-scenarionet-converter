@@ -1134,6 +1134,64 @@ and **`cmd &` in a non-interactive shell sets SIGINT to `SIG_IGN` in the child**
 five attempts to test the interrupt with `kill -INT` measured the shell rather than the code —
 `( trap - INT; exec ... ) &` is what puts the default disposition back.
 
+### openpilot drives through the same socket, and the route is a sensor now (2026-08-22)
+
+`wing-sim/openpilot/bridge/zapeta/server.py` is a **controller, not a driver**: per tick it takes
+a predicted path plus `v_ego` / `yaw_rate` / `steering_angle_deg` and returns `steer` / `throttle`
+/ `brake`. It never sees an image — the thing that turns cameras into waypoints is a separate
+CARLA-shaped AV3 model under `evaluation/src/inference_models/`. So filling stage 7c's empty
+`act()` with it needed a path handed to it, and `tools/openpilot_policy.py` +
+`examples/openpilot_server.py` are that translation. `--policy-url` and `step-timing.sh --rows 3`
+reach it unchanged.
+
+**`route` is a new `--sensors` name and it exists because the observation's route is unusable.**
+The `[19:41]` navigation block is normalised and clipped at 30 m, and neither can be undone.
+`SensorPack` sends `reference_trajectory` instead — the recorded route as a `PointLane`, the same
+object `TrajectoryNavigation` steers by — 25 points at 2 m in **metres**, index 0 at the car's own
+projection, ego frame **x ahead / y left**. A drive without it is refused by name rather than
+coasting.
+
+**`/spec` is sent before `env.reset()`** (`drive.py:885` against `:899`), so there is no ego and no
+scenario when it goes: `SensorPack.describe`'s projection block has always been null, and the car's
+steering geometry cannot be read there at all. `SensorPack.episode()` carries both, merged into
+`/episode`. A controller that must be told what full lock means in degrees cannot get it any other
+way.
+
+Five things not to re-derive, each read off the bridge rather than assumed:
+
+- **`carla_steer_curvature_gain: 0.0` is the whole fit.** It selects `server.py:788`,
+  `-road_wheel_deg / max_steer_angle`, and `action[0] × max_steering` *is* the road-wheel angle in
+  degrees (`base_vehicle.py:478`) — 40° for the default vehicle. Send MetaDrive's own `max_steering`
+  as `max_steer_angle` and nothing is left to convert. The default path inverts an empirical gain
+  measured on CARLA Town10HD.
+- **Both ends negate**: MetaDrive is left-positive, CARLA right-positive. The waypoints' `y` is
+  `-left` and the action's steering is `-steer`. Get one of the two wrong and the car drives
+  smoothly into the oncoming carriageway with nothing raising anything.
+- **`target_speed` defaults to 0, which is a stop.** `server.py:614` is
+  `float(msg.get("target_speed", 0.0))` — an omitted target is not "no opinion". Sent every tick;
+  `--target-speed-mps` sets it.
+- **`steer_ratio` in `init` is stored and never used.** The bridge divides by its own
+  `CP.steerRatio` on ingress (`:646`) and egress (`:788`), so the two cancel when ours matches and a
+  mismatch mis-reports the wheel angle to the rate limiter rather than changing the output scale.
+  12.0 is what wing-sim's own config sends.
+- **The bridge is written for 20 Hz.** `_DT_MDL = 0.05` is what its lag compensation, its
+  curvature-rate limit and its per-tick steer window are counted against; `OpenpilotDriver.spec`
+  prints the ratio at any other rate. `convert --step-hz 20` is the matching dataset, off the same
+  `routes.json`. And **`accel_map.py` is CARLA pedal calibration** — two 8×11 tables from a
+  "Town10HD calibration sweep on Tesla M3 @ 20 Hz sync" — so longitudinal tracking is wrong here
+  until re-measured. Steering is not, because that path is geometric.
+
+**`--backend stub` is a real socket, not a mock**, and is what proves the frame and the signs
+before there is a fork to blame — the fork is private (`pull.sh` clones `zapetaai/openpilot` with
+private submodules). Measured: `junction-1` **380 steps, arrive_dest=True, completion 0.951** and
+`mosque` **435 / 0.951**, 0.5 ms and 2.5 KB a step, against `--backend constant --steering 1.0`
+leaving the road in 13.
+
+**`step_timing.drive` did not call `policy.start_episode`**, which was invisible only because
+`SensorPack` re-reads the projection lazily. It does now. And **`--policy-sensors` overrides row 3's
+`read` list rather than ROWS being edited**: what a hosted model is sent is the model's business,
+and changing the row definition would make every CSV taken under it mean something else.
+
 ### A junction is bare inside and kerbed outside, and both halves are deliberate
 
 `_map_features` writes boundary features for `model.lanes` only, so a `ConnectorFeature` — a

@@ -39,6 +39,7 @@ import base64
 import contextlib
 import http.client
 import json
+import math
 import os
 import socket
 import sys
@@ -51,11 +52,18 @@ from geodesy import aeqd_inverse, projection_origin  # noqa: E402
 
 # What `--sensors` accepts. "observation" is not in the list because it is always sent - it is
 # the argument the policy is called with.
-SENSORS = ("imu", "gps", "camera", "depth", "semantic", "point-cloud")
+SENSORS = ("imu", "gps", "route", "camera", "depth", "semantic", "point-cloud")
 
 # The sensors that cost a render context and hundreds of KB a step, against the numeric ones
 # that cost about a kilobyte. Named so a caller can warn rather than discover.
 HEAVY_SENSORS = ("camera", "depth", "semantic", "point-cloud")
+
+# `route` samples the recorded route ahead of the car at a fixed arc length. 25 x 2 m reaches
+# 50 m, which covers a 2 s plan at any speed this map allows - `junction-1` is posted at 50
+# km/h, so 2 s is 27.8 m. Reported in the payload rather than left to be assumed, because a
+# consumer that resamples by *time* needs to know what the spacing was.
+ROUTE_POINTS = 25
+ROUTE_SPACING_M = 2.0
 
 _SENSOR_KEYS = {
     "camera": "rgb_camera",
@@ -153,9 +161,48 @@ class SensorPack:
         self._shift = (float(shift[0]), float(shift[1]))
 
     def describe(self):
-        """What the server is told once, in `/spec`, about what it is going to receive."""
-        return {
+        """What the server is told once, in `/spec`, about what it is going to receive.
+
+        The projection here is null on purpose: `/spec` is sent before `env.reset()`, so no
+        scenario has been loaded to read one off. `episode()` carries the real values.
+        """
+        described = {
             "sensors": list(self._names),
+            "projection": {
+                "kind": "azimuthal_equidistant_wgs84",
+                "origin_latitude": self._origin[0] if self._origin else None,
+                "origin_longitude": self._origin[1] if self._origin else None,
+                "metadrive_to_projected_offset": list(self._shift),
+            },
+        }
+        if "route" in self._names:
+            described["route"] = {
+                "points": ROUTE_POINTS,
+                "spacing_m": ROUTE_SPACING_M,
+                "frame": "ego_x_ahead_y_left",
+            }
+        return described
+
+    def episode(self):
+        """What the server is told at the start of each scenario, merged into `/episode`.
+
+        Separate from `describe` because `/spec` is sent **before** `env.reset()`
+        (`tools/drive.py:885` against `:899`): there is no ego then and no scenario, so
+        neither the car's steering geometry nor the map's projection can be read yet. A
+        controller that has to be told what full lock means in degrees - openpilot's bridge
+        is one - cannot get it from `/spec` for that reason.
+        """
+        if self._origin is None:
+            self.reset()
+        agent = self._env.agent
+        wheelbase = float(agent.FRONT_WHEELBASE) + float(agent.REAR_WHEELBASE)
+        return {
+            "vehicle": {
+                # What `action[0] = 1` means at the road wheel, in degrees
+                # (`base_vehicle.py:478`). 40 for the default vehicle.
+                "max_steering_deg": float(agent.max_steering),
+                "wheelbase_m": wheelbase,
+            },
             "projection": {
                 "kind": "azimuthal_equidistant_wgs84",
                 "origin_latitude": self._origin[0] if self._origin else None,
@@ -198,6 +245,45 @@ class SensorPack:
                 "longitude": longitude,
                 "altitude_m": position[2],
                 "metadrive_position": position,
+            }
+
+        if "route" in self._names:
+            # `reference_trajectory` is the recorded ego track as a `PointLane`
+            # (`trajectory_navigation.py:80`) - the same object `TrajectoryNavigation` steers
+            # by, so this is the route the drive is actually judged against and not a second
+            # reading of it. Sent in **metres**, unclipped: the observation's own navigation
+            # block is normalised and cut off at 30 m, which a controller cannot undo.
+            trajectory = agent.navigation.reference_trajectory
+            if trajectory is None:
+                raise PolicyError(
+                    "sensor `route` needs a recorded route, and this scenario has none. "
+                    "Convert with --routes."
+                )
+            longitudinal, lateral = trajectory.local_coordinates(agent.position)
+            heading = float(agent.heading_theta)
+            cos_heading, sin_heading = math.cos(heading), math.sin(heading)
+            here = agent.position
+            points = []
+            for index in range(ROUTE_POINTS):
+                along = min(longitudinal + index * ROUTE_SPACING_M, trajectory.length)
+                world = trajectory.position(along, 0.0)
+                east = float(world[0]) - float(here[0])
+                north = float(world[1]) - float(here[1])
+                points.append(
+                    [
+                        east * cos_heading + north * sin_heading,
+                        -east * sin_heading + north * cos_heading,
+                    ]
+                )
+            packed["route"] = {
+                # MetaDrive's own ego frame: x ahead, y to the **left**. A consumer wanting
+                # CARLA's y-right flips it, and is told which this is rather than guessing.
+                "frame": "ego_x_ahead_y_left",
+                "points_m": points,
+                "spacing_m": ROUTE_SPACING_M,
+                "longitudinal_m": float(longitudinal),
+                "lateral_m": float(lateral),
+                "remaining_m": float(trajectory.length - longitudinal),
             }
 
         for name in self._names:
@@ -315,9 +401,11 @@ class RemotePolicy:
 
     def start_episode(self, scenario_id=""):
         self.step = 0
+        payload = {"scenario_id": str(scenario_id)}
         if self._pack is not None:
             self._pack.reset()
-        self._post("/episode", {"scenario_id": str(scenario_id)})
+            payload.update(self._pack.episode())
+        self._post("/episode", payload)
 
     def __call__(self, observation=None):
         import numpy

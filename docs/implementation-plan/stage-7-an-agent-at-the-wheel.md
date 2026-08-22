@@ -16,6 +16,10 @@ lidar, IMU and GPS, and asked for a program that drives and dumps everything
 MetaDrive produces so the input could be chosen from what is really there rather
 than from a guess. Both halves are below.
 
+**7c's own open item - "still the model" - is closed** (2026-08-22): wing-sim's
+openpilot bridge drives the ego through that socket, and `--backend stub` proves
+the path with no fork installed. See *Filled: a controller behind the socket*.
+
 Stage 8, live traffic, is a separate document -
 `stage-8-live-traffic.md`. The two do not depend on each other and can be
 built in either order.
@@ -477,13 +481,68 @@ episode budget, and excluded from `failures`, so the exit status keeps meaning
   floats, so the 3D row *with* a camera is cheaper than the offscreen row without
   one. `drive.py` prints KB/step rather than leaving that to be discovered.
 
+### Filled: a controller behind the socket (2026-08-22)
+
+7c left the slot empty on purpose - `act()` in `examples/policy_server.py` on the
+model's side, `policy = RemotePolicy(url)` on this one. Keith cloned `wing-sim`
+and asked whether the `openpilot` folder in it could go there. It can, for the
+control half.
+
+**What that folder is.** `bridge/zapeta/server.py` fronts openpilot's real
+`plannerd` + `controlsd`. Per tick it takes a *predicted path* and three ego
+scalars and returns `steer` / `throttle` / `brake`. It never sees an image. So it
+is the steering and pedal stack, not a driver, and something has to hand it a
+trajectory.
+
+**What was built.** `tools/openpilot_policy.py` is the translation - the bridge's
+length-prefixed JSON on one side, our `/spec` `/episode` `/act` on the other -
+and `examples/openpilot_server.py` is the HTTP front, so `--policy-url` and
+`step-timing.sh --rows 3` reach it unchanged. `tools/policy_client.py` gained a
+`route` sensor, because only the simulator has the route and the observation's own
+navigation block is normalised and clipped at 30 m.
+
+**Three readings that made it fit, each off the bridge rather than assumed:**
+
+- **`carla_steer_curvature_gain: 0.0` selects a geometric branch whose output is
+  already MetaDrive's.** `server.py:788` emits `-road_wheel_deg / max_steer_angle`,
+  and `action[0] x max_steering` *is* the road-wheel angle in degrees. Send
+  MetaDrive's own `max_steering` and nothing is left to convert. The default path
+  inverts an empirical CARLA curvature gain measured on Town10HD.
+- **Both ends negate**, because MetaDrive is left-positive and CARLA is
+  right-positive: the waypoints' `y` and the reply's `steer`.
+- **The waypoints need no model.** wing-sim ships `route_gt.py` for exactly this,
+  and `waypoints_from_route` rebuilds it against the `route` sensor.
+
+**Four things that bite, and are written down rather than left to be met:**
+
+- **`target_speed` defaults to 0**, which is a stop (`server.py:614`). It is sent
+  every tick.
+- **`steer_ratio` in `init` is stored and never used** - the bridge divides by its
+  own `CP.steerRatio` both ways, so the two cancel when they match and a mismatch
+  mis-reports the wheel angle rather than changing the output scale.
+- **The bridge is written for 20 Hz** (`_DT_MDL = 0.05`). The server prints a note
+  at any other rate; `convert --step-hz 20` is the matching dataset, off the same
+  `routes.json`.
+- **`accel_map.py` is CARLA pedal calibration**, so speed tracking is poor until it
+  is re-measured here. Steering is unaffected.
+
+**Verified.** `--backend stub` - a real socket speaking the real protocol with a
+pure-pursuit law - drives `junction-1` to **380 steps, arrive_dest=True,
+completion 0.951** and `mosque` to **435 / 0.951**, at 0.5 ms and 2.5 KB a step,
+against `--backend constant --steering 1.0` leaving the road in 13. Row 3 of the
+sweep runs under `--policy-sensors imu,route`. 22 unit tests, every one of them
+about a sign or a frame. `uv run ruff check` clean; `uv run pytest` 482 passed
+with its one known `ego_route` failure.
+
 ### Left for Keith
 
-Still the model. The slot is `act()` in `examples/policy_server.py` on his side and
-`policy = RemotePolicy(url)` on this one, and nothing here fills either. What 7c
-adds is that the input can now be chosen from a measurement, the transport is
-proven before a model is blamed for it, and the model can run on an interpreter
-that is not MetaDrive's Python 3.8.
+**The perception half, and the fork.** The thing that turns cameras into waypoints
+is a separate AV3 model under `evaluation/src/inference_models/`, CARLA-camera
+shaped, and is not in `wing-sim/openpilot/` at all. The openpilot fork itself is
+private - `pull.sh` clones `zapetaai/openpilot` at a pinned SHA with private
+submodules - so `--backend bridge` needs access the stub does not. And
+`accel_map.py` wants a MetaDrive sweep before anyone judges the longitudinal
+tracking. All three are decisions rather than omissions.
 
 ---
 

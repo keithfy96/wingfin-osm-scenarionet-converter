@@ -43,11 +43,14 @@ small forward camera.
 |---|---|---|---|---|---|---|
 | **1** | offscreen | replay | camera,imu,gps | the dataset's | the floor: the same step with nothing deciding | a GL context |
 | **2** | offscreen | idm | camera,imu,gps | the dataset's | a training-shaped step, with a controller driving | a GL context |
-| **3** | offscreen | remote | camera,imu,gps | the dataset's | your model in the same seat | a GL context, `--policy-url` |
+| **3** | offscreen | remote | camera,imu,gps <sup>†</sup> | the dataset's | your model in the same seat | a GL context, `--policy-url` |
 | **4** | offscreen | idm | camera | the dataset's | vision only: a camera and MetaDrive's own state, nothing else read | a GL context |
 | **5** | offscreen | idm | camera,imu,gps | **100 Hz** | physics pinned: CARLA-shaped at a 10 Hz dataset | a GL context |
 | **6** | none | idm | imu,gps | the dataset's | no graphics at all: what the camera and the render path cost | nothing |
 | 7 | 3D | replay | — | the dataset's | what `drive.sh` gives you | a display |
+
+<sup>†</sup> row 3's sensor list is what a hosted model is sent, and `--policy-sensors`
+overrides it for models that need something else — see [Row 3](#row-3--offscreen-remote-cameraimugps).
 
 Rows **1–6 are the default**; 7 needs `--rows 7` because it opens a window. Row 3 is in the
 default and **skips itself** with `needs --policy-url` when no model is listening, which is a
@@ -110,6 +113,13 @@ One thing differs from row 2: who is holding the wheel. The camera reaches the m
 twice. The imu/gps go to the model too rather than being read by this loop, so their cost
 sits inside `policy_ms` along with the wire and the model itself. That is a real cost of
 hosting a model; it is not the model being slow.
+
+**`--policy-sensors` overrides what this row sends, and only this row.** What a hosted model
+is handed is the model's business rather than the row's: `examples/openpilot_server.py`
+fronts a *controller*, which wants the route in metres and cannot be driven without it, so
+that run is `--policy-sensors imu,route`. The row's own definition — and every CSV taken
+under it — keeps meaning `imu,gps`, and the `sensors` column reports whatever really went, so
+two tables can still be told apart. A row driven by anything but `remote` ignores the flag.
 
 ### Row 4 — offscreen, idm, camera only
 

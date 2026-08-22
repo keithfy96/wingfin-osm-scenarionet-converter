@@ -359,6 +359,12 @@ def drive(env, row, arguments, url=None, rig=None):
             return dict(skip_reason=refusal.splitlines()[0].replace("REFUSED: ", ""))
 
     read = tuple(row["read"])
+    if row["policy"] == "remote" and arguments.policy_sensors is not None:
+        # What a hosted model is sent is the model's business, not the row's: openpilot's
+        # bridge wants `route` and cannot be driven without it. Overridden rather than
+        # written into ROWS so row 3's own definition - and every CSV taken under it - keeps
+        # meaning one thing. The `sensors` column reports whatever really went.
+        read = tuple(name for name in arguments.policy_sensors.split(",") if name)
 
     # What this run *carries*, asked of the live env rather than taken from the row
     # definition. A camera is only real when `image_observation` is on and one is registered,
@@ -394,6 +400,10 @@ def drive(env, row, arguments, url=None, rig=None):
         # would charge the drive twice for one frame.
         policy = RemotePolicy(url, pack=SensorPack(env, read), step_seconds=sim_dt)
         policy.spec({"dataset": env.config["data_directory"], "row": row["isolates"]})
+        # `drive.py` does this per scenario and this did not, which was invisible only
+        # because `SensorPack` re-reads the projection lazily. A server holding anything per
+        # episode - openpilot's bridge holds a whole connection - gets nothing without it.
+        policy.start_episode(scenario["id"])
         pack = None
     if pack is not None:
         pack.reset()
@@ -629,6 +639,12 @@ def main():
         "integrates at the same tick rate. 100 with --step-hz 10 is the matched shape.",
     )
     parser.add_argument("--policy-url", default=None, help="Where row 3's model is listening.")
+    parser.add_argument(
+        "--policy-sensors",
+        default=None,
+        help="Comma-separated sensors row 3 sends its model, overriding the row's own list. "
+        "`imu,route` is what examples/openpilot_server.py needs.",
+    )
     parser.add_argument(
         "--camera-rig", default=None,
         help="A CARLA-shaped camera spec (see tools/camera_rig.py), the same file "
