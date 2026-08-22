@@ -185,8 +185,21 @@ got.
 ## 2. The printed columns
 
 ```
+  data  scenarionet-100hz    mosque-b1fe3e0cc9bc58ec-t   written at 100 Hz
   #  render     policy  sensors          tick  decide  physics  rpt   steps   sim s  wall s  x real  ms/step  policy    p95
 ```
+
+**A `data` line comes before each dataset's rows and names the tape they were measured on** —
+the directory, the scenario id, and the rate the file itself was written at, read out of the
+pickle rather than off the directory name (so a legacy bare `scenarionet/` reports its real
+rate). It is a line rather than a column because the table is already at the width of a
+terminal.
+
+It is load-bearing rather than decorative. A plain sweep drives **every rate a workspace
+holds**, so it prints two blocks of otherwise identically-labelled rows; and under
+`--rate-sets` several sets legitimately share one dataset, because the world tick is the only
+column of a set that selects one. Without this line, four sets over two datasets reads as two
+of the four sets having failed to run — which is exactly how it was read.
 
 | column | what it is |
 |---|---|
@@ -559,8 +572,15 @@ Four things it does that are decisions rather than conveniences:
   it against a tape written at another rate measures something nobody asked for, and every
   replay row of it would skip anyway. Without a set the sweep still drives every rate the
   workspace holds, each at its own — that is the comparison it exists to make. A set whose
-  dataset does not exist simply contributes no rows; `convert --step-hz <rate>` is what makes
-  one.
+  dataset does not exist says so in the table and prints the `convert --step-hz <rate>` that
+  would make one.
+
+  **So several sets normally share one dataset, and that is not sets going missing.** The
+  world tick is the only one of a set's three columns that selects a tape; the decision rate
+  and the physics rate are runtime settings applied to it. `scripts/rate-sets.csv` as it
+  ships is four sets over **two** datasets — `base` on `scenarionet-10hz`, and `sim100`,
+  `decide10` and `decide20` all on `scenarionet-100hz` — which the `data` line above each
+  block now says outright.
 - **A set's `physics_hz` outranks row 5's own 100 Hz pin**, because a set describes the whole
   configuration and a row overriding half of it would be measuring something the table does not
   name. Rows 2 and 5 then coincide, which the `physics` column shows and the footer says once.
@@ -570,6 +590,14 @@ Four things it does that are decisions rather than conveniences:
 Everything else still applies per set: `--rows` selects which rows each one drives, `--camera-rig`
 mounts the vehicle's cameras on all of them, and an arithmetically impossible pair inside a set
 shows as a skipped row saying why rather than refusing the file.
+
+**One glance tells you whether the machine that produced a CSV has the frame gate**:
+`camera_draw_hz` equal to `step_hz` on a row whose `camera_hz` is *lower* means the cameras
+were still redrawn every world tick, so that run is on code from before `tools/frame_gate.py`
+— or was made with `--draw-every-step`. With the gate, `camera_draw_hz` is measured over the
+window and comes back as something like `10.005` rather than a round `100.0`. It matters
+because it is the two decimated sets whose numbers change, which are the ones such a sweep is
+usually run to get.
 
 ## 5. Reading two machines' files together
 

@@ -649,11 +649,13 @@ def drive(env, row, arguments, url=None, rig=None, decision_hz=None):
     )
 
 
-def dataset_step_hz(dataset, index):
-    """The rate a dataset was written at, read off the file rather than off its directory name.
+def dataset_facts(dataset, index):
+    """`(rate it was written at, scenario id, how many it holds)`, off the file itself.
 
     `metadata.ts` spacing *is* the rate, so this is authoritative for a legacy `scenarionet`
-    directory from before the name carried it.
+    directory from before the name carried it. The id comes back with it because the table
+    names the scenario a row was measured on, and reading the pickle twice to learn it would
+    be a second load of the same file.
     """
     from metadrive.scenario.utils import read_dataset_summary, read_scenario_data
 
@@ -663,7 +665,12 @@ def dataset_step_hz(dataset, index):
         raise ValueError(f"{dataset} holds no scenarios")
     name = names[min(index, len(names) - 1)]
     scenario = read_scenario_data(os.path.join(dataset, mapping[name], name))
-    return 1.0 / data_step_seconds(scenario)
+    return 1.0 / data_step_seconds(scenario), scenario["id"], len(names)
+
+
+def dataset_step_hz(dataset, index):
+    """Just the rate. See `dataset_facts`."""
+    return dataset_facts(dataset, index)[0]
 
 
 FIELDS = [
@@ -990,7 +997,9 @@ def main():
             for dataset in arguments.dataset:
                 dataset = os.path.abspath(dataset)
                 try:
-                    native_hz = dataset_step_hz(dataset, arguments.scenario_index)
+                    native_hz, scenario_id, held = dataset_facts(
+                        dataset, arguments.scenario_index
+                    )
                 except Exception as error:  # noqa: BLE001 - reported per dataset, never fatal
                     print(f"  {dataset} could not be read: {error}")
                     continue
@@ -1004,6 +1013,22 @@ def main():
                 if rate_set.name and abs(rate_set.step_hz - native_hz) > 1e-9:
                     continue
                 drove_a_dataset = True
+
+                # Which tape these rows were measured on, named where they are printed. It is a
+                # CSV column and was nothing else, so the table could not be read: a plain sweep
+                # drives every rate a workspace holds and prints two blocks of identically
+                # labelled rows, and under `--rate-sets` several sets legitimately share one
+                # dataset - the world tick is the only column of a set that selects one. Keith
+                # read four sets over two datasets as two of the four sets having failed to run.
+                # A line rather than a column, the table already being at the width of a
+                # terminal, and in the same style as the `set` and `rig` lines above it.
+                print(
+                    "  data  {:<20} {}   written at {:g} Hz{}".format(
+                        os.path.basename(os.path.normpath(dataset)), scenario_id, native_hz,
+                        "" if held == 1 else
+                        f", scenario {min(arguments.scenario_index, held - 1)} of {held}",
+                    )
+                )
 
                 # Said rather than refused. `load_rig` rejects a spec whose `tick_rate` is not
                 # `camera_rig.STEP_S`, because nothing there resamples - but this sweep drives every
