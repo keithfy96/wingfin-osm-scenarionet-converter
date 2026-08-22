@@ -181,8 +181,13 @@ place (`acquisition.py:79`) and writes nothing to it.
 
 ### Workspaces
 
-`workspaces/` is gitignored, so its contents never appear in `git status` — run
-`ls workspaces/` rather than assuming. `junction-1` is the working one.
+**`workspaces/` is tracked, not gitignored.** The `.gitignore` line is commented out
+(`.gitignore:9`) and **154 files under it are in git**, including the reviewed lane models,
+`routes.json`, `signals.json` and the built `.pkl` datasets — so workspace files *do* appear
+in `git status`, and `git add -A` will sweep up whatever Keith has open at the time. Only
+`workspaces/*/reports/` is still ignored (`.gitignore:14`), and even there some files were
+force-added and stay tracked. **Stage the files you touched by name.** Run `ls workspaces/`
+rather than assuming which exist; `junction-1` is the working one.
 Generation refuses to run when `source/map.osm` drifts from the sha256 in
 `source/manifest.json`; Keith hand-edits the OSM mid-session, so re-check rather
 than trusting a number from earlier in the conversation.
