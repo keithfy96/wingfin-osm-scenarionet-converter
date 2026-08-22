@@ -1178,19 +1178,73 @@ sensors and there is no stale frame to omit. The rates ride in `/spec`'s existin
 
 **On a replay row the decision half is vacuous and the tool has to say so.**
 `ReplayEgoCarPolicy` runs *in* the engine and MetaDrive calls it every `env.step`; nothing
-outside can decimate that. So `--decision-hz` gates the sensor and camera read alone there,
+outside can decimate that. So `--decision-hz` gates the reads and the camera draw alone there,
 which is what the sweep's row 1 wants and is printed rather than implied.
 
-**The draw cannot be saved, and that was measured before it was given up on.**
-`buffer.set_active(False)` is MetaDrive's own mechanism (`dashboard.py:129-135`) and it does
-not move the number: all seven of `rigs/cams.txt`'s buffers deactivated for a whole `mosque`
-drive at 100 Hz gave **26.42 ms/step against 26.57 active — 0.15 ms, 1%** — with `is_active()`
-confirmed `False` on every one. A `--camera-skip-draw` flag was built, measured at 26.37
-against 26.19 ungated, and **removed**. What a lower decide rate really saves is the *read*:
-the same rig goes 3.12 ms a step read every step to 6.54 ms read once in five, and the drive
-from **0.341x to 0.371x** real time. `camera_hz` (read) and `camera_draw_hz` (drawn, always
-the step rate) are separate CSV columns so nothing reads as though a decimated camera were
-cheap. **Do not rebuild the draw gate without measuring first.**
+**The draw is gated at the render call, not at the buffer — `tools/frame_gate.py` (2026-08-22,
+second round).** An earlier version of this section said the draw could not be saved, on a
+`buffer.set_active(False)` experiment that measured **1% of a 26 ms step**. That measurement
+was right and the conclusion was wrong: **an `RGBCamera` owns two GraphicsOutputs and
+`self.buffer` is the cheap one.** `rgb_camera.py:38-52` builds a
+`FilterManager(self.buffer, self.cam)` and calls `render_scene_into(...)` with
+`set_multisamples(16)`, which creates a **second** buffer
+(`direct/filter/FilterManager.py:325-328`) hosted by the first; the scene — terrain, PBR, that
+16x MSAA on top of the global 8x at `engine_core.py:96-103` — is drawn into *that*, and
+`self.buffer` only draws a fullscreen quad over the result. Seven quads were switched off and
+seven scene renders kept running. **Anyone reaching for `set_active` needs that fact first.**
+
+`frame_gate` gates one level up instead, where nothing is left to infer: it rebinds
+`engine.task_manager` to a forwarding proxy whose `step()` passes through only on a decision
+step. That is exactly the two render calls in `BaseEngine.step` (`base_engine.py:455,458`),
+because `base_engine.py:65` is `self.task_manager = self.taskMgr` and **every other render in
+MetaDrive reaches the same object through `taskMgr`** — `base_engine.py:394,761`,
+`base_env.py:439,534,569`, `main_camera.py:504` and `base_camera.py:188,193`, which is
+`perceive(new_parent_node=...)`'s own second pass. So `env.reset`'s frames and `SensorPack`'s
+extra render are untouched by construction. One `task_manager.step()` is one
+`graphicsEngine.renderFrame()`, so a call that does not happen is a frame that is not drawn.
+
+The read-back is held with it: `ImageObservation.observe` (`image_obs.py:80-88`) returns the
+stack unrolled rather than calling `getScreenshot` again and rolling a duplicate frame in.
+**Only the image half** — `ImageStateObservation.observe` composes `{"image", "state"}` and the
+41-number state stays fresh every step, a vehicle state not being a camera.
+
+Measured, `mosque` 100 Hz, row 1, `rigs/cams.txt`, 200 steps, **three runs of each**:
+
+| | ms/step | x real |
+|---|---|---|
+| `100/100/100` | 26.11 | 0.34x |
+| `100/20/100` | **6.21** | **1.47x** |
+| `100/10/100` | **3.66** | **2.54x** |
+| `100/20/100 --draw-every-step` | 26.94 | 0.36x |
+| `100/10/100 --draw-every-step` | 26.69 | 0.37x |
+
+The last two are the control and are what says where the money was: with the draw put back on
+the world tick a lower decide rate is worth **under a millisecond of 26** — the read alone,
+which is what the old section measured — and with it gated the same drive runs **4.2x** faster
+at 20 Hz and **7.1x** at 10 Hz. `--draw-every-step` exists to keep that comparison available.
+
+Four things not to re-derive:
+
+- **It is verified by counting, not by timing.** Over a real 60-step drive at stride 5,
+  `gate.draws` is 12, panda3d's own `globalClock.getFrameCount()` moves by 12 over the same
+  window, all 48 held steps return an image bit-identical to the step before, all 12 drawn
+  steps return a different one, and the state half moves on all 60.
+- **`camera_draw_hz` is counted by the gate, not declared.** It used to be written as
+  `step_hz` and was the one camera column a record never re-read off the live run — which is
+  precisely the column that must not be taken on trust here.
+- **`--render 3D` is never gated**, and that is a decision rather than an omission: the window
+  is the point of that mode, `ForceFPS.real_time_simulation` steps the task manager inside the
+  substep loop as well (`base_engine.py:454-455`), and `--agent-policy manual` polls the
+  keyboard there. `install` returns `None` for anything that is not `_render_mode == offscreen`,
+  so `--render none` — which has no cameras at all — is untouched too.
+- **`ms/step` is a median over every step, so at a stride of 2 or more it is a *held* step**
+  (1.15 ms) while `p95` is a drawn one (26.65). Neither describes the drive; `x real`, or
+  `step_ms_mean` in the CSV, does. The two kinds of step are one distribution and the median
+  lands in the larger half.
+- **`drive.py --record` writes the held frame**, because the held frame is what the car had.
+  A recording made at `--decision-hz 20` on a 100 Hz world carries each image five times, and
+  that is the recording of a 20 Hz camera rather than a fault in it. The wire is unaffected:
+  there is no `/act` on a skipped step, so a hosted model is only ever sent a fresh frame.
 
 **`camera_rig.tick_rate` is now checked against the interval the cameras are really read at**
 — `load_rig(path, read_interval_s=...)` — rather than against a hard-coded 0.1 s, so a 20 Hz
@@ -1235,7 +1289,9 @@ getting faster. `step_ms_*` is still every step, because `ms/step` is per step b
 `uv.lock`, `README.md` and `src/`; `tools/`, `scripts/` and `rigs/` are live through the
 `.:/work` bind mount. Verified: `step-timing-docker.sh mosque -- --step-hz 100 --decision-hz 20
 --camera-rig rigs/cams.txt` ran on the RTX 4050 at 32768 px with `camera_count 7`,
-`decision_hz 20`, `camera_draw_hz 100`, CSV owned by the caller.
+`decision_hz 20`, `camera_draw_hz 20`, CSV owned by the caller — and the four-set batch there
+reproduces the host's figures to within the noise (0.34x / 2.55x / 1.47x against 0.34x /
+2.64x / 1.49x).
 
 ### openpilot drives through the same socket, and the route is a sensor now (2026-08-22)
 

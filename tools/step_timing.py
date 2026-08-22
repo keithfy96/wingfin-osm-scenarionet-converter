@@ -93,6 +93,7 @@ from drive import (  # noqa: E402
     sim_step_seconds,
     step_config,
 )
+from frame_gate import install as install_frame_gate  # noqa: E402
 
 # How many steps are dropped from the *distribution* before it is summarised. They stay in
 # `wall_seconds`, because the honest total includes them: the first steps of a drive carry
@@ -436,6 +437,12 @@ def drive(env, row, arguments, url=None, rig=None, decision_hz=None):
     if mounted is not None:
         mounted.mount(env)
 
+    # The middle column's third half. `--decision-hz` gates the policy call and the reads;
+    # without this the cameras still redraw once per `env.step` (`base_engine.py:458`) and a
+    # decimated camera is only a decimated *look* at a camera running at the world tick.
+    # Offscreen only, and `install` decides that from the env rather than from the row.
+    gate = None if arguments.draw_every_step else install_frame_gate(env)
+
     scenario = env.engine.data_manager.current_scenario
     length = env.engine.data_manager.current_scenario_length
     sim_dt = sim_step_seconds(env)
@@ -543,7 +550,13 @@ def drive(env, row, arguments, url=None, rig=None, decision_hz=None):
     while steps < budget:
         if steps == arguments.warmup:
             loop_started = time.perf_counter()
+            # Counted over the same window as `sim_seconds`, so `camera_draw_hz` describes the
+            # steps the timings describe.
+            if gate is not None:
+                gate.reset_counts()
         deciding = decides_on(steps, stride)
+        if gate is not None:
+            gate.before_step(deciding)
         mark = time.perf_counter()
         if pack is not None and deciding:
             pack()
@@ -598,6 +611,14 @@ def drive(env, row, arguments, url=None, rig=None, decision_hz=None):
         camera_count=cameras,
         camera_size=camera_size,
         camera_mb_per_step=round(mounted.megabytes, 3) if mounted is not None else "",
+        # Counted by the gate rather than declared equal to the step rate, which is what this
+        # column used to be - and it is the one camera column a record never re-read off the
+        # live run, so the number that says the draw was gated has to come from the thing that
+        # gated it. Empty where there are no cameras at all.
+        camera_draw_hz=(
+            round(gate.drawn_hz(sim_seconds), 3) if gate is not None
+            else (round(1.0 / sim_dt, 3) if row["render"] == "offscreen" else "")
+        ),
         stack_size=stack_size,
         # Named the same way the declared fallback names it, so a skipped row and a row that
         # ran describe the same thing: `LidarStateObservation`'s 161 floats are what
@@ -783,10 +804,17 @@ def main():
         help="The middle rate of world tick / decision + camera / physics, when it should be "
         "slower than the simulator. Must divide --step-hz. MetaDrive has no clock for it - "
         "env.step is the world tick, the policy call and the camera draw all at once - so it "
-        "is a stride counted in this loop. On the replay row it gates the sensor and camera "
-        "read alone, MetaDrive calling the replay policy in-engine on every step whatever "
-        "this says. --step-hz 100 --decision-hz 20 is 100/20/100, and what openpilot's "
-        "bridge is written for.",
+        "is a stride counted in this loop. On the replay row it gates the sensor read, the "
+        "camera read and the camera draw, MetaDrive calling the replay policy in-engine on "
+        "every step whatever this says. --step-hz 100 --decision-hz 20 is 100/20/100, and "
+        "what openpilot's bridge is written for.",
+    )
+    parser.add_argument(
+        "--draw-every-step", action="store_true",
+        help="Redraw the cameras on every world tick even when deciding less often - what "
+        "this tool did before the render pass was gated. Off by default. Kept so the gate's "
+        "worth stays measurable: it is the control the ms/step figures are taken against, "
+        "and camera_draw_hz says which was in force.",
     )
     parser.add_argument("--policy-url", default=None, help="Where row 3's model is listening.")
     parser.add_argument(
@@ -1050,15 +1078,18 @@ def main():
                                 if rig else CAMERA_SIZE))
                             if offscreen else ""),
                         camera_mb_per_step=round(rig.megabytes, 3) if rig and offscreen else "",
-                        # Two columns because they are two rates and only one of them is ours to
-                        # move. `camera_hz` is what the cameras are *read* at, which `--decision-hz`
-                        # decimates; `camera_draw_hz` is what they are *drawn* at, which is the step
-                        # rate and nothing else - MetaDrive redraws every buffer once per `env.step`
-                        # (`base_engine.py:458`), and deactivating them in between was measured and
-                        # saves 1% (see docs/step-timing-rows.md). One column would read as though a
-                        # decimated camera were cheap, which it is not.
+                        # Two columns because they are two rates. `camera_hz` is what the
+                        # cameras are *read* at and `camera_draw_hz` what they are *drawn* at,
+                        # and `--decision-hz` now moves both - `frame_gate` gates the render
+                        # pass itself, so the two agree unless `--draw-every-step` was passed.
+                        # Declared here so a row that never reaches an env still says what it
+                        # would have carried; a row that runs overwrites `camera_draw_hz` with
+                        # what the gate really counted.
                         camera_hz=step_hz / stride if offscreen else "",
-                        camera_draw_hz=step_hz if offscreen else "",
+                        camera_draw_hz=(
+                            (step_hz if arguments.draw_every_step else step_hz / stride)
+                            if offscreen else ""
+                        ),
                         decision_hz=step_hz / stride, steps_per_decision=stride,
                         stack_size=3 if offscreen else "", norm_pixel="True" if offscreen else "",
                         observation_kind="image+state41" if offscreen else "lidarstate161",
@@ -1114,7 +1145,7 @@ def main():
                         )
                         for key in (
                             "sensors", "camera_count", "camera_size", "camera_mb_per_step",
-                            "stack_size", "observation_kind",
+                            "camera_draw_hz", "stack_size", "observation_kind",
                             "gl_renderer", "force_fps", "scenario_id", "sim_dt_s", "physics_dt_s",
                             "decision_repeat", "steps", "measured_steps", "warmup_steps",
                             "sim_seconds",
@@ -1164,13 +1195,18 @@ def main():
             ",".join(str(number) for number in left)))
     print("  `policy` is the driver's own cost, timed around the call - read that rather than")
     print("  subtracting one row from another, which about 1 ms of run-to-run spread swamps.")
-    if arguments.decision_hz:
-        print("  decide is --decision-hz: how often the policy is asked and the sensors read.")
-        print("  On the replay row it gates the read alone - MetaDrive drives the ego from the")
-        print("  tape in-engine on every step, so there is no decision there to decimate. The")
-        print("  camera still *draws* every step - camera_draw_hz - because MetaDrive redraws")
-        print("  every buffer once per env.step and deactivating them in between was measured")
-        print("  at 1% of a 26 ms step. What a lower decide rate saves is the read: rig_ms.")
+    # Also under `--rate-sets`, where the rate lives on the set and `arguments.decision_hz` is
+    # None: a table whose decide column differs from its tick column needs this note whichever
+    # way the rate was spelled.
+    if arguments.decision_hz or any(one.decision_hz for one in rate_sets):
+        print("  decide is --decision-hz: how often the policy is asked, the sensors read and")
+        print("  the cameras drawn. On the replay row it gates the reads and the draw alone -")
+        print("  MetaDrive drives the ego from the tape in-engine on every step, so there is no")
+        print("  decision there to decimate. camera_draw_hz is counted by the gate, not")
+        print("  declared; --draw-every-step puts the draw back on the world tick.")
+        print("  And ms/step is a *median* over every step, so at a stride of 2 or more it is")
+        print("  a held step and p95 is a drawn one. What describes the drive is x real, or")
+        print("  step_ms_mean in the CSV - the two kinds of step are one distribution.")
     if arguments.rate_sets:
         print(f"  set is a whole configuration from {arguments.rate_sets}, and each drives")
         print("  only the dataset written at its own world tick.")
@@ -1187,7 +1223,8 @@ def main():
         print("  --camera-rig <spec> mounts the real cameras and prices them instead.")
     else:
         print("  rig_ms in the CSV is reading the mounted cameras back out - a buffer copy,")
-        print("  not a second render; the drawing of them is inside ms/step with everything else.")
+        print("  not a second render; the drawing of them is inside ms/step with everything")
+        print("  else, at camera_draw_hz.")
     print(f"  what every row and column means: {ROWS_DOC}  (or --list-rows)")
 
     # Every row is already on disk, flushed as it was measured. This only closes the handle

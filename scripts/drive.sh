@@ -26,13 +26,16 @@
 #                     workspace holds one per rate -- STEP_HZ=100 drives scenarionet-100hz --
 #                     and a dataset can only be replayed at the rate it was written at. A
 #                     --step-hz after -- wins over this, for the dataset as well as the run.
-#   DECISION_HZ       how many times a second the policy is asked and the --sensors are
-#                     read, when that should be slower than the simulator itself. Unset it
-#                     is the step rate: MetaDrive has no separate clock for it, env.step
-#                     being the world tick, the policy call and the camera draw at once.
-#                     Must divide the step rate. STEP_HZ=100 with DECISION_HZ=20 is what
-#                     openpilot's bridge is written for (_DT_MDL 0.05). It does NOT pick
-#                     the dataset -- STEP_HZ still does.
+#   DECISION_HZ       how many times a second the policy is asked, the --sensors are read
+#                     and -- offscreen -- the cameras are drawn, when that should be slower
+#                     than the simulator itself. Unset it is the step rate: MetaDrive has no
+#                     separate clock for it, env.step being the world tick, the policy call
+#                     and the camera draw at once, so the middle rate is a stride counted in
+#                     the tool's own loop. Must divide the step rate. STEP_HZ=100 with
+#                     DECISION_HZ=20 is what openpilot's bridge is written for (_DT_MDL
+#                     0.05). It does NOT pick the dataset -- STEP_HZ still does. Under
+#                     --render 3D the draw is never gated: the window is the point of it.
+#                     -- --draw-every-step puts the draw back on the world tick offscreen.
 
 # shellcheck source=scripts/_common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
@@ -42,7 +45,7 @@ PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --) shift; PASSTHROUGH=("$@"); break ;;
-        -h|--help) sed -n '2,36p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
+        -h|--help) sed -n '2,38p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
         -*) die "unknown option: $1
   This script takes only a workspace. To pass $1 to drive.py, put it after --:
     ./scripts/drive.sh ${POSITIONAL:-<workspace>} -- $1" ;;

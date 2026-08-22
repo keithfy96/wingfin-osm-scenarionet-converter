@@ -588,12 +588,13 @@ one `env.step`, so at the default it is a 10 Hz signal where a real unit runs 10
 `--step-hz 100` differences it over 0.01 s instead, and the report header says which it
 used. Every figure in this section was measured at the default 10 Hz.
 
-**The cameras are read at `--decision-hz` and drawn at `--step-hz`, and only the first of
-those is ours to move.** MetaDrive redraws every buffer once per `env.step`
-(`base_engine.py:458`, unconditional), and deactivating them in between — its own
-`buffer.set_active(False)` — was measured at **1% of a 26 ms step** with all seven of
-`rigs/cams.txt`'s cameras off for a whole drive. So a decimated camera saves the read
-(3.12 → 0.62 ms a step averaged, over the seven) and not the render.
+**The cameras are read *and drawn* at `--decision-hz`.** MetaDrive redraws every buffer once
+per `env.step` (`base_engine.py:458`, unconditional), so `tools/frame_gate.py` gates that call
+itself — the frames come at the decision rate rather than at the world tick. It is most of
+what a step costs: on `mosque` at 100 Hz with `rigs/cams.txt`, **26.11 ms/step at
+`100/100/100` against 6.21 at `100/20/100` and 3.66 at `100/10/100`** — 0.34x real time to
+1.47x and 2.54x. `--draw-every-step` puts the draw back on the world tick, and is the control
+those figures were taken against: there a lower decide rate is worth under a millisecond of 26.
 
 All four modalities are there. Measured on `junction-1`:
 
@@ -790,7 +791,8 @@ be finer than a physics tick.
 holds, a decision rate that divides one dataset and not another skips the row it cannot have
 and runs the one it can — `--decision-hz 20` on a 10 Hz dataset says so in the table rather
 than ending the run. `decision_hz`, `steps_per_decision`, `camera_hz` and `camera_draw_hz`
-are in the CSV; `docs/step-timing-rows.md` is what they mean.
+are in the CSV — the last of those counted by the gate rather than declared;
+`docs/step-timing-rows.md` is what they mean.
 
 **To compare several whole configurations, put them in a file.** `--rate-sets` takes
 `name,step_hz,decision_hz,physics_hz`, one a row — `world tick / decision + camera / physics` —

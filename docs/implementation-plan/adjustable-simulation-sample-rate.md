@@ -2,12 +2,13 @@
 
 ## Status
 
-**Phases 1 and 2 are built and verified.** The simulator, the converter and every tool
+**Phases 1, 2 and 3 are built and verified.** The simulator, the converter and every tool
 take `--step-hz`, defaulting to MetaDrive's 10; `drive.py` and `step_timing.py` take
 `--decision-hz`, defaulting to the step rate, which is how a 100 Hz world runs 20 Hz
-decisions and 20 Hz sensor reads. Cameras are still **drawn** every step and that was
-measured rather than assumed - see 2.4. Figures below are measured on `junction-1`
-unless they say otherwise.
+decisions, 20 Hz sensor reads **and 20 Hz frames** - `tools/frame_gate.py` gates the render
+pass itself, which is most of what an offscreen step costs (26.11 ms/step to 6.21 on the
+seven-camera rig). Phase 2.4 said the draw could not be gated; Phase 3.1 says why that was
+wrong. Figures below are measured on `junction-1` unless they say otherwise.
 
 The invariant held: with no flag anywhere, `sha256sum -c` passes on a re-converted
 `junction-1` dataset, and `tools/drive.py` and `tools/check_dataset.py` print every
@@ -64,10 +65,12 @@ the converted pickles and by diffing an unflagged `drive.py` run.
   (`base_camera.py:187-192`). Passing it makes `perceive` call `taskMgr.step()`
   itself - the expensive form, and the one `policy_client.py:209` uses.
 - **The draw is not gated by the read.** Buffers are drawn on every `taskMgr.step()`
-  (`base_engine.py:455,458`) and never deactivated, so gating only the read gives
-  20 Hz frames at 100 Hz cost. `buffer.set_active(False/True)` is the supported way
-  to skip a draw; MetaDrive does exactly that for its dashboard
-  (`dashboard.py:129-135`).
+  (`base_engine.py:455,458`), so gating only the read gives 20 Hz frames at 100 Hz
+  cost. `buffer.set_active(False/True)` looks like the supported way to skip a draw
+  - MetaDrive does exactly that for its dashboard (`dashboard.py:129-135`) - and it
+  **is not**, for the reason Phase 3 records: an `RGBCamera` owns two
+  GraphicsOutputs and that is the cheap one. What works is gating
+  `engine.task_manager.step()` itself.
 - `waypoint_policy.py:61-65` is MetaDrive's own correct derivation of the step from
   the two keys, and the pattern to copy.
 - `_sample_in_time` (`ego_route.py:1231`) is the **only** seconds-to-steps conversion
@@ -200,20 +203,60 @@ is provably unchanged; **after 1.3** it can be verified; **after 1.5** it can be
         workspace holds, the survey because it has no `--decision-hz` to answer a refusal
         with and `--step-hz 100 --camera-rig rigs/cams.txt` worked before. Still validation
         only, never a resample.
-  - [x] **2.4** **`--camera-skip-draw` was built, measured and removed.** The premise -
-        that the draw is the expensive half - is wrong on this machine.
-        `buffer.set_active(False)` is MetaDrive's own mechanism (`dashboard.py:129-135`)
-        and it does not move the number: all seven of `rigs/cams.txt`'s buffers
-        deactivated for a whole `mosque` drive at 100 Hz gave **26.42 ms/step against
-        26.57 active - 0.15 ms, 1%** - with `is_active()` confirmed `False` on every one.
-        Through the flag it read 26.37 against 26.19 ungated. What a lower decide rate
-        really saves is the **read**: the same rig goes from 0.341x to 0.371x real time.
-        `camera_hz` and `camera_draw_hz` now report the two rates separately so nothing
-        reads as though a decimated camera were cheap. Do not rebuild this without
-        measuring first.
+  - [x] **2.4** **`--camera-skip-draw` was built, measured and removed** - and the
+        conclusion drawn from that was **wrong**, corrected in Phase 3 below. The
+        measurement stands: all seven of `rigs/cams.txt`'s buffers `set_active(False)` for a
+        whole `mosque` drive at 100 Hz gave **26.42 ms/step against 26.57 active - 0.15 ms,
+        1%** - with `is_active()` confirmed `False` on every one. What it did not establish
+        is that the draw is cheap. `self.buffer` is the wrong buffer: see 3.1.
   - [x] **2.5** `DECISION_HZ` in `.env.example` and `drive.sh` (not `CAMERA_HZ`, per 2.1),
         `--decision-hz` on `step-timing.sh`, and `docs/step-timing-rows.md`, which is
         where the columns are documented and the only place they are.
+
+- [x] **Phase 3 - the frames themselves come at the decision rate** (2026-08-22)
+  - [x] **3.1** **Why 2.4 read 1%, which had to be found before anything could be built
+        on top of it.** An `RGBCamera` owns **two** GraphicsOutputs and `self.buffer` is
+        the cheap one: `rgb_camera.py:38-52` builds a `FilterManager(self.buffer, self.cam)`
+        and calls `render_scene_into(...)` with `set_multisamples(16)`, which creates a
+        second buffer (`direct/filter/FilterManager.py:325-328`) hosted by the first. The
+        scene - terrain, PBR, that 16x MSAA on top of the global 8x at
+        `engine_core.py:96-103` - is drawn into *that*, and `self.buffer` only draws a
+        fullscreen quad over the result. Seven quads were deactivated and seven scene
+        renders kept running. Anyone reaching for `set_active` needs this first.
+  - [x] **3.2** `tools/frame_gate.py` gates one level up, where nothing is left to infer:
+        it rebinds `engine.task_manager` to a forwarding proxy whose `step()` passes through
+        only on a decision step. That is exactly the two render calls in `BaseEngine.step`
+        (`base_engine.py:455,458`), because `base_engine.py:65` is
+        `self.task_manager = self.taskMgr` and **every other render in MetaDrive reaches the
+        same object through `taskMgr`** - `base_engine.py:394,761`,
+        `base_env.py:439,534,569`, `main_camera.py:504`, and `base_camera.py:188,193`, which
+        is `perceive(new_parent_node=...)`'s own second pass. So `env.reset`'s frames and
+        `SensorPack`'s extra render are untouched by construction, and nothing is patched
+        onto a MetaDrive class. The read-back is held with it - `ImageObservation.observe`
+        returns the stack unrolled rather than pulling the same pixels and rolling a
+        duplicate in - and **only the image half**, the 41-number state staying fresh every
+        step.
+        *Done*: over a real 60-step drive at stride 5, `gate.draws` is 12, panda3d's own
+        `globalClock.getFrameCount()` moves by 12, all 48 held steps return an image
+        bit-identical to the step before, all 12 drawn steps return a different one, and the
+        state half moves on all 60.
+  - [x] **3.3** `camera_draw_hz` is **counted by the gate over the measured window** rather
+        than declared as `step_hz`. It was the one camera column a record never re-read off
+        the live run, which is precisely the column that must not be taken on trust here.
+  - [x] **3.4** `--draw-every-step` on both tools, off by default: the control the figures
+        are taken against, and the way the gate's worth stays measurable later. Measured on
+        `mosque` at 100 Hz, row 1, `rigs/cams.txt`, 200 steps, **three runs of each** -
+        26.11 ms/step at `100/100/100`, **6.21** at `100/20/100`, **3.66** at `100/10/100`,
+        against **26.94** and **26.69** with the draw put back on the world tick. So the
+        draw is ~20 of the 26 ms and the read is under 1; the same drive runs **4.2x**
+        faster at 20 Hz and **7.1x** at 10 Hz. `--decision-hz` at stride 1 is a no-op:
+        27.30 ms/step against 27.52 ungated, same steps, same ending.
+  - [x] **3.5** **`--render 3D` is deliberately not gated.** The window is the point of that
+        mode, `ForceFPS.real_time_simulation` steps the task manager inside the substep loop
+        as well, and `--agent-policy manual` polls the keyboard there. `install` returns
+        `None` for anything that is not `_render_mode == offscreen`, so `--render none` -
+        which has no cameras at all (`base_env.py:342-349`) - is untouched too, and
+        `image_on_cuda` is refused by name.
 
 ## What Phase 1 measured
 
@@ -283,10 +326,13 @@ through a dataset, for the same reason.
 above. It is warned about and left alone: patching a reference checkout is out of bounds,
 and the difference is real rather than a data fault.
 
-**Three things are unmeasured and must not be guessed at**: the wall-clock cost of a
-100 Hz drive headless and in 3D; the pickle size of a 100 Hz dataset carrying signals;
-and whether `buffer.set_active` is safe mid-episode, given that `image_observation` calls
-`perceive()` unconditionally every step (`image_obs.py:85` from `base_env.py:620`) and a
-dormant buffer would fill the 3-deep `np.roll` stack with whatever it holds. That last one
-is why 2.4 is its own flag rather than part of 2.1.
+**Two things were unmeasured and must not be guessed at**: the wall-clock cost of a
+100 Hz drive headless and in 3D, and the pickle size of a 100 Hz dataset carrying signals.
+Both are measured above.
+
+A third - whether a dormant buffer would fill the 3-deep `np.roll` stack with whatever it
+holds, `image_observation` calling `perceive()` unconditionally every step
+(`image_obs.py:85` from `base_env.py:620`) - was the right question, and Phase 3 answers it
+by holding the observation in step with the draw rather than letting it re-read a stale
+buffer. It is why 2.4 was its own flag rather than part of 2.1.
 

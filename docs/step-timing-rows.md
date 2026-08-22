@@ -237,8 +237,13 @@ MetaDrive does not hand you a camera you then read. When `image_observation` is 
 builds the **observation** out of the camera: what `env.step` returns is
 `{"image": the last 3 frames, "state": 41 numbers}`, and the code producing that grabs the
 frame and rolls the stack (`image_obs.py:85`). So reading the camera is part of making the
-step's return value. There is no seam to put a stopwatch in, and **no setting that draws it
-without reading it** — turn the read off and the camera stops existing.
+step's return value, and there is no seam inside `env.step` to put a stopwatch in.
+
+What there *is* is a rate. `--decision-hz` gates the render pass and the read together, so on
+a skipped step nothing is drawn and the observation hands back the stack it already had —
+which is what a camera slower than the world tick means. Measured on `mosque` at 100 Hz with
+`rigs/cams.txt`, that is most of what a step costs: **26.11 ms/step against 6.21**. So the
+camera can be priced by rate as well as by row; see below.
 
 Two consequences:
 
@@ -252,9 +257,9 @@ Two consequences:
 The way to price the camera is to run the same drive with no graphics at all and subtract:
 that is what **row 6** is for.
 
-One frame is drawn per `env.step` whatever the rate (`base_engine.py:458`, unconditional),
-so the image rate *is* the step rate and a camera costs a full 10x more per simulated second
-at 100 Hz — against 2x for the physics.
+Unflagged, one frame is drawn per `env.step` (`base_engine.py:458`, unconditional), so the
+image rate *is* the step rate and a camera costs a full 10x more per simulated second at
+100 Hz — against 2x for the physics. That is exactly what `--decision-hz` is for.
 
 ### Three rates, and only two of them are MetaDrive's
 
@@ -268,7 +273,11 @@ and the sensor config is `name=(cls, *args)` with **no slot for a rate anywhere*
 |---|---|---|
 | world tick | `--step-hz` | the product of the two MetaDrive keys |
 | physics | `--physics-hz` | `physics_world_step_size`; `decision_repeat` falls out |
-| decision + camera | `--decision-hz` | **a stride counted in this tool's own loop** — nothing in MetaDrive |
+| decision + camera | `--decision-hz` | **a stride counted in this tool's own loop** — nothing in MetaDrive. It gates the policy call, the sensor read, the camera read **and the camera draw** |
+
+`--draw-every-step` is the one escape from that last item: it leaves the cameras redrawing on
+every world tick while the decisions stay decimated, which is what this tool did before the
+render pass was gated. Off by default, and kept so the gate's worth stays measurable.
 
 Two constraints, both arithmetic and both refused rather than rounded:
 
@@ -278,32 +287,70 @@ Two constraints, both arithmetic and both refused rather than rounded:
   decision cannot be finer than one.
 
 `--step-hz 100 --decision-hz 20` is `100/20/100`: the world and the physics at 100 Hz, the
-policy asked and the sensors read every fifth step. It is what openpilot's bridge is written
+policy asked, the sensors read and the cameras drawn every fifth step. It is what openpilot's bridge is written
 for — `_DT_MDL = 0.05` is what its lag compensation and its curvature-rate limit are counted
 against — and it beats converting a 20 Hz dataset for the purpose, because the control
 interval is the same 0.05 s with ten times the physics underneath.
 
 **On the replay rows the decision half is vacuous.** `ReplayEgoCarPolicy` runs *in* the
 engine and MetaDrive calls it every `env.step`; nothing outside can decimate that. So on
-rows 1 and 7 `--decision-hz` gates the sensor and camera read alone, and the table says
+rows 1 and 7 `--decision-hz` gates the reads and the camera draw alone, and the table says
 `policy replay` so the reader can see which it is.
 
-**What a lower decide rate saves is the read, not the draw**, and the draw cannot be saved —
-which was measured before it was given up on. MetaDrive redraws every camera buffer once per
-`env.step` (`base_engine.py:458`, unconditional), and `buffer.set_active(False)` — its own
-way of stopping that, which the dashboard uses at `dashboard.py:129-135` — **does not move
-the number**: all seven of `rigs/cams.txt`'s buffers deactivated for a whole `mosque` drive
-at 100 Hz gave **26.42 ms/step against 26.57 active, 0.15 ms or 1%**, with `is_active()`
-confirmed `False` on every one. A `--camera-skip-draw` flag was built, measured at
-26.37 ms/step against 26.19 ungated, and **removed**. Do not build it again without
-measuring first.
+**The draw is gated too, and it is most of what a step costs.** `tools/frame_gate.py` rebinds
+`engine.task_manager` to a proxy that lets `step()` through only on a decision step, which
+gates the two render calls in `BaseEngine.step` (`base_engine.py:455,458`) and **nothing
+else** — every other render in MetaDrive reaches the same object through the name `taskMgr`,
+including `env.reset`'s own frames and `perceive(new_parent_node=...)`'s second pass. One
+`task_manager.step()` is one `graphicsEngine.renderFrame()`, so a call that does not happen is
+a frame that is not drawn. The read-back is held in step with it: `ImageObservation.observe`
+returns the stack unrolled rather than pulling the same pixels again and rolling a duplicate
+in. Only the image half — the 41-number state stays fresh every step, a vehicle state not
+being a camera.
 
-So the two rates are reported separately and honestly: `camera_hz` is what the cameras were
-**read** at and `camera_draw_hz` what they were **drawn** at, which is always the step rate.
-The read is real money — the seven-camera rig costs 3.12 ms a step read every step and
-6.54 ms read once in five — `rig_ms_median` is per read, so it reports the 6.54 — and the
-drive goes from **0.341x to 0.371x** real time. `ms/step` itself does not move, because the
-read is timed outside it.
+Measured on `mosque`, 100 Hz, row 1, `rigs/cams.txt`, 200 measured steps, **three runs of
+each** (RTX 4050):
+
+| configuration | ms/step | x real |
+|---|---|---|
+| `100/100/100` | 26.11 | 0.34x |
+| `100/20/100` | **6.21** | **1.47x** |
+| `100/10/100` | **3.66** | **2.54x** |
+| `100/20/100 --draw-every-step` | 26.94 | 0.36x |
+| `100/10/100 --draw-every-step` | 26.69 | 0.37x |
+
+The last two rows are the control, and they are what says which half the money was in: with
+the draw put back on the world tick a lower decide rate is worth **under a millisecond of 26**
+— the read alone — and with it gated the same drive is **4.2x** faster at 20 Hz and **7.1x**
+at 10 Hz.
+
+**Why `frame_gate` and not `buffer.set_active(False)`, and why this reverses what this file
+used to say.** That was built here first, as `--camera-skip-draw`, and measured at **1% of a
+26 ms step** with `is_active()` confirmed `False` on all seven cameras — so it was removed and
+the draw was written up as unsaveable. The measurement was right and the conclusion was wrong:
+**an `RGBCamera` owns two GraphicsOutputs and `self.buffer` is the cheap one.**
+`rgb_camera.py:38-52` builds a `FilterManager(self.buffer, self.cam)` and calls
+`render_scene_into(...)` with `set_multisamples(16)`, which creates a *second* buffer
+(`direct/filter/FilterManager.py:325-328`) hosted by the first. The scene — terrain, PBR, that
+16x MSAA on top of the global 8x at `engine_core.py:96-103` — is drawn into that one, and
+`self.buffer` only draws a fullscreen quad over the result. Deactivating `self.buffer`
+switched off seven quads and left seven scene renders running. Anyone reaching for
+`set_active` again needs that fact first.
+
+**And it is checked by counting, not by timing.** Over a real 60-step drive at stride 5:
+`gate.draws` is 12, panda3d's own `globalClock.getFrameCount()` moves by 12 over the same
+window, all 48 held steps return an image bit-identical to the step before, all 12 drawn steps
+return a different one, and the state half moves on all 60.
+
+So `camera_hz` is what the cameras were **read** at and `camera_draw_hz` what they were
+**drawn** at, counted by the gate rather than declared — equal unless `--draw-every-step` was
+passed. `rig_ms_median` is the read-back and is per read, so it does not fall with the rate;
+what falls is `ms/step`.
+
+**One reading trap at a stride of 2 or more: `ms/step` is a median over every step, so it is
+a held step** — 1.15 ms in the table above — while `p95` is a drawn one at 26.65. Neither is
+the drive. `x real`, or `step_ms_mean` in the CSV, is: the two kinds of step are one
+distribution and the median simply lands in the larger half.
 
 ### The rig — `--camera-rig`
 
@@ -352,7 +399,8 @@ Five things it does, none of which is a preference:
   sweep drives every rate a workspace holds and there is no single one to judge against.
   `sensor-survey.sh` prints the same note, for the same reason - it has no `--decision-hz`
   to answer a refusal with. `camera_hz` records what they were read at, `camera_draw_hz`
-  what they were drawn at.
+  what they were drawn at, and under `--decision-hz` those are the same number: a spec
+  declaring 0.1 s is exactly satisfied by `--step-hz 100 --decision-hz 10`.
 
 Row 6 registers no cameras at all, so a rig changes nothing about it — which is what keeps
 it the reference the rig is priced against.
@@ -445,7 +493,7 @@ only a hand-named `--csv` can reach — the stamp is per-second otherwise.
 | `camera_size` | the image the observation actually carried, from the frame's own shape. Under a rig this is the `image_source` camera, which is the spec's first |
 | `camera_mb_per_step` | uint8 megabytes the whole rig produces per step — 5.42 for the seven-camera spec. Empty without a rig |
 | `camera_hz` | the rate the cameras were **read** at — `decision_hz`, the read being part of the decision |
-| `camera_draw_hz` | the rate they were **drawn** at, which is always `step_hz`: MetaDrive redraws every buffer once per `env.step` whatever a spec's `tick_rate` says, and deactivating them in between measured 1% (above). Two columns because they are two rates, and one would read as though a decimated camera were cheap |
+| `camera_draw_hz` | the rate they were **drawn** at, **counted by the gate over the measured window rather than declared**. Equal to `camera_hz` unless `--draw-every-step` was passed, which puts the draw back on `step_hz`. Two columns because they are two rates and a run can be made to differ; a CSV written before `frame_gate` existed has `camera_draw_hz == step_hz`, which was true when it was written |
 | `stack_size` | frames in the image observation, 3, likewise from the frame |
 | `norm_pixel` | `True`: float32 in [0, 1] rather than uint8 |
 | `observation_kind` | `image+state41` offscreen — a dict of image plus the 41-number state, **with no lidar block** — or `lidarstate161` under `--render none` |

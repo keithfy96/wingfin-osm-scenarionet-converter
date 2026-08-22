@@ -68,6 +68,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # the sensor names to build its help text before anything else runs. It costs nothing:
 # `policy_client` imports only the standard library and `geodesy` at module level, and reaches
 # for MetaDrive lazily inside the one function that needs it.
+from frame_gate import install as install_frame_gate  # noqa: E402
 from policy_client import HEAVY_SENSORS as HEAVY_POLICY_SENSORS  # noqa: E402
 from policy_client import SENSORS as POLICY_SENSORS  # noqa: E402
 
@@ -599,10 +600,20 @@ def main() -> int:
         "when that should be slower than the simulator itself. Unset, it is the step rate: "
         "MetaDrive has no separate clock for it, so `env.step` is the world tick, the "
         "decision and the camera sample all at once. Must divide --step-hz. On "
-        "--agent-policy replay it gates the sensor read alone, MetaDrive calling the replay "
-        "policy in-engine every step whatever this says; on `idm`, `manual` and `remote` the "
-        "action is held across the skipped steps. openpilot's bridge is written for 20 Hz "
-        "(_DT_MDL 0.05), so --step-hz 100 --decision-hz 20 is what matches it.",
+        "--agent-policy replay it gates the reads and the camera draw alone, MetaDrive "
+        "calling the replay policy in-engine every step whatever this says; on `idm`, "
+        "`manual` and `remote` the action is held across the skipped steps. Offscreen the "
+        "cameras are drawn at this rate too, not at the world tick. openpilot's bridge is "
+        "written for 20 Hz (_DT_MDL 0.05), so --step-hz 100 --decision-hz 20 matches it.",
+    )
+    parser.add_argument(
+        "--draw-every-step",
+        action="store_true",
+        help="Redraw the offscreen cameras on every world tick even at a lower --decision-hz. "
+        "Off by default; kept so the gate's worth stays measurable. No effect under --render "
+        "3D, where the draw is never gated - the window is the point of it, ForceFPS steps "
+        "the task manager inside the substep loop, and --agent-policy manual polls the "
+        "keyboard there.",
     )
     parser.add_argument("--height-scale", type=int, default=HEIGHT_SCALE)
     parser.add_argument("--drivable-area-extension", type=int, default=DRIVABLE_AREA_EXTENSION_M)
@@ -945,11 +956,26 @@ def main() -> int:
         print(
             "decision     {:g} Hz: every {} env.step, {:g} s apart. {}".format(
                 arguments.decision_hz, stride, decision_seconds,
-                "the sensor read only - MetaDrive calls the replay policy in-engine on every "
+                "the reads only - MetaDrive calls the replay policy in-engine on every "
                 "step" if arguments.agent_policy == "replay"
                 else "the action is held across the steps in between",
             )
         )
+        # Said rather than implied, because it is the half a reader cannot see from the
+        # outside: whether the frames themselves came at this rate or only the looks at them.
+        if arguments.render == "offscreen":
+            print(
+                "             cameras   {}".format(
+                    f"drawn every env.step ({effective_hz:g} Hz) - --draw-every-step"
+                    if arguments.draw_every_step
+                    else f"drawn at {arguments.decision_hz:g} Hz too, not at the world tick"
+                )
+            )
+        elif arguments.render == "3D":
+            print(
+                f"             cameras   the window is drawn every env.step "
+                f"({effective_hz:g} Hz): the draw is never gated under --render 3D"
+            )
     if rate:
         print(
             "step rate    {:g} Hz: physics_world_step_size={:g}, decision_repeat={}".format(
@@ -1059,9 +1085,18 @@ def main() -> int:
     )
     reported_gpu = False
     failures = 0
+    # Installed after the first reset, which is when the engine exists, and once - `install`
+    # wraps `env.reset`, so doing it per scenario would stack a wrapper per episode. It
+    # returns None unless this env renders offscreen; see `frame_gate`.
+    gate = None
+    gate_settled = False
     try:
         for index in indices:
             observation, _ = env.reset(seed=index)
+            if not gate_settled:
+                gate_settled = True
+                if not arguments.draw_every_step:
+                    gate = install_frame_gate(env)
 
             if not reported_gpu:
                 reported_gpu = True
@@ -1181,6 +1216,8 @@ def main() -> int:
                 # to `[0, 0]`: zeroing it would take the foot off the throttle four steps in
                 # five and the car would coast rather than drive at a lower decision rate.
                 deciding = decides_on(steps, stride)
+                if gate is not None:
+                    gate.before_step(deciding)
                 if deciding and remote is not None:
                     action = remote(observation)
                 observation, _, terminated, truncated, info = env.step(action)

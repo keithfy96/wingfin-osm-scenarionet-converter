@@ -28,10 +28,12 @@
 # --physics-hz the integrator, and --decision-hz how often the policy is asked and the sensors
 # read -- a stride counted in the tool's own loop, since env.step is the world tick, the policy
 # call and the camera draw all at once. Physics must be a whole multiple of the tick and a
-# decision a whole divisor of it; neither is rounded. What a lower decide rate saves is the
-# sensor *read*, not the draw: MetaDrive redraws every camera buffer once per env.step and
-# deactivating them in between was measured at 1% of a 26 ms step. camera_hz and camera_draw_hz
-# report the two separately.
+# decision a whole divisor of it; neither is rounded. --decision-hz gates the camera *draw*
+# as well as the read, so the frames themselves come at that rate: measured on mosque at 100 Hz
+# with rigs/cams.txt, 26.06 ms/step at 100/100/100 against 6.12 at 100/20/100 and 3.55 at
+# 100/10/100 -- 0.35x real time to 1.49x and 2.63x. camera_hz reports the read rate and
+# camera_draw_hz the draw, counted by the gate rather than declared. --draw-every-step puts the
+# draw back on the world tick, and is the control those figures were taken against.
 #
 # --rate-sets takes a file of whole configurations -- name,step_hz,decision_hz,physics_hz,
 # one a row -- and drives them one after another in one process, into one CSV with a
@@ -66,7 +68,7 @@ PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --) shift; PASSTHROUGH=("$@"); break ;;
-        -h|--help) sed -n '2,60p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
+        -h|--help) sed -n '2,61p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
         -*) die "unknown option: $1
   This script takes only a workspace. To pass $1 to step_timing.py, put it after --:
     ./scripts/step-timing.sh ${POSITIONAL:-<workspace>} -- $1" ;;
