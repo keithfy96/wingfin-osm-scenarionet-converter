@@ -97,15 +97,7 @@ ARGS+=(${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"})
 note "workspace  $WS"
 note "datasets   $(printf '%s ' "${DATASETS[@]#"$WS/"}")"
 note "python     $MD_PY"
-if [[ $USE_NVIDIA -eq 1 ]]; then
-    note "gpu        discrete, via PRIME offload (GPU=$GPU)"
-else
-    note "gpu        whatever the display is on (GPU=$GPU)"
-fi
+note "gpu        $GPU_NOTE"
 printf '\n'
 
-if [[ $USE_NVIDIA -eq 1 ]]; then
-    exec env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
-        "$MD_PY" "${ARGS[@]}"
-fi
-exec "$MD_PY" "${ARGS[@]}"
+exec_with_gpu "$MD_PY" "${ARGS[@]}"

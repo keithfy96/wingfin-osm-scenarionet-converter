@@ -76,19 +76,9 @@ then
       --routes $WS/routes/routes.json"
 fi
 
-GPU="${GPU:-auto}"
-USE_NVIDIA=0
-case "$GPU" in
-    auto)
-        if [[ -e /usr/lib/x86_64-linux-gnu/libGLX_nvidia.so.0 ]] \
-            && nvidia-smi -L >/dev/null 2>&1; then
-            USE_NVIDIA=1
-        fi
-        ;;
-    nvidia) USE_NVIDIA=1 ;;
-    integrated) USE_NVIDIA=0 ;;
-    *) die "GPU must be auto, nvidia or integrated (got: $GPU)" ;;
-esac
+# Shared with drive.sh and step-timing.sh in _common.sh, which is also where the container's
+# EGL path is explained.
+select_gpu
 
 ARGS=(tools/sensor_survey.py "$DATASET" --render offscreen)
 if [[ -n "${STEP_HZ:-}" ]]; then
@@ -102,15 +92,7 @@ note "workspace  $WS"
 # off the workspace alone.
 note "dataset    ${DATASET#"$WS/"}"
 note "python     $MD_PY"
-if [[ $USE_NVIDIA -eq 1 ]]; then
-    note "gpu        discrete, via PRIME offload (GPU=$GPU)"
-else
-    note "gpu        whatever the display is on (GPU=$GPU)"
-fi
+note "gpu        $GPU_NOTE"
 printf '\n'
 
-if [[ $USE_NVIDIA -eq 1 ]]; then
-    exec env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
-        "$MD_PY" "${ARGS[@]}"
-fi
-exec "$MD_PY" "${ARGS[@]}"
+exec_with_gpu "$MD_PY" "${ARGS[@]}"

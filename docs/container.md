@@ -102,10 +102,18 @@ STEP_TIMING_LABEL=laptop                        # names the machine in the CSV
 
 `METADRIVE_PYTHON` must stay commented — it would override the container's interpreter.
 
-## Two things to know
+## Three things to know
 
 **Check `gl_renderer` in the CSV names the GPU.** If it says `llvmpipe` or `Mesa`, the run was on
-the CPU: about 4x too slow, and it does not fail while doing it.
+the CPU: about 4x too slow, and it does not fail while doing it. It is blank on any row that
+renders nothing — row 6 — where `gl_max_texture` is the column to read instead: 32768 on the RTX
+against 16384 on the iGPU or a software renderer.
+
+**The `gpu` line the scripts print reads differently in here, and that is not a fault.** It says
+`picked by EGL in the container, not by GPU=auto`. On the host the card is chosen by two GLX
+environment variables; in the container panda3d loads EGL first and libglvnd picks the card from
+the image's own ICD manifest, so `GPU=` has nothing to act on. The card that rendered is above
+either way — the printed line is a label, those columns are the measurement.
 
 **Row 7 needs a display**, so it is the one row that does not run in the container.
 

@@ -146,14 +146,30 @@ list_datasets() {
     [[ $found -eq 1 ]] || die "$WS has no dataset at all. Run ./scripts/run-stages-4-6.sh $WS first."
 }
 
-# Decide which card renders into $USE_NVIDIA. It cannot be a flag on the python side: the GLX
-# loader settles it before the process exists, so it is two environment variables in front of
-# the command. drive.sh and sensor-survey.sh keep their own copies of this -- a working file is
-# not disturbed to save a duplicated composition, the same reason `agent_env` gives for not
-# rearranging `drive.py`.
+# Decide which card renders into $USE_NVIDIA, and what to say about it into $GPU_NOTE. It cannot
+# be a flag on the python side: the GLX loader settles it before the process exists, so it is two
+# environment variables in front of the command.
+#
+# All three of drive.sh, sensor-survey.sh and step-timing.sh call this. They used to keep their own
+# copies -- a working file not being disturbed to save a duplicated composition -- and the three
+# then had to agree about a second environment none of them was written for. They did not: in the
+# container all three printed "discrete, via PRIME offload", which is not what happened there.
+# __NV_PRIME_RENDER_OFFLOAD and __GLX_VENDOR_LIBRARY_NAME are read by the *GLX* loader, and the
+# image loads panda3d's EGL display first (docker/Dockerfile), where libglvnd picks the card from
+# the ICD manifest at /usr/share/glvnd/egl_vendor.d/10_nvidia.json instead. Only the line was
+# wrong -- the RTX rendered either way, which `gl_renderer` in the step-timing CSV is the check on.
+#
+# The variables are still set in there, deliberately. They cost nothing under EGL, and the image
+# keeps `pandagl` as the aux display so that mounting an X socket still gets the 3D row -- which is
+# the one path in the container where they would matter again. Dropping them to match the label
+# would change which card renders on that path to fix a word.
 select_gpu() {
     GPU="${GPU:-auto}"
     USE_NVIDIA=0
+    IN_CONTAINER=0
+    if [[ -f /.dockerenv ]]; then
+        IN_CONTAINER=1
+    fi
     case "$GPU" in
         auto)
             if [[ -e /usr/lib/x86_64-linux-gnu/libGLX_nvidia.so.0 ]] \
@@ -165,6 +181,24 @@ select_gpu() {
         integrated) USE_NVIDIA=0 ;;
         *) die "GPU must be auto, nvidia or integrated (got: $GPU)" ;;
     esac
+
+    if [[ $IN_CONTAINER -eq 1 ]]; then
+        GPU_NOTE="picked by EGL in the container, not by GPU=$GPU"
+    elif [[ $USE_NVIDIA -eq 1 ]]; then
+        GPU_NOTE="discrete, via PRIME offload (GPU=$GPU)"
+    else
+        GPU_NOTE="whatever the display is on (GPU=$GPU)"
+    fi
+}
+
+# exec a command with the offload variables in front of it where they do something. Call after
+# select_gpu; shared with it so the environment a run was taken in cannot drift from the line
+# that was printed about it.
+exec_with_gpu() {
+    if [[ $USE_NVIDIA -eq 1 ]]; then
+        exec env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia "$@"
+    fi
+    exec "$@"
 }
 
 # Read a dotted key out of the workspace manifest. Prints nothing and returns 1 when

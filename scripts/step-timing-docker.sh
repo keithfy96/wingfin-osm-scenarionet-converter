@@ -10,8 +10,8 @@
 #   STEP_TIMING_LABEL=desktop ./scripts/step-timing-docker.sh mosque
 #
 # Everything after -- goes to step_timing.py exactly as it does for step-timing.sh, which this
-# runs inside the container. The one argument written differently is the camera rig: the spec is
-# at /rig/<name> in there, from whichever host directory RIG_DIR names in .env.
+# runs inside the container -- there is no second copy of the sweep. --camera-rig rigs/cams.txt is
+# the same string in there too, the repo being mounted at /work. RIG_DIR is for a spec outside it.
 #
 # Why a container at all. Every row of the CSV carries the host, CPU, GPU, GL ceiling and the
 # python / numpy / MetaDrive versions, precisely so two machines' files concatenate into one

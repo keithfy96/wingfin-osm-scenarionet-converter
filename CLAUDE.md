@@ -535,8 +535,14 @@ road network rather than like a Waymo clip. Three separate causes, each measured
 - **This machine is hybrid graphics, and which card renders is not a flag.** It is
   settled by the GLX loader before python starts, so it can only be two environment
   variables in front of the command — `__NV_PRIME_RENDER_OFFLOAD=1
-  __GLX_VENDOR_LIBRARY_NAME=nvidia`, which is what `scripts/drive.sh` sets and why
-  the switch lives in the shell rather than in `drive.py`. Nothing needs installing;
+  __GLX_VENDOR_LIBRARY_NAME=nvidia`, which is what `_common.sh:select_gpu` /
+  `exec_with_gpu` set for all three of `drive.sh`, `sensor-survey.sh` and
+  `step-timing.sh`, and why the switch lives in the shell rather than in `drive.py`.
+  **Both are read by the GLX loader, so neither does anything in the container**,
+  which loads panda3d's EGL display first and picks the card from the image's ICD
+  manifest — `select_gpu` says so rather than claiming PRIME offload, and they are
+  still set because the image keeps `pandagl` as the aux display for the 3D row.
+  Nothing needs installing;
   panda3d 1.10.16 in MetaDrive's own venv picks the RTX up as it stands. **`--cuda`
   in MetaDrive's install docs is not this**: it toggles `image_on_cuda`, which keeps
   camera images in GPU memory for an RL pipeline, needs `pip install -e .[cuda]` plus
@@ -1084,6 +1090,15 @@ either directory does, and it finds it with `importlib.util.find_spec` rather th
 because importing `metadrive` pulls in panda3d, which is the whole reason that module reads
 files. `test_camera_rig` reads `rigs/cams.txt` out of the repo and is no longer conditional at
 all. Both were silently skipping in the container; both run now.
+
+**There is one sweep, not a host one and a container one, and no rebuild between them.**
+`step-timing-docker.sh` and `container-check.sh` both end at `scripts/step-timing.sh`, which is the
+only caller of `tools/step_timing.py` anywhere in the repo — so a change to either is picked up by
+all three entry points. And the image copies in only `pyproject.toml`, `uv.lock`, `README.md` and
+`src/` (`docker/Dockerfile:78-79`); `tools/` and `scripts/` exist in the container *solely* through
+the `.:/work` bind mount, and the editable install points at `/work/src`, which the mount replaces.
+So an edit to `tools/` or `scripts/` is live in there immediately — only a dependency change needs
+`docker compose build`.
 
 **Row 7 is the one row the container cannot run** — it opens a window and there is no display.
 Everything else works in there, including `run-stages-*.sh` and `pytest`, because there is one

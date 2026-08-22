@@ -73,20 +73,10 @@ then
 fi
 
 # Which card renders is decided by the GLX loader at process start, so it cannot be a flag on
-# drive.py -- it has to be set in the environment of the process before it exists.
-GPU="${GPU:-auto}"
-USE_NVIDIA=0
-case "$GPU" in
-    auto)
-        if [[ -e /usr/lib/x86_64-linux-gnu/libGLX_nvidia.so.0 ]] \
-            && nvidia-smi -L >/dev/null 2>&1; then
-            USE_NVIDIA=1
-        fi
-        ;;
-    nvidia) USE_NVIDIA=1 ;;
-    integrated) USE_NVIDIA=0 ;;
-    *) die "GPU must be auto, nvidia or integrated (got: $GPU)" ;;
-esac
+# drive.py -- it has to be set in the environment of the process before it exists. Shared with
+# sensor-survey.sh and step-timing.sh in _common.sh, which is also where the container's EGL
+# path is explained.
+select_gpu
 
 ARGS=(tools/drive.py "$DATASET" --render 3D)
 if [[ -n "${LINE_WIDTH_M:-}" ]]; then
@@ -106,17 +96,9 @@ note "workspace  $WS"
 # off the workspace alone.
 note "dataset    ${DATASET#"$WS/"}"
 note "python     $MD_PY"
-if [[ $USE_NVIDIA -eq 1 ]]; then
-    note "gpu        discrete, via PRIME offload (GPU=$GPU)"
-else
-    note "gpu        whatever the display is on (GPU=$GPU)"
-fi
+note "gpu        $GPU_NOTE"
 printf '\n'
 
 # exec, not run_stage: run_stage pipes through tee and times the run, and a 3D window wants
 # neither. The `gpu` line drive.py prints is the confirmation of which card was actually used.
-if [[ $USE_NVIDIA -eq 1 ]]; then
-    exec env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
-        "$MD_PY" "${ARGS[@]}"
-fi
-exec "$MD_PY" "${ARGS[@]}"
+exec_with_gpu "$MD_PY" "${ARGS[@]}"
