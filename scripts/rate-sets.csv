@@ -1,0 +1,30 @@
+# Simulator configurations to sweep, one a row, for `step-timing.sh -- --rate-sets`.
+#
+# The columns are the question as it is usually asked -- world tick / decision + camera /
+# physics, CARLA's three knobs -- and MetaDrive has clocks for only two of them. `step_hz` is
+# how far one `env.step` advances, `physics_hz` the integrator inside it, and `decision_hz` a
+# stride counted in the sweep's own loop, because `env.step` is the world tick, the policy call
+# and the camera draw all at once.
+#
+# Two constraints, both arithmetic, both refused rather than rounded: physics must be a whole
+# multiple of the world tick (a 100 Hz tick with 50 Hz physics is half a substep and does not
+# exist), and a decision a whole divisor of it (nothing moves between two steps).
+#
+# `decision_hz` and `physics_hz` may be left blank, meaning "whatever step_hz derives" -- so a
+# bare `10` is 10/10/50. They are written out here because a comparison should say what it is
+# comparing rather than leave a reader to derive it.
+#
+# A set drives only the dataset written at its own `step_hz`, and needs that dataset to exist:
+#   uv run osm-scenario convert -w workspaces/<ws> --config config/default.yaml \
+#     --routes workspaces/<ws>/routes/routes.json --step-hz 100
+#
+#   ./scripts/step-timing.sh mosque -- --rate-sets scripts/rate-sets.csv
+#   ./scripts/step-timing-docker.sh mosque -- --rate-sets scripts/rate-sets.csv
+#
+# The path is the same inside the container and out, the repo being mounted at /work -- the
+# same reason `rigs/cams.txt` is in the repo rather than reached through a second bind mount.
+name,step_hz,decision_hz,physics_hz
+base,10,10,50
+sim100,100,100,100
+decide10,100,10,100
+decide20,100,20,100

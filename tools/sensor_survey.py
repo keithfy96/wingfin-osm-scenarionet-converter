@@ -39,7 +39,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from agent_env import IdmDriver, make_env, sim_step_seconds, step_config  # noqa: E402
-from camera_rig import MAX_IMAGE_BUFFERS, RigError, load_rig  # noqa: E402
+from camera_rig import MAX_IMAGE_BUFFERS, STEP_S, RigError, load_rig  # noqa: E402
 from geodesy import aeqd_inverse, projection_origin  # noqa: E402
 
 # Where the point cloud's unhit rays land. They are put on the depth buffer's far plane and
@@ -198,12 +198,25 @@ def main() -> int:
     rig = None
     if arguments.camera_rig:
         try:
-            rig = load_rig(arguments.camera_rig)
+            # `None`, so `load_rig` does not judge the rate: this survey reads every step, so
+            # the interval it reads at is `1 / step_hz`, and refusing on that would turn
+            # `--step-hz 100 --camera-rig rigs/cams.txt` - which worked and drew ten frames
+            # where the spec asked for one - into an error with no flag here to answer it.
+            # Said instead, below, which is strictly more than it said before.
+            rig = load_rig(arguments.camera_rig, read_interval_s=None)
         except RigError as error:
             print(f"camera rig rejected: {error}", file=sys.stderr)
             return 1
         for line in rig.describe():
             print(line)
+        read_interval_s = 1.0 / arguments.step_hz if arguments.step_hz else STEP_S
+        if rig.tick_rate_s and abs(rig.tick_rate_s - read_interval_s) > 1e-9:
+            print(
+                f"rig rate       the spec ticks at {rig.tick_rate_s:g} s "
+                f"({1.0 / rig.tick_rate_s:g} Hz) and these cameras are read every step, "
+                f"{read_interval_s:g} s ({1.0 / read_interval_s:g} Hz) - "
+                f"{rig.tick_rate_s / read_interval_s:g}x that. Nothing here resamples."
+            )
         if arguments.rig_record:
             gigabytes = rig.megabytes * arguments.steps / 1000.0
             print(

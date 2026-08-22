@@ -7,11 +7,17 @@
 #   ./scripts/step-timing-docker.sh mosque -- --rows 6    # no graphics: the floor
 #   ./scripts/step-timing-docker.sh mosque -- --rows 2,6  # what the camera costs
 #   ./scripts/step-timing-docker.sh mosque -- --camera-rig rigs/cams.txt
+#   ./scripts/step-timing-docker.sh mosque -- --rate-sets scripts/rate-sets.csv
 #   STEP_TIMING_LABEL=desktop ./scripts/step-timing-docker.sh mosque
 #
 # Everything after -- goes to step_timing.py exactly as it does for step-timing.sh, which this
-# runs inside the container -- there is no second copy of the sweep. --camera-rig rigs/cams.txt is
-# the same string in there too, the repo being mounted at /work. RIG_DIR is for a spec outside it.
+# runs inside the container -- there is no second copy of the sweep. --camera-rig rigs/cams.txt
+# and --rate-sets scripts/rate-sets.csv are the same strings in there too, the repo being mounted
+# at /work. RIG_DIR is for a spec kept outside it.
+#
+# --rate-sets is how to run a batch in here: a file of whole configurations, one a row, driven
+# one after another in one process into one CSV with a rate_set column. One process is what makes
+# them comparable -- prime is paid once and the machine columns are identical by construction.
 #
 # Why a container at all. Every row of the CSV carries the host, CPU, GPU, GL ceiling and the
 # python / numpy / MetaDrive versions, precisely so two machines' files concatenate into one
@@ -48,7 +54,7 @@ die() {
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-    sed -n '2,38p' "$SELF" | sed 's/^#\s\?//'
+    sed -n '2,44p' "$SELF" | sed 's/^#\s\?//'
     exit 0
 fi
 

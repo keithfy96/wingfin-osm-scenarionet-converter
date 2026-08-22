@@ -22,6 +22,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
 
+import step_timing  # noqa: E402
 from step_timing import (  # noqa: E402
     DEFAULT_ROWS,
     FIELDS,
@@ -29,10 +30,20 @@ from step_timing import (  # noqa: E402
     RowWriter,
     camera_label,
     carried,
+    decides_on,
+    decision_stride,
     percentiles,
     rate_keys,
     row_listing,
 )
+
+
+def _rate_file(tmp_path, text):
+    """A rate-set CSV on disk, since `load_rate_sets` reads a path rather than a string."""
+    path = tmp_path / "rate-sets.csv"
+    path.write_text(text, encoding="utf-8")
+    return str(path)
+
 
 # -- the rate pair ---------------------------------------------------------------------
 
@@ -64,6 +75,114 @@ def test_a_rate_that_divides_unevenly_is_refused_rather_than_rounded():
     assert rate_keys(10, 100)["decision_repeat"] == 10
     with pytest.raises(ValueError):
         rate_keys(15, 100)
+
+
+# -- the decision rate, the third of the three and the only one MetaDrive has no clock for ---
+
+
+def test_no_decision_rate_is_every_step():
+    """The property that makes the flag free: unset, it must be the run there always was."""
+    assert decision_stride(10, None) == 1
+    assert decision_stride(100, None) == 1
+    assert decision_stride(100, 100) == 1
+
+
+def test_a_decision_rate_below_the_tick_is_a_stride():
+    """100/20/100 and 100/10/100 - the two configurations this was built for."""
+    assert decision_stride(100, 20) == 5
+    assert decision_stride(100, 10) == 10
+    assert decision_stride(10, 5) == 2
+
+
+def test_a_decision_finer_than_the_world_tick_is_refused():
+    """Nothing moves between two env.steps, so there is nothing for a finer decision to see.
+    Refused rather than clamped to 1, which would silently drive at the wrong rate."""
+    with pytest.raises(ValueError, match="cannot be finer"):
+        decision_stride(10, 20)
+
+
+def test_a_decision_rate_that_does_not_divide_the_tick_is_refused():
+    """`--decision-hz 30` on a 100 Hz world is 3.33 steps a decision. Never rounded, for the
+    same reason `rate_keys` never rounds the physics."""
+    with pytest.raises(ValueError, match="do not divide"):
+        decision_stride(100, 30)
+    with pytest.raises(ValueError, match="do not divide"):
+        decision_stride(10, 3)
+
+
+def test_the_schedule_reads_four_frames_in_twenty_steps_at_stride_five():
+    """The property the whole flag exists for, asserted on the schedule both loops run.
+
+    20 Hz decisions on a 100 Hz world is one decision - and one sensor read - in five, so a
+    drive of 20 steps takes 4. It is asserted here rather than by counting `perceive` calls on
+    a live env because this file runs on 3.10 and the loops run on MetaDrive's interpreter;
+    `decides_on` is the same function both of them call, which is what makes this bind.
+    """
+    stride = decision_stride(100, 20)
+    assert [step for step in range(20) if decides_on(step, stride)] == [0, 5, 10, 15]
+
+
+def test_at_stride_one_every_step_decides():
+    """No flag must be the run there always was, step for step."""
+    assert all(decides_on(step, 1) for step in range(20))
+
+
+def test_the_timing_loop_takes_its_decision_rate_from_the_caller():
+    """`drive` must not read `arguments.decision_hz`, and this is a real bug caught late.
+
+    Under `--rate-sets` the rate lives on the set and `arguments.decision_hz` is `None`, so a
+    `drive` reading the namespace ran every set at stride 1 while the table printed the rate
+    the set had asked for - a benchmark misreporting its own configuration, which is worse
+    than one that cannot express it. Asserted on the source because the loop needs a live
+    engine and this file runs on the other interpreter.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    assert "decision_hz" in inspect.signature(step_timing.drive).parameters
+    tree = ast.parse(textwrap.dedent(inspect.getsource(step_timing.drive)))
+    reads = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and node.attr == "decision_hz"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "arguments"
+    ]
+    assert not reads, "drive() reads arguments.decision_hz; the caller must pass the rate"
+
+
+def test_a_rate_set_file_is_read_as_written():
+    """The four sets in `scripts/rate-sets.csv`, which is the file the sweep ships with."""
+    sets = step_timing.load_rate_sets(str(REPO / "scripts" / "rate-sets.csv"))
+    assert [one.name for one in sets] == ["base", "sim100", "decide10", "decide20"]
+    assert [step_timing.rate_set_label(one) for one in sets] == [
+        "10/10/50", "100/100/100", "100/10/100", "100/20/100",
+    ]
+
+
+def test_a_blank_column_means_derived_rather_than_zero(tmp_path):
+    """`10` alone is `10/10/50`: a set names a world tick and may leave the rest to it."""
+    sets = step_timing.load_rate_sets(_rate_file(tmp_path, "name,step_hz\nbare,10\n"))
+    assert sets[0].decision_hz is None and sets[0].physics_hz is None
+    assert step_timing.rate_set_label(sets[0]) == "10/10/50"
+
+
+@pytest.mark.parametrize(
+    "text, reason",
+    [
+        ("name,step_hz\nno_rate,\n", "no step_hz"),
+        ("name,step_hz\nbad,ten\n", "not a number"),
+        ("name,tick_hz\nx,10\n", "unknown column"),
+        ("name,step_hz\nsame,10\nsame,100\n", "duplicate set name"),
+        ("name,step_hz\n", "no rate sets"),
+    ],
+)
+def test_a_malformed_rate_set_file_is_refused_by_name(tmp_path, text, reason):
+    """A configuration silently dropped from a comparison is a hole in it that reads as a
+    result - `camera_rig._parse`'s rule, for the same reason."""
+    with pytest.raises(ValueError, match=reason):
+        step_timing.load_rate_sets(_rate_file(tmp_path, text))
 
 
 # -- the distribution ------------------------------------------------------------------

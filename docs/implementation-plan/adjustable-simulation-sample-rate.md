@@ -2,10 +2,12 @@
 
 ## Status
 
-**Phase 1 is built and verified; Phase 2 is not started.** The simulator, the converter
-and every tool now take `--step-hz`, defaulting to MetaDrive's 10. Cameras still run at
-the step rate - decimating them to 20 Hz is Phase 2. Figures below are measured on
-`junction-1` unless they say otherwise.
+**Phases 1 and 2 are built and verified.** The simulator, the converter and every tool
+take `--step-hz`, defaulting to MetaDrive's 10; `drive.py` and `step_timing.py` take
+`--decision-hz`, defaulting to the step rate, which is how a 100 Hz world runs 20 Hz
+decisions and 20 Hz sensor reads. Cameras are still **drawn** every step and that was
+measured rather than assumed - see 2.4. Figures below are measured on `junction-1`
+unless they say otherwise.
 
 The invariant held: with no flag anywhere, `sha256sum -c` passes on a re-converted
 `junction-1` dataset, and `tools/drive.py` and `tools/check_dataset.py` print every
@@ -170,24 +172,48 @@ is provably unchanged; **after 1.3** it can be verified; **after 1.5** it can be
         the two-clocks rule, the 0.1 s window), `README.md`, and
         `docs/scenario-datapoints.md:222-224`, which currently says this cannot be done.
 
-- [ ] **Phase 2 - cameras at 20 Hz**
-  - [ ] **2.1** `--camera-hz` and the read gate in `SensorPack`, and nowhere else -
-        `drive.py`'s loop keeps its shape. Refuse a non-integer ratio.
-        *Done when* a stub engine counting `perceive` calls gives exactly 4 in 20 steps
-        at stride 5, with `imu`/`gps` on all twenty.
-  - [ ] **2.2** The wire contract: **omit the camera key on a skipped step, never resend
-        the previous frame** - a model cannot tell a stale frame from a fresh one, and
-        resending costs the exact bandwidth the decimation buys. `/spec` gains
-        `sensor_rates`, `/act` gains `sensors_fresh`, so absence is a stated fact rather
-        than a silence.
-  - [ ] **2.3** `camera_rig.tick_rate` validated against the interval the rig is
-        actually read at, rather than against 0.1. Still a refusal, never a resample,
-        and validation only - the rate has one source, the global flag.
-  - [ ] **2.4** `--camera-skip-draw`, its own flag, after measuring. The read gate alone
-        saves little: the mounted read is 2.2 ms of a 20.4 ms step, so four skips in five
-        save about 1.8 ms and the remaining 18 ms is the draw. Refused together with
-        `--render offscreen` until measured, and `image_on_cuda` outright.
-  - [ ] **2.5** `CAMERA_HZ` in `.env.example`, both scripts, README.
+- [x] **Phase 2 - decisions and cameras below the world tick** (2026-08-22)
+  - [x] **2.1** The flag is **`--decision-hz`, not `--camera-hz`**, and it gates the
+        policy call as well as the sensor read. A camera-only flag would have left
+        `RemotePolicy(step_seconds=...)` at the env.step interval - 0.01 s at 100 Hz -
+        so openpilot's bridge, whose `_DT_MDL` is 0.05 s, would still have had its lag
+        compensation and curvature-rate limit mis-scaled by 5x. One flag, because
+        `world tick / decision + camera / physics` has one middle column. A camera rate
+        that differs from the control rate can split off it later; nothing needs that.
+        `drive.decision_stride` is the one place the ratio is worked out, refused rather
+        than rounded, and `decides_on` is the one place the schedule is decided - both
+        loops call it, so the benchmark cannot measure a schedule the tool does not run.
+        *Done*: `decides_on` gives exactly 4 decisions in 20 steps at stride 5
+        (`test_step_timing.py`), and `rig_ms_median` falls from 3.12 ms to a skipped
+        step's 0.0001 ms on the seven-camera rig.
+  - [x] **2.2** No wire change was needed, and that is the flag's doing rather than an
+        omission. With the decision gated there is no `/act` on a skipped step, so every
+        call already carries fresh sensors and there is no stale frame to omit. What the
+        server does need is the interval between two *calls*: `step_seconds` is now
+        `sim_step_seconds x stride`, and `/spec`'s existing `extra` carries a `rates`
+        block naming all three clocks. `policy_client.py` is untouched.
+  - [x] **2.3** `camera_rig.tick_rate` is checked against the interval the cameras are
+        really read at - `load_rig(path, read_interval_s=...)` - rather than against a
+        hard-coded 0.1 s, and `CameraRig.tick_rate_s` carries the declared value for a
+        caller that cannot know the interval yet. Both `sensor-survey.sh` and
+        `step-timing.sh` note rather than refuse - the sweep because it drives every rate a
+        workspace holds, the survey because it has no `--decision-hz` to answer a refusal
+        with and `--step-hz 100 --camera-rig rigs/cams.txt` worked before. Still validation
+        only, never a resample.
+  - [x] **2.4** **`--camera-skip-draw` was built, measured and removed.** The premise -
+        that the draw is the expensive half - is wrong on this machine.
+        `buffer.set_active(False)` is MetaDrive's own mechanism (`dashboard.py:129-135`)
+        and it does not move the number: all seven of `rigs/cams.txt`'s buffers
+        deactivated for a whole `mosque` drive at 100 Hz gave **26.42 ms/step against
+        26.57 active - 0.15 ms, 1%** - with `is_active()` confirmed `False` on every one.
+        Through the flag it read 26.37 against 26.19 ungated. What a lower decide rate
+        really saves is the **read**: the same rig goes from 0.341x to 0.371x real time.
+        `camera_hz` and `camera_draw_hz` now report the two rates separately so nothing
+        reads as though a decimated camera were cheap. Do not rebuild this without
+        measuring first.
+  - [x] **2.5** `DECISION_HZ` in `.env.example` and `drive.sh` (not `CAMERA_HZ`, per 2.1),
+        `--decision-hz` on `step-timing.sh`, and `docs/step-timing-rows.md`, which is
+        where the columns are documented and the only place they are.
 
 ## What Phase 1 measured
 

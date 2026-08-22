@@ -42,8 +42,12 @@ route in metres, which is the same object `TrajectoryNavigation` steers by.
   it mis-reports the current wheel angle to the rate limiter and the lag compensation.
   `DEFAULT_STEER_RATIO` is 12.0 because that is what wing-sim's own config sends.
 * **The bridge is written for 20 Hz.** `_DT_MDL = 0.05` sets its lag compensation, its
-  curvature-rate limit and its per-tick steer window. `convert --step-hz 20` is the dataset
-  that matches it; 10 Hz and 100 Hz each mis-scale it in one direction.
+  curvature-rate limit and its per-tick steer window, and `step_seconds` is the interval
+  between two `act()` calls rather than between two `env.step`s - so **`--step-hz 100
+  --decision-hz 20` is the answer**, and a better one than converting a 20 Hz dataset: the
+  same 0.05 s control interval with ten times the physics under it. Measured on `mosque`:
+  868 calls over 4337 steps, `arrive_dest=True`, completion 0.950, and no note from `spec`.
+  A run at any other decision rate mis-scales the three limits above, and says so.
 * **`accel_map.py` is CARLA pedal calibration**, not physics - two 8x11 tables from a
   "Town10HD calibration sweep on Tesla M3 @ 20 Hz sync". Speed tracking will be poor here
   until they are re-measured. Steering is unaffected, because that path is geometric.
@@ -443,7 +447,7 @@ class OpenpilotDriver:
                 f"the drive steps every {self.step_seconds:.3f} s and the bridge is written "
                 f"for {BRIDGE_DT_S:.2f} s (_DT_MDL). Its lag compensation and curvature-rate "
                 f"limit are counted per tick, so they are scaled by {ratio:.1f}x here. "
-                "`convert --step-hz 20` is the dataset that matches."
+                "--decision-hz 20 is what matches it, at any --step-hz that 20 divides."
             )
         return self.notes
 

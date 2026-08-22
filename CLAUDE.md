@@ -1134,6 +1134,104 @@ and **`cmd &` in a non-interactive shell sets SIGINT to `SIG_IGN` in the child**
 five attempts to test the interrupt with `kill -INT` measured the shell rather than the code —
 `( trap - INT; exec ... ) &` is what puts the default disposition back.
 
+### The decision rate is a third dial, and MetaDrive has no clock for it (2026-08-22)
+
+The question arrives shaped like CARLA's three knobs — **world tick / decision + camera /
+physics** — and **MetaDrive has two**. `env.step` advances
+`physics_world_step_size × decision_repeat` and returns, so it *is* the world tick, *is* the
+policy call and *is* the camera draw; `base_engine.py:458` calls `task_manager.step()` once
+per step unconditionally, and the sensor config is `name=(cls, *args)` with **no slot for a
+rate anywhere**. So the middle column is not a key that was left unexposed. It is a **stride
+counted in the caller's loop**, and `drive.decision_stride` / `drive.decides_on` are the only
+places it is worked out and the only places the schedule is decided — both `drive.py` and
+`step_timing.py` call them, because a benchmark running a different schedule from the tool it
+prices is measuring nothing.
+
+`--decision-hz` on `drive.py` and `step_timing.py`, `DECISION_HZ` in `.env` for `drive.sh`.
+Unset it is the step rate, byte for byte the run there always was.
+
+**Two arithmetic constraints, both refused rather than rounded.** Physics must be a whole
+multiple of the world tick — a 100 Hz tick with 50 Hz physics is half a substep and does not
+exist — and a decision a whole divisor of it, nothing moving between two steps. So of a grid
+like `10/20/50`, `100/10/50`, `100/20/50`, `100/10/100`, `100/20/100`, only the last two can
+be built; the first three are not configurations anyone is missing, they are arithmetic.
+
+**The flag is `--decision-hz` and not the `--camera-hz` the plan named, and that is the
+openpilot half of it.** `RemotePolicy` sends `step_seconds` to the server and
+`OpenpilotDriver.spec` checks it against `_DT_MDL = 0.05`; a camera-only flag would have left
+it at the env.step interval — 0.01 s at 100 Hz — with the bridge's lag compensation and
+curvature-rate limit mis-scaled by 5× and nothing raising anything. It is now
+`sim_step_seconds × stride`, **the interval between two calls**. Measured on `mosque` at
+`--step-hz 100 --decision-hz 20`: **868 calls over 4337 steps, `arrive_dest=True`, completion
+0.950, and no note from `spec`**; the same drive without the flag prints the note and makes
+4336 calls. That pairing beats `convert --step-hz 20`, which CLAUDE.md used to recommend for
+the bridge — same 0.05 s control interval, ten times the physics under it.
+
+**No wire change was needed, and that is the flag's doing rather than an omission.** With the
+decision gated there is no `/act` on a skipped step, so every call already carries fresh
+sensors and there is no stale frame to omit. The rates ride in `/spec`'s existing `extra`.
+
+**On a replay row the decision half is vacuous and the tool has to say so.**
+`ReplayEgoCarPolicy` runs *in* the engine and MetaDrive calls it every `env.step`; nothing
+outside can decimate that. So `--decision-hz` gates the sensor and camera read alone there,
+which is what the sweep's row 1 wants and is printed rather than implied.
+
+**The draw cannot be saved, and that was measured before it was given up on.**
+`buffer.set_active(False)` is MetaDrive's own mechanism (`dashboard.py:129-135`) and it does
+not move the number: all seven of `rigs/cams.txt`'s buffers deactivated for a whole `mosque`
+drive at 100 Hz gave **26.42 ms/step against 26.57 active — 0.15 ms, 1%** — with `is_active()`
+confirmed `False` on every one. A `--camera-skip-draw` flag was built, measured at 26.37
+against 26.19 ungated, and **removed**. What a lower decide rate really saves is the *read*:
+the same rig goes 3.12 ms a step read every step to 6.54 ms read once in five, and the drive
+from **0.341x to 0.371x** real time. `camera_hz` (read) and `camera_draw_hz` (drawn, always
+the step rate) are separate CSV columns so nothing reads as though a decimated camera were
+cheap. **Do not rebuild the draw gate without measuring first.**
+
+**`camera_rig.tick_rate` is now checked against the interval the cameras are really read at**
+— `load_rig(path, read_interval_s=...)` — rather than against a hard-coded 0.1 s, so a 20 Hz
+spec is correct under `--step-hz 100 --decision-hz 20` and wrong on an unflagged 10 Hz sweep.
+`CameraRig.tick_rate_s` carries the declared value for a caller that cannot know the interval
+yet: `sensor-survey.sh` drives one rate and refuses, `step-timing.sh` drives every rate a
+workspace holds and notes per dataset. Still validation, never a resample.
+
+**A sweep skips the dataset the rate does not divide rather than ending.** `--decision-hz 20`
+divides `scenarionet-100hz` and not `scenarionet-10hz`, and the table shows the refusal beside
+the row that ran — the same shape as the replay-rate mismatch already there.
+
+**Several configurations go in a file, and they are driven in one process.**
+`--rate-sets scripts/rate-sets.csv` is `name,step_hz,decision_hz,physics_hz`, one whole
+configuration a row, into **one** CSV with a `rate_set` column. One process is the decision, not
+a convenience: `prime` is paid once — the first env of a process is dearer than the ones after
+it — and every machine column is identical by construction rather than by two runs happening to
+agree. The file lives in `scripts/` and the path is the same inside the container and out, for
+`rigs/cams.txt`'s reason. Four things not to re-derive:
+
+- **A set drives only the dataset written at its own `step_hz`**, the one place `--rate-sets`
+  behaves differently from the flags. A set is a whole configuration, so driving it against a
+  tape at another rate measures something nobody asked for, and every replay row of it would
+  skip anyway. Without a set the sweep still drives every rate a workspace holds.
+- **A set's `physics_hz` outranks row 5's own 100 Hz pin**, so rows 2 and 5 coincide under any
+  set that names one. Said in the footer once rather than per row.
+- **`--rate-sets` refuses to sit beside `--step-hz` / `--decision-hz` / `--physics-hz`.** Two
+  sources is how a CSV comes to describe a run that did not happen.
+- **`drive()` takes the decision rate as an argument and must never read `arguments.decision_hz`
+  again.** Under `--rate-sets` the rate lives on the set and the namespace holds `None`, so the
+  first version ran every set at stride 1 while the table printed the rate the set asked for —
+  a benchmark misreporting its own configuration. `test_the_timing_loop_takes_its_decision_rate_from_the_caller`
+  walks the AST of `drive` and fails on that attribute.
+
+**`policy_ms` / `sensor_ms` / `rig_ms` are per call, not per step, and that changed with this.**
+They are collected only on the steps they happen on. Charging them to skipped steps too makes
+the median *a skipped step* the moment the stride is 2: measured at `--decision-hz 10` on a
+100 Hz world, `policy` printed **0.00 ms** against 0.20 at full rate, which is not the model
+getting faster. `step_ms_*` is still every step, because `ms/step` is per step by definition.
+
+**The container needs no rebuild for any of this.** The image copies in only `pyproject.toml`,
+`uv.lock`, `README.md` and `src/`; `tools/`, `scripts/` and `rigs/` are live through the
+`.:/work` bind mount. Verified: `step-timing-docker.sh mosque -- --step-hz 100 --decision-hz 20
+--camera-rig rigs/cams.txt` ran on the RTX 4050 at 32768 px with `camera_count 7`,
+`decision_hz 20`, `camera_draw_hz 100`, CSV owned by the caller.
+
 ### openpilot drives through the same socket, and the route is a sensor now (2026-08-22)
 
 `wing-sim/openpilot/bridge/zapeta/server.py` is a **controller, not a driver**: per tick it takes
@@ -1176,8 +1274,9 @@ Five things not to re-derive, each read off the bridge rather than assumed:
   12.0 is what wing-sim's own config sends.
 - **The bridge is written for 20 Hz.** `_DT_MDL = 0.05` is what its lag compensation, its
   curvature-rate limit and its per-tick steer window are counted against; `OpenpilotDriver.spec`
-  prints the ratio at any other rate. `convert --step-hz 20` is the matching dataset, off the same
-  `routes.json`. And **`accel_map.py` is CARLA pedal calibration** — two 8×11 tables from a
+  prints the ratio at any other rate. **`--step-hz 100 --decision-hz 20` is what matches it**
+  (see the section above) — better than the `convert --step-hz 20` this used to recommend,
+  the control interval being the same 0.05 s with ten times the physics under it. And **`accel_map.py` is CARLA pedal calibration** — two 8×11 tables from a
   "Town10HD calibration sweep on Tesla M3 @ 20 Hz sync" — so longitudinal tracking is wrong here
   until re-measured. Steering is not, because that path is geometric.
 

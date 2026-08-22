@@ -61,8 +61,12 @@ SUPPORTED_TYPES = ("rgb_camera",)
 # a `tick_rate` of 0.05 would mean the caller expects 20 Hz and would silently get 10.
 TRANSFORM_KEYS = ("x", "y", "z", "pitch", "yaw", "roll")
 
-# MetaDrive advances 0.1 s per `env.step` (`base_env.py:190`), so a rig ticking at 0.1 s reads
-# every step and nothing needs resampling. Any other rate is refused.
+# MetaDrive's own `env.step` interval (`base_env.py:190`), and the rate a rig is read at when
+# the caller does not say otherwise. It is no longer the *only* legal `tick_rate`: `--step-hz`
+# moves how far a step advances and `--decision-hz` moves how often the cameras are read, so a
+# spec declaring 0.05 s is exactly right on a 100 Hz world with 20 Hz decisions. What is still
+# refused is a spec whose rate disagrees with the interval it will actually be read at -
+# nothing here resamples, and a silently-wrong frame rate is the fault this check exists for.
 STEP_S = 0.1
 
 # How many image buffers one env may hold before panda3d stops being reliable.
@@ -149,11 +153,16 @@ class Camera:
 class CameraRig:
     """The cameras of one spec, registerable on an env and readable each step."""
 
-    def __init__(self, cameras, path=None):
+    def __init__(self, cameras, path=None, tick_rate_s=None):
         if not cameras:
             raise RigError("the spec defines no cameras")
         self.cameras = cameras
         self.path = path
+        # What the spec itself declared, or None if it declared nothing. Kept so a caller that
+        # could not know the read interval at load time - `step_timing`, which sweeps every
+        # rate a workspace holds - can compare against the spec's own number per dataset
+        # instead of assuming the 0.1 s that used to be the only value `_parse` allowed.
+        self.tick_rate_s = tick_rate_s
         self._mounted = []
 
     def __len__(self):
@@ -251,17 +260,24 @@ def _scalar(text, camera, key):
         raise RigError(f"{camera}: {key} is {text!r}, which is not a number") from None
 
 
-def _parse(text, path=None):
+def _parse(text, path=None, read_interval_s=STEP_S):
     """A list of flat mappings under `sensors:`, and nothing else.
 
     Deliberately not a YAML parser. It accepts exactly the shape the spec has and raises on
     anything it does not recognise, because a camera silently dropped from a rig is a hole in
     the model's input that looks like a blind spot in the map.
+
+    `read_interval_s` is how long passes between two reads of these cameras - `1 / step_hz`
+    times the `--decision-hz` stride - and a declared `tick_rate` that disagrees with it is
+    refused. `None` skips the check, for a caller that does not know the interval yet because
+    it is about to drive several rates; `CameraRig.tick_rate_s` carries the declared value on
+    for it to check per dataset.
     """
     entries = []
     current = None
     section = None
     seen_root = False
+    tick_rate_s = None
 
     for number, raw in enumerate(text.splitlines(), start=1):
         line = raw.split("#", 1)[0].rstrip()
@@ -330,11 +346,24 @@ def _parse(text, path=None):
             raise RigError("{}: transform has no {}".format(name, ", ".join(missing)))
 
         rate = entry.get("tick_rate")
-        if rate is not None and abs(_scalar(rate, name, "tick_rate") - STEP_S) > 1e-9:
-            raise RigError(
-                f"{name}: tick_rate {rate} s, but MetaDrive advances {STEP_S} s per "
-                "env.step and this rig reads every step. Nothing here resamples."
-            )
+        if rate is not None:
+            declared = _scalar(rate, name, "tick_rate")
+            if tick_rate_s is None:
+                tick_rate_s = declared
+            elif abs(declared - tick_rate_s) > 1e-9:
+                raise RigError(
+                    f"{name}: tick_rate {declared} s, but another camera in this spec "
+                    f"declares {tick_rate_s} s. The rate has one source - the flags - so a "
+                    "spec cannot ask for two."
+                )
+            if read_interval_s is not None and abs(declared - read_interval_s) > 1e-9:
+                raise RigError(
+                    f"{name}: tick_rate {declared} s ({1.0 / declared:g} Hz), but these "
+                    f"cameras are read every {read_interval_s:g} s "
+                    f"({1.0 / read_interval_s:g} Hz). Nothing here resamples. "
+                    "--step-hz sets how far a step advances and --decision-hz how often the "
+                    "cameras are read; together they are what matches the two."
+                )
 
         pitch = _scalar(transform["pitch"], name, "pitch")
         roll = _scalar(transform["roll"], name, "roll")
@@ -369,16 +398,20 @@ def _parse(text, path=None):
     duplicates = {n for n in (c.name for c in cameras) if [c.name for c in cameras].count(n) > 1}
     if duplicates:
         raise RigError("duplicate camera name(s): {}".format(", ".join(sorted(duplicates))))
-    return CameraRig(cameras, path=path)
+    return CameraRig(cameras, path=path, tick_rate_s=tick_rate_s)
 
 
-def load_rig(path):
-    """Read a rig spec from disk."""
+def load_rig(path, read_interval_s=STEP_S):
+    """Read a rig spec from disk.
+
+    `read_interval_s` is the interval the cameras will really be read at; `None` defers the
+    check to the caller (see `_parse`).
+    """
     path = os.path.abspath(path)
     if not os.path.exists(path):
         raise RigError(f"no rig spec at {path}")
     with open(path) as handle:
-        return _parse(handle.read(), path=path)
+        return _parse(handle.read(), path=path, read_interval_s=read_interval_s)
 
 
 def check_frame(dataset_dir):

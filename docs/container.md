@@ -44,11 +44,30 @@ Add the real cameras, or shorten it:
 ./scripts/step-timing-docker.sh mosque -- --rows 2,6                  # what the camera costs
 ./scripts/step-timing-docker.sh mosque -- --rows 5                    # one row on its own
 ./scripts/step-timing-docker.sh mosque -- --camera-rig rigs/cams.txt  # the real 7 cameras
+
+# every row at each of several whole configurations, with the real cameras, into one CSV
+./scripts/step-timing-docker.sh mosque -- --rate-sets scripts/rate-sets.csv \
+    --camera-rig rigs/cams.txt
 ```
 
 Everything after `--` goes to `step_timing.py`, exactly as for `step-timing.sh` — `rigs/cams.txt`
-included, which is the same string inside the container and out because the spec is in the repo.
-For one kept outside the repo, set `RIG_DIR` in `.env` and it is `/rig/<name>.txt` in there.
+and `scripts/rate-sets.csv` included, which are the same strings inside the container and out
+because both files are in the repo. For a rig spec kept outside the repo, set `RIG_DIR` in `.env`
+and it is `/rig/<name>.txt` in there.
+
+**`--rate-sets` is the way to run a batch in here.** The file is
+`name,step_hz,decision_hz,physics_hz`, one whole configuration a row — `world tick / decision +
+camera / physics` — and the sweep drives them one after another in **one process**, which is what
+keeps them comparable: `prime` is paid once and every machine column is identical by construction
+rather than by two runs happening to agree. One CSV comes out, with a `rate_set` column to pivot
+on. Each set drives only the dataset written at its own `step_hz`, so
+`uv run osm-scenario convert … --step-hz 100` has to have been run for a 100 Hz set to have
+anything to drive. Full reference: `docs/step-timing-rows.md`.
+
+**Nothing needs rebuilding when `tools/` or `scripts/` change.** The image copies in only
+`pyproject.toml`, `uv.lock`, `README.md` and `src/`; everything else — `tools/`, `scripts/`,
+`rigs/`, the workspaces — is live through the `.:/work` bind mount, and the editable install
+points at `/work/src`. Only a dependency change needs `docker compose build`.
 
 CSVs land in `workspaces/<ws>/reports/` on the host, owned by you, named
 `step-timing-<label>-<stamp>.csv` — `<label>` is `STEP_TIMING_LABEL` or the hostname, and

@@ -311,6 +311,29 @@ recorded at. Set `STEP_HZ` in `.env` to stop typing it.
 ./sensor-survey.sh junction-1 -- --step-hz 100           # the IMU at 100 Hz
 ```
 
+**The decision rate is `--decision-hz`, and it is the one clock MetaDrive does not have.**
+The question is usually asked as `world tick / decision + camera / physics` — CARLA's three
+knobs — and MetaDrive has two: `env.step` *is* the world tick, *is* the policy call and *is*
+the camera draw, and the sensor config (`name=(cls, *args)`) has no slot for a rate anywhere.
+So `--decision-hz` is a stride counted in our own loop: it must divide `--step-hz`, and
+`--step-hz 100 --decision-hz 20` is `100/20/100` — the world and the physics at 100 Hz, the
+policy asked and the `--sensors` read every fifth step, with the action **held** in between.
+Unset it is the step rate, which is the run there always was. Set `DECISION_HZ` in `.env`.
+
+```bash
+./drive.sh junction-1 -- --step-hz 100 --decision-hz 20  # 20 Hz decisions on a 100 Hz world
+./step-timing.sh mosque -- --rows 1 --step-hz 100 --decision-hz 20
+```
+
+It is what openpilot's bridge needs — `_DT_MDL = 0.05` — and a better answer than converting
+a 20 Hz dataset: the same 0.05 s control interval with ten times the physics under it. On
+`--agent-policy replay` it gates the sensor read alone, because `ReplayEgoCarPolicy` runs
+*inside* the engine and MetaDrive calls it every step whatever the flag says.
+
+Two constraints, both arithmetic, both refused rather than rounded: physics must be a whole
+multiple of the world tick (a 100 Hz tick with 50 Hz physics is half a substep and does not
+exist), and a decision a whole divisor of it (nothing moves between two steps).
+
 **A dataset can only be driven at the rate it was written at.** Three things consume the
 recording one frame per `env.step` with no interpolation: `--agent-policy replay`, a
 baked light tape under `--lights tape`, and any non-ego track. At a different rate none
@@ -475,10 +498,11 @@ It ships driving with MetaDrive's own IDM, and the only line a model replaces is
 `policy = IdmDriver(env)`. A policy is anything callable taking the observation and
 returning `[steering, throttle]`; nothing registers it and MetaDrive never learns it exists.
 
-**`--step-hz` is the control rate here**, since the policy is called once per `env.step`
-— `--step-hz 100` calls it every 0.01 s instead of every 0.1 s. It is on the example as
-well as on `drive.sh`, and the dataset has to have been converted at the same rate, for
-the reason under [Simulate](#simulate).
+**`--step-hz` is the control rate here** unless `--decision-hz` lowers it, the policy
+being called once per `env.step` — `--step-hz 100` calls it every 0.01 s instead of every
+0.1 s, and `--decision-hz 20` alongside it every 0.05 s, holding the action in between. It
+is on the example as well as on `drive.sh`, and the dataset has to have been converted at
+the `--step-hz` rate, for the reason under [Simulate](#simulate).
 
 The IDM baseline is there to prove the wiring rather than to drive well: `drive.sh -- --agent-policy
 idm` runs the same class *inside* the simulator, where the action is ignored, so the two must
@@ -520,9 +544,14 @@ the action, one row per step.
 **The step rate is what makes the IMU an IMU.** Acceleration is velocity differenced over
 one `env.step`, so at the default it is a 10 Hz signal where a real unit runs 100–1000 Hz;
 `--step-hz 100` differences it over 0.01 s instead, and the report header says which it
-used. Every figure in this section was measured at the default 10 Hz. The cameras are not
-decimated yet — they still run at the step rate, so `--step-hz 100` renders ten times as
-many frames as it needs.
+used. Every figure in this section was measured at the default 10 Hz.
+
+**The cameras are read at `--decision-hz` and drawn at `--step-hz`, and only the first of
+those is ours to move.** MetaDrive redraws every buffer once per `env.step`
+(`base_engine.py:458`, unconditional), and deactivating them in between — its own
+`buffer.set_active(False)` — was measured at **1% of a 26 ms step** with all seven of
+`rigs/cams.txt`'s cameras off for a whole drive. So a decimated camera saves the read
+(3.12 → 0.62 ms a step averaged, over the seven) and not the render.
 
 All four modalities are there. Measured on `junction-1`:
 
@@ -713,6 +742,31 @@ integration, a tenth of the rendering.
 
 A rate that does not divide the step is refused rather than rounded, because a decision cannot
 be finer than a physics tick.
+
+**`--decision-hz` is the third dial**, and the sweep takes it too: `--rows 1 --step-hz 100
+--decision-hz 20` is the `100/20/100` row. Since the sweep drives *every* rate a workspace
+holds, a decision rate that divides one dataset and not another skips the row it cannot have
+and runs the one it can — `--decision-hz 20` on a 10 Hz dataset says so in the table rather
+than ending the run. `decision_hz`, `steps_per_decision`, `camera_hz` and `camera_draw_hz`
+are in the CSV; `docs/step-timing-rows.md` is what they mean.
+
+**To compare several whole configurations, put them in a file.** `--rate-sets` takes
+`name,step_hz,decision_hz,physics_hz`, one a row — `world tick / decision + camera / physics` —
+and drives them one after another **in one process, into one CSV** with a `rate_set` column to
+pivot on. One process is the point: `prime` is paid once and every machine column is identical
+by construction rather than by two runs happening to agree.
+
+```bash
+./step-timing.sh mosque -- --rate-sets ../scripts/rate-sets.csv
+./step-timing-docker.sh mosque -- --rate-sets scripts/rate-sets.csv --camera-rig rigs/cams.txt
+```
+
+`scripts/rate-sets.csv` ships with `10/10/50`, `100/100/100`, `100/10/100` and `100/20/100`.
+A blank `decision_hz` or `physics_hz` means "whatever `step_hz` derives", so a bare `10` is
+`10/10/50`. **A set drives only the dataset written at its own `step_hz`** — that is the one
+place `--rate-sets` differs from the flags, a set being a whole configuration rather than an
+override — so a 100 Hz set needs `convert --step-hz 100` to have been run. It cannot be
+combined with `--step-hz`, `--decision-hz` or `--physics-hz`: the file is the source.
 
 ### Time it on another machine: the container
 
@@ -919,9 +973,12 @@ Four things worth knowing before tuning anything:
 - **`target_speed` is sent every tick because a missing one means stop.** The bridge reads an
   absent target as `0.0`. `--target-speed-mps` sets it; the default is 10 m/s.
 - **The bridge is written for 20 Hz.** `_DT_MDL = 0.05` is what its lag compensation and its
-  curvature-rate limit are counted against. The server prints a note when the drive's rate is
-  anything else; `uv run osm-scenario convert … --step-hz 20` is the dataset that matches, off
-  the same `routes.json`.
+  curvature-rate limit are counted against, and `step_seconds` is the interval between two
+  `act()` calls rather than between two `env.step`s — so **`--step-hz 100 --decision-hz 20`
+  is what matches it**, and beats converting a 20 Hz dataset: the same 0.05 s control
+  interval with ten times the physics under it. Measured on `mosque`: 868 calls over 4337
+  steps, `arrive_dest=True`, completion 0.950, and no note. The server prints one at any
+  other decision rate.
 - **Its pedal map is CARLA calibration**, measured on Town10HD with a Tesla M3. Speed tracking
   will be poor here until it is re-measured. Steering is unaffected — that path is geometric,
   which is what `carla_steer_curvature_gain: 0` selects.

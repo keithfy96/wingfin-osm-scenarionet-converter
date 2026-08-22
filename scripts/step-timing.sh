@@ -7,6 +7,11 @@
 #   ./scripts/step-timing.sh junction-1 -- --rows 5           # one row on its own
 #   ./scripts/step-timing.sh junction-1 -- --rows 2,6         # the pair that prices the camera
 #   ./scripts/step-timing.sh junction-1 -- --physics-hz 100   # pin the integrator
+#   ./scripts/step-timing.sh mosque -- --rows 1 --step-hz 100 --decision-hz 20
+#                                                 # 100/20/100, replay row only
+#   ./scripts/step-timing.sh mosque -- --rate-sets scripts/rate-sets.csv
+#                                                 # every row at each of several
+#                                                 # configurations, into one CSV
 #   ./scripts/step-timing.sh mosque -- --label rig-container  # name the machine in the CSV
 #   ./scripts/step-timing.sh mosque -- --camera-rig rigs/cams.txt
 #   GPU=integrated ./scripts/step-timing.sh        # force the built-in graphics
@@ -18,6 +23,22 @@
 # Unflagged, every offscreen row draws one 320x180 camera this tool invented, and that is most of
 # what a step costs. --camera-rig takes the same spec sensor-survey.sh takes and mounts the
 # vehicle's own cameras instead, so the sweep prices the car being built rather than a stand-in.
+#
+# Three rates, and MetaDrive has clocks for only two of them: --step-hz is the world tick,
+# --physics-hz the integrator, and --decision-hz how often the policy is asked and the sensors
+# read -- a stride counted in the tool's own loop, since env.step is the world tick, the policy
+# call and the camera draw all at once. Physics must be a whole multiple of the tick and a
+# decision a whole divisor of it; neither is rounded. What a lower decide rate saves is the
+# sensor *read*, not the draw: MetaDrive redraws every camera buffer once per env.step and
+# deactivating them in between was measured at 1% of a 26 ms step. camera_hz and camera_draw_hz
+# report the two separately.
+#
+# --rate-sets takes a file of whole configurations -- name,step_hz,decision_hz,physics_hz,
+# one a row -- and drives them one after another in one process, into one CSV with a
+# rate_set column. One process is what keeps them comparable: prime is paid once and the
+# machine columns are identical by construction. A set drives only the dataset written at
+# its own step rate, and cannot be combined with --step-hz / --decision-hz / --physics-hz,
+# the file being the source.
 #
 # Every run prints a table and writes its own CSV into <workspace>/reports/, stamped with the
 # moment it started. Nothing is appended to and nothing is overwritten, so two runs -- or two
@@ -45,7 +66,7 @@ PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --) shift; PASSTHROUGH=("$@"); break ;;
-        -h|--help) sed -n '2,38p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
+        -h|--help) sed -n '2,60p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
         -*) die "unknown option: $1
   This script takes only a workspace. To pass $1 to step_timing.py, put it after --:
     ./scripts/step-timing.sh ${POSITIONAL:-<workspace>} -- $1" ;;

@@ -74,6 +74,7 @@ box concatenate into one spreadsheet with nothing to line up by hand.
 from __future__ import annotations
 
 import argparse
+import collections
 import csv
 import os
 import socket
@@ -87,6 +88,8 @@ from drive import (  # noqa: E402
     _max_texture_dimension,
     _refuse_mismatch,
     data_step_seconds,
+    decides_on,
+    decision_stride,
     sim_step_seconds,
     step_config,
 )
@@ -198,6 +201,97 @@ def camera_label(count):
     if not count:
         return ()
     return ("camera" if count == 1 else f"camera x{count}",)
+
+
+# One line of a `--rate-sets` file: a whole simulator configuration under a name.
+#
+# `world tick / decision + camera / physics` is how the question is usually asked - CARLA's
+# three knobs - so a sweep comparing configurations wants to name them that way rather than
+# spell three flags per run and reconcile three CSVs afterwards. `decision_hz` and
+# `physics_hz` may be blank, meaning "whatever `step_hz` derives", which is what makes
+# `10/10/50` and a bare `10` the same row.
+RateSet = collections.namedtuple("RateSet", "name step_hz decision_hz physics_hz")
+
+RATE_SET_COLUMNS = ("name", "step_hz", "decision_hz", "physics_hz")
+
+
+def rate_set_label(rate_set, native_hz=None):
+    """`10/10/50` - the three rates in the order the question is asked in.
+
+    `native_hz` stands in for a set that did not name a step rate, which is what the flags
+    produce when `--step-hz` was not passed: the rate is then each dataset's own.
+    """
+    step = rate_set.step_hz or native_hz
+    if step is None:
+        return "dataset rate"
+    decision = rate_set.decision_hz or step
+    physics = rate_set.physics_hz or (1.0 / step_config(step)["physics_world_step_size"])
+    return f"{step:g}/{decision:g}/{physics:g}"
+
+
+def load_rate_sets(path):
+    """Read a rate-set CSV: `name,step_hz,decision_hz,physics_hz`, one configuration a row.
+
+    Blank lines and `#` comments are skipped, and a blank `decision_hz` or `physics_hz` means
+    "derived from `step_hz`" rather than zero. Every other malformed thing is an error rather
+    than a shrug, for `camera_rig._parse`'s reason: a configuration silently dropped from a
+    comparison is a hole in it that looks like a result.
+
+    The arithmetic is *not* checked here. `rate_keys` and `decision_stride` refuse an
+    impossible pair where they are applied, per row and per dataset, so an unbuildable set
+    shows in the table as a skipped row saying why - which is more useful than a file the
+    whole sweep refuses to start on.
+    """
+    if not os.path.exists(path):
+        raise ValueError(f"no rate-set file at {path}")
+    with open(path, encoding="utf-8") as handle:
+        lines = [
+            line for line in handle
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+    reader = csv.DictReader(lines)
+    unknown = [name for name in (reader.fieldnames or []) if name not in RATE_SET_COLUMNS]
+    if unknown:
+        raise ValueError(
+            "{}: unknown column(s) {}. Known: {}".format(
+                path, ", ".join(unknown), ", ".join(RATE_SET_COLUMNS)
+            )
+        )
+    if not reader.fieldnames or "step_hz" not in reader.fieldnames:
+        raise ValueError(f"{path}: no `step_hz` column; the header must name the columns")
+
+    def number(row, column, line):
+        text = (row.get(column) or "").strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            raise ValueError(f"{path} line {line}: {column} is {text!r}, not a number") from None
+
+    sets = []
+    for offset, row in enumerate(reader, start=2):
+        step = number(row, "step_hz", offset)
+        if step is None:
+            raise ValueError(f"{path} line {offset}: no step_hz. Every set needs a world tick.")
+        name = (row.get("name") or "").strip()
+        sets.append(
+            RateSet(
+                name=name or f"{step:g}Hz",
+                step_hz=step,
+                decision_hz=number(row, "decision_hz", offset),
+                physics_hz=number(row, "physics_hz", offset),
+            )
+        )
+    if not sets:
+        raise ValueError(f"{path}: no rate sets in it")
+    duplicates = {one.name for one in sets if [s.name for s in sets].count(one.name) > 1}
+    if duplicates:
+        raise ValueError(
+            "{}: duplicate set name(s) {}. The name is what tells two sets apart in the "
+            "CSV.".format(path, ", ".join(sorted(duplicates)))
+        )
+    return sets
 
 
 def rate_keys(step_hz, physics_hz):
@@ -322,7 +416,7 @@ def build_env(dataset, row, step_hz, physics_hz, rig=None, max_lateral_m=SWEEP_M
     return make_env(dataset, render=row["render"], **overrides)
 
 
-def drive(env, row, arguments, url=None, rig=None):
+def drive(env, row, arguments, url=None, rig=None, decision_hz=None):
     """Drive one scenario under one row's configuration and return what it cost.
 
     Returns a dict of measurements, or one carrying `skip_reason` when the dataset cannot be
@@ -412,6 +506,16 @@ def drive(env, row, arguments, url=None, rig=None):
     if arguments.max_steps:
         budget = min(budget, arguments.max_steps)
 
+    # The middle rate. `decision_stride` is `drive.py`'s, so this tool and that one cannot
+    # disagree about what "20 Hz decisions on a 100 Hz world" means.
+    #
+    # Passed in rather than read off `arguments`, and that is not tidiness: under
+    # `--rate-sets` the rate lives on the set and `arguments.decision_hz` is None, so reading
+    # it here drove every set at stride 1 while the table printed the rate the set asked for.
+    # A benchmark that misreports its own configuration is worse than one that cannot express
+    # it, so there is now one source and the caller passes it.
+    stride = decision_stride(1.0 / sim_dt, decision_hz)
+
     step_samples = []
     policy_samples = []
     sensor_samples = []
@@ -435,14 +539,16 @@ def drive(env, row, arguments, url=None, rig=None):
     # `reset_seconds` still carries the terrain build, separately, where it can be seen.
     loop_started = None
     measured = 0
+    action = [0.0, 0.0]
     while steps < budget:
         if steps == arguments.warmup:
             loop_started = time.perf_counter()
+        deciding = decides_on(steps, stride)
         mark = time.perf_counter()
-        if pack is not None:
+        if pack is not None and deciding:
             pack()
         read_done = time.perf_counter()
-        if mounted is not None:
+        if mounted is not None and deciding:
             # Not a second render pass, which is why this is allowed where `read` is not:
             # `CameraRig.read` calls `perceive` with no parent node, so it copies the buffer
             # the frame pass has already filled rather than re-aiming the camera and stepping
@@ -451,15 +557,28 @@ def drive(env, row, arguments, url=None, rig=None):
             # training loop reads all of them.
             mounted.read()
         rig_done = time.perf_counter()
-        action = policy(observation) if policy is not None else [0.0, 0.0]
+        # Held, never reset to `[0, 0]`, on a step between two decisions: zeroing it would
+        # lift the throttle four steps in five and a lower decision rate would read as a
+        # slower car rather than as a cheaper one. Ignored outright on the replay row, where
+        # MetaDrive drives the ego in-engine from the tape.
+        if policy is not None and deciding:
+            action = policy(observation)
         decided = time.perf_counter()
         observation, _, terminated, truncated, info = env.step(action)
         stepped = time.perf_counter()
 
         if steps >= arguments.warmup:
-            sensor_samples.append(read_done - mark)
-            rig_samples.append(rig_done - read_done)
-            policy_samples.append(decided - rig_done)
+            # `step_samples` every step, because `ms/step` is per step by definition. The other
+            # three only on the steps they happened, because they answer "what does one of
+            # these cost" - and charging them to skipped steps too makes the median a skipped
+            # step as soon as the stride is 2 or more. Measured: at `--decision-hz 10` on a
+            # 100 Hz world, `policy` printed **0.00 ms** against 0.20 at full rate, which is
+            # not the model getting faster. How often they happen is the `decide` column; what
+            # one costs is here, and a reader multiplies.
+            if deciding:
+                sensor_samples.append(read_done - mark)
+                rig_samples.append(rig_done - read_done)
+                policy_samples.append(decided - rig_done)
             step_samples.append(stepped - decided)
             measured += 1
         steps += 1
@@ -531,8 +650,13 @@ FIELDS = [
     "gl_renderer", "os", "python", "numpy", "metadrive", "timestamp",
     "dataset", "scenario_id", "step_hz", "sim_dt_s", "physics_hz", "physics_dt_s",
     "decision_repeat", "physics_ticks_per_sim_second",
+    # The middle column of world tick / decision + camera / physics. `decision_hz` is the rate
+    # the policy is consulted and the sensors are read at, `steps_per_decision` the stride it
+    # was reached by. Every CSV written before these existed had `decision_hz == step_hz`,
+    # so the two files still concatenate.
+    "rate_set", "decision_hz", "steps_per_decision",
     "row", "render", "policy", "sensors", "camera_read_mode", "camera_rig", "camera_count",
-    "camera_size", "camera_mb_per_step", "camera_hz", "stack_size",
+    "camera_size", "camera_mb_per_step", "camera_hz", "camera_draw_hz", "stack_size",
     "norm_pixel", "observation_kind", "force_fps", "max_lateral_m",
     "status", "skip_reason", "steps", "measured_steps", "warmup_steps",
     "sim_seconds", "wall_seconds",
@@ -541,9 +665,13 @@ FIELDS = [
     "policy_ms_median", "sensor_ms_median", "rig_ms_median", "arrive_dest", "ended_by",
 ]
 
+# `tick` and `decide` are two columns because they are two rates: the world tick is how far
+# `env.step` advances, and `decide` is how often the policy is consulted and the sensors read.
+# They are equal unless `--decision-hz` was passed, which is exactly why both are shown - a
+# single column would make a 100/20/100 run indistinguishable from a 100/100/100 one.
 HEADER = (
-    "  #  render     policy  sensors            decide  physics  rpt   steps   sim s  wall s"
-    "  x real  ms/step  policy    p95"
+    "  #  render     policy  sensors              tick  decide  physics  rpt   steps"
+    "   sim s  wall s  x real  ms/step  policy    p95"
 )
 
 
@@ -554,10 +682,11 @@ def table_line(record):
             _hz(record["step_hz"]), record["skip_reason"],
         )
     return (
-        "  {:<2} {:<10} {:<7} {:<18} {:>4} Hz {:>5} Hz  x{:<3} {:>5}  {:>6.1f}  {:>6.1f}"
-        "  {:>6.2f}x {:>7.2f} {:>7.2f} {:>6.2f}".format(
+        "  {:<2} {:<10} {:<7} {:<18} {:>4} Hz {:>4} Hz {:>5} Hz  x{:<3} {:>5}  {:>6.1f}"
+        "  {:>6.1f}  {:>6.2f}x {:>7.2f} {:>7.2f} {:>6.2f}".format(
             record["row"], record["render"], record["policy"], record["sensors"] or "-",
-            _hz(record["step_hz"]), _hz(record["physics_hz"]), record["decision_repeat"],
+            _hz(record["step_hz"]), _hz(record["decision_hz"] or record["step_hz"]),
+            _hz(record["physics_hz"]), record["decision_repeat"],
             record["measured_steps"], record["sim_seconds"], record["wall_seconds"],
             record["realtime_factor"], record["step_ms_median"],
             record["policy_ms_median"], record["step_ms_p95"],
@@ -638,6 +767,27 @@ def main():
         "pair comes from --step-hz, which at 10 Hz means 50 Hz physics - half of what CARLA "
         "integrates at the same tick rate. 100 with --step-hz 10 is the matched shape.",
     )
+    parser.add_argument(
+        "--rate-sets", default=None,
+        help="A CSV of whole simulator configurations - `name,step_hz,decision_hz,physics_hz`, "
+        "one a row - driven one after another in this process, into one CSV. "
+        "scripts/rate-sets.csv is the one in the repo, and the path is the same inside the "
+        "container and out. It is the way to compare 10/10/50 against 100/20/100 without "
+        "three flags per run and three files to reconcile afterwards, and running them in one "
+        "process is what keeps them comparable: `prime` is paid once and the machine columns "
+        "are identical. A set drives only the dataset written at its own step rate. Cannot be "
+        "combined with --step-hz, --decision-hz or --physics-hz - the file is the source.",
+    )
+    parser.add_argument(
+        "--decision-hz", type=float, default=None,
+        help="The middle rate of world tick / decision + camera / physics, when it should be "
+        "slower than the simulator. Must divide --step-hz. MetaDrive has no clock for it - "
+        "env.step is the world tick, the policy call and the camera draw all at once - so it "
+        "is a stride counted in this loop. On the replay row it gates the sensor and camera "
+        "read alone, MetaDrive calling the replay policy in-engine on every step whatever "
+        "this says. --step-hz 100 --decision-hz 20 is 100/20/100, and what openpilot's "
+        "bridge is written for.",
+    )
     parser.add_argument("--policy-url", default=None, help="Where row 3's model is listening.")
     parser.add_argument(
         "--policy-sensors",
@@ -671,21 +821,53 @@ def main():
     parser.add_argument("--no-csv", action="store_true", help="Print the table and write nothing.")
     arguments = parser.parse_args()
 
+    # One implicit set when no file was given, so the loop below has one shape rather than two.
+    # `step_hz=None` there means "each dataset's own", which is what an unflagged sweep does and
+    # what a rate-set file can never say - a set names a world tick by definition.
+    if arguments.rate_sets:
+        conflicting = [
+            name for name, value in (
+                ("--step-hz", arguments.step_hz),
+                ("--decision-hz", arguments.decision_hz),
+                ("--physics-hz", arguments.physics_hz),
+            ) if value is not None
+        ]
+        if conflicting:
+            print(
+                "result       FAILED: --rate-sets is the source of the rates, so {} cannot be "
+                "passed beside it. Put the rate in the file.".format(", ".join(conflicting))
+            )
+            return 1
+        try:
+            rate_sets = load_rate_sets(arguments.rate_sets)
+        except ValueError as error:
+            print(f"result       FAILED: {error}")
+            return 1
+    else:
+        rate_sets = [
+            RateSet(
+                name="",
+                step_hz=arguments.step_hz,
+                decision_hz=arguments.decision_hz,
+                physics_hz=arguments.physics_hz,
+            )
+        ]
+
     rig = None
     rig_tick_s = None
     if arguments.camera_rig:
         from camera_rig import MAX_IMAGE_BUFFERS, STEP_S, RigError, load_rig
 
-        rig_tick_s = STEP_S
-
-        # Read before any env is built: a spec that will be refused should cost nothing, and
-        # the cameras have to be in `sensors` at construction - `engine_core.setup_sensors`
-        # runs once.
+        # `None`, so `load_rig` does not judge the rate here. This sweep drives *every* rate a
+        # workspace holds, so there is no one read interval to check against until a dataset is
+        # in hand - which is what the per-dataset note below does, against the spec's own
+        # declared `tick_rate` rather than against an assumed 0.1 s.
         try:
-            rig = load_rig(arguments.camera_rig)
+            rig = load_rig(arguments.camera_rig, read_interval_s=None)
         except RigError as error:
             print(f"result       FAILED: camera rig rejected: {error}")
             return 1
+        rig_tick_s = rig.tick_rate_s or STEP_S
         if len(rig) > MAX_IMAGE_BUFFERS:
             print(
                 f"result       FAILED: camera rig rejected: {len(rig)} cameras is more than "
@@ -758,7 +940,7 @@ def main():
 
     print(HEADER)
 
-    prime(arguments, wanted, rig)
+    prime(arguments, wanted, rig, rate_set=rate_sets[0])
 
     records = []
     measured = 0
@@ -766,127 +948,196 @@ def main():
     # GPU time, and a reader who has seen enough should not have to hunt for what it
     # measured. Every row is already flushed; this only names the file and says it is short.
     try:
-        for dataset in arguments.dataset:
-            dataset = os.path.abspath(dataset)
-            try:
-                native_hz = dataset_step_hz(dataset, arguments.scenario_index)
-            except Exception as error:  # noqa: BLE001 - reported per dataset, never fatal
-                print(f"  {dataset} could not be read: {error}")
-                continue
-
-            # Said rather than refused. `load_rig` rejects a spec whose `tick_rate` is not
-            # `camera_rig.STEP_S`, because nothing there resamples - but this sweep drives every
-            # rate a workspace holds, and what a rig costs at 100 Hz is one of the most useful
-            # numbers in the table. So the cameras draw at whatever the dataset's rate is, and the
-            # run says so instead of quietly delivering ten frames where the spec asked for one.
-            # Resampling a rig to its own tick is Phase 2 of the adjustable-sample-rate plan.
-            if rig is not None:
-                drawn_hz = arguments.step_hz or native_hz
-                if abs(drawn_hz - 1.0 / rig_tick_s) > 1e-9:
-                    name = os.path.basename(os.path.normpath(dataset))
-                    print(
-                        f"  rig  {name}: the spec ticks at {rig_tick_s:g} s "
-                        f"({1.0 / rig_tick_s:g} Hz) and these cameras draw every step, so at "
-                        f"{drawn_hz:g} Hz they draw {drawn_hz * rig_tick_s:g}x that. "
-                        "Nothing resamples."
-                    )
-
-            for number in wanted:
-                row = ROWS[number]
-                step_hz = arguments.step_hz or native_hz
-                physics_hz = arguments.physics_hz or row.get("physics_hz")
-                offscreen = row["render"] == "offscreen"
-                record = dict(
-                    (field, "") for field in FIELDS
+        for rate_set in rate_sets:
+            if rate_set.name:
+                # One line naming the configuration, rather than a column on a table that is
+                # already at the width of a terminal. The three rates in the order the question is
+                # asked in, so a reader matching this against a spreadsheet does not have to
+                # reorder anything.
+                print(
+                    f"  set  {rate_set.name}  {rate_set_label(rate_set)} Hz"
+                    "  (world tick / decision + camera / physics)"
                 )
-                record.update(facts)
-                record.update(
-                    label=label, timestamp=stamp, gl_max_texture=ceiling or "",
-                    dataset=os.path.basename(os.path.normpath(dataset)),
-                    row=number, render=row["render"] or "none", policy=row["policy"],
-                    # Declared, so a row that never gets as far as an env still says what it
-                    # would have carried. A row that runs overwrites all four from its own env.
-                    sensors=",".join(carried(row, len(rig) if rig else 1)),
-                    # MetaDrive draws the camera and reads it inside `env.step` when
-                    # `image_observation` is on (`image_obs.py:85`), so the image costs what it
-                    # costs there on every offscreen row. No row reads one in the timing loop as
-                    # well: that forces a second render pass and would charge the benchmark for a
-                    # frame no training loop draws.
-                    camera_read_mode="observation" if offscreen else "none",
-                    camera_rig=os.path.basename(rig.path) if rig is not None else "",
-                    camera_count=(len(rig) if rig else 1) if offscreen else 0,
-                    camera_size=(
-                        "x".join(str(one) for one in (
-                            (rig.cameras[0].width, rig.cameras[0].height) if rig else CAMERA_SIZE))
-                        if offscreen else ""),
-                    camera_mb_per_step=round(rig.megabytes, 3) if rig and offscreen else "",
-                    # The rate the cameras really draw at, which is the step rate: MetaDrive
-                    # redraws every buffer once per `env.step` (`base_engine.py:458`), whatever a
-                    # spec's `tick_rate` says. Recorded because a rig declaring 0.1 s is driven at
-                    # 0.01 s on a 100 Hz dataset and nothing here resamples.
-                    camera_hz=step_hz if offscreen else "",
-                    stack_size=3 if offscreen else "", norm_pixel="True" if offscreen else "",
-                    observation_kind="image+state41" if offscreen else "lidarstate161",
-                    max_lateral_m=arguments.max_lateral_m,
-                    step_hz=step_hz, physics_hz=physics_hz or (1.0 / step_config(step_hz)[
-                        "physics_world_step_size"]),
-                    status="skipped",
-                )
+            drove_a_dataset = False
+            for dataset in arguments.dataset:
+                dataset = os.path.abspath(dataset)
+                try:
+                    native_hz = dataset_step_hz(dataset, arguments.scenario_index)
+                except Exception as error:  # noqa: BLE001 - reported per dataset, never fatal
+                    print(f"  {dataset} could not be read: {error}")
+                    continue
 
-                reason = ""
-                if row["render"] in ("offscreen", "3D") and ceiling is None:
-                    reason = "no GL context, so no camera can be built here"
-                elif row["render"] == "3D" and not has_display:
-                    reason = "no display ($DISPLAY and $WAYLAND_DISPLAY unset)"
-                elif row["policy"] == "remote" and not arguments.policy_url:
-                    reason = "needs --policy-url"
+                # A named set drives only the dataset written at its own world tick, and that is
+                # the one place `--rate-sets` behaves differently from the flags. A set is a whole
+                # simulator configuration, so running it against a tape written at another rate
+                # measures a configuration nobody asked for - and every replay row of it would skip
+                # anyway. Without a set the sweep still drives every rate a workspace holds, each
+                # at its own, which is the comparison it exists to make.
+                if rate_set.name and abs(rate_set.step_hz - native_hz) > 1e-9:
+                    continue
+                drove_a_dataset = True
 
-                env = None
-                if not reason:
+                # Said rather than refused. `load_rig` rejects a spec whose `tick_rate` is not
+                # `camera_rig.STEP_S`, because nothing there resamples - but this sweep drives every
+                # rate a workspace holds, and what a rig costs at 100 Hz is one of the most useful
+                # numbers in the table. So the cameras draw at whatever the dataset's rate is,
+                # and the run says so instead of quietly delivering ten frames where the spec
+                # asked for one.
+                # Resampling a rig to its own tick is Phase 2 of the adjustable-sample-rate plan.
+                if rig is not None:
+                    # Against the rate the cameras are really read at, which `--decision-hz` moves
+                    # off the step rate. A rig declaring 20 Hz on a 100 Hz dataset is exactly right
+                    # under `--decision-hz 20`, and saying otherwise would be the note crying wolf
+                    # at the one configuration it was written to bless.
                     try:
-                        env = build_env(
-                            dataset, row, step_hz, physics_hz, rig=rig,
-                            max_lateral_m=arguments.max_lateral_m,
+                        rig_stride = decision_stride(
+                            rate_set.step_hz or native_hz, rate_set.decision_hz
                         )
-                        result = drive(env, row, arguments, url=arguments.policy_url, rig=rig)
-                        reason = result.pop("skip_reason", "")
-                    except Exception as error:  # noqa: BLE001 - one row failing is not the run
-                        reason = f"{type(error).__name__}: {error}"
-                    finally:
-                        if env is not None:
-                            env.close()
+                    except ValueError:
+                        rig_stride = 1
+                    drawn_hz = (rate_set.step_hz or native_hz) / rig_stride
+                    if abs(drawn_hz - 1.0 / rig_tick_s) > 1e-9:
+                        name = os.path.basename(os.path.normpath(dataset))
+                        print(
+                            f"  rig  {name}: the spec ticks at {rig_tick_s:g} s "
+                            f"({1.0 / rig_tick_s:g} Hz) and these cameras are read at "
+                            f"{drawn_hz:g} Hz, {drawn_hz * rig_tick_s:g}x that. Nothing resamples; "
+                            "--decision-hz is what matches the two."
+                        )
 
-                if reason:
-                    record["skip_reason"] = reason.replace("\n", " ")[:200]
-                else:
-                    record.update(
-                        status="ok", skip_reason="",
-                        physics_ticks_per_sim_second=(
-                            result["decision_repeat"] / result["sim_dt_s"]),
-                        step_ms_mean=result["step"]["mean"],
-                        step_ms_median=result["step"]["median"],
-                        step_ms_p95=result["step"]["p95"],
-                        step_ms_p99=result["step"]["p99"],
-                        step_ms_max=result["step"]["max"],
-                        policy_ms_median=result["policy"]["median"],
-                        sensor_ms_median=result["sensor"]["median"],
-                        rig_ms_median=result["rig"]["median"],
+                for number in wanted:
+                    row = ROWS[number]
+                    step_hz = rate_set.step_hz or native_hz
+                    # A set's physics outranks row 5's own pin, because a set describes the whole
+                    # configuration and a row that overrode part of it would be measuring something
+                    # the table does not name. Rows 2 and 5 then coincide, which the `physics`
+                    # column shows; the footer says so once rather than per row.
+                    physics_hz = rate_set.physics_hz or row.get("physics_hz")
+                    offscreen = row["render"] == "offscreen"
+                    # Declared here as well as re-derived in `drive`, so a row that skips before it
+                    # ever builds an env still records the rate it would have run at. A skip rather
+                    # than a fatal error, because this sweep drives *every* rate a workspace holds:
+                    # `--decision-hz 20` divides a 100 Hz dataset and not a 10 Hz one, and the row
+                    # that cannot have it should say so beside the row that can.
+                    stride, stride_refusal = 1, ""
+                    try:
+                        stride = decision_stride(step_hz, rate_set.decision_hz)
+                    except ValueError as error:
+                        stride_refusal = str(error)
+                    record = dict(
+                        (field, "") for field in FIELDS
                     )
-                    for key in (
-                        "sensors", "camera_count", "camera_size", "camera_mb_per_step",
-                        "stack_size", "observation_kind",
-                        "gl_renderer", "force_fps", "scenario_id", "sim_dt_s", "physics_dt_s",
-                        "decision_repeat", "steps", "measured_steps", "warmup_steps", "sim_seconds",
-                        "wall_seconds", "realtime_factor", "reset_seconds", "arrive_dest",
-                        "ended_by",
-                    ):
-                        record[key] = result[key]
-                    record["physics_hz"] = 1.0 / result["physics_dt_s"]
-                    measured += 1
+                    record.update(facts)
+                    record.update(
+                        label=label, timestamp=stamp, gl_max_texture=ceiling or "",
+                        rate_set=rate_set.name,
+                        dataset=os.path.basename(os.path.normpath(dataset)),
+                        row=number, render=row["render"] or "none", policy=row["policy"],
+                        # Declared, so a row that never gets as far as an env still says what it
+                        # would have carried. A row that runs overwrites all four from its own env.
+                        sensors=",".join(carried(row, len(rig) if rig else 1)),
+                        # MetaDrive draws the camera and reads it inside `env.step` when
+                        # `image_observation` is on (`image_obs.py:85`), so the image costs what it
+                        # costs there on every offscreen row. No row reads one in the timing
+                        # loop as well: that forces a second render pass and would charge the
+                        # benchmark for a frame no training loop draws.
+                        camera_read_mode="observation" if offscreen else "none",
+                        camera_rig=os.path.basename(rig.path) if rig is not None else "",
+                        camera_count=(len(rig) if rig else 1) if offscreen else 0,
+                        camera_size=(
+                            "x".join(str(one) for one in (
+                                (rig.cameras[0].width, rig.cameras[0].height)
+                                if rig else CAMERA_SIZE))
+                            if offscreen else ""),
+                        camera_mb_per_step=round(rig.megabytes, 3) if rig and offscreen else "",
+                        # Two columns because they are two rates and only one of them is ours to
+                        # move. `camera_hz` is what the cameras are *read* at, which `--decision-hz`
+                        # decimates; `camera_draw_hz` is what they are *drawn* at, which is the step
+                        # rate and nothing else - MetaDrive redraws every buffer once per `env.step`
+                        # (`base_engine.py:458`), and deactivating them in between was measured and
+                        # saves 1% (see docs/step-timing-rows.md). One column would read as though a
+                        # decimated camera were cheap, which it is not.
+                        camera_hz=step_hz / stride if offscreen else "",
+                        camera_draw_hz=step_hz if offscreen else "",
+                        decision_hz=step_hz / stride, steps_per_decision=stride,
+                        stack_size=3 if offscreen else "", norm_pixel="True" if offscreen else "",
+                        observation_kind="image+state41" if offscreen else "lidarstate161",
+                        max_lateral_m=arguments.max_lateral_m,
+                        step_hz=step_hz, physics_hz=physics_hz or (1.0 / step_config(step_hz)[
+                            "physics_world_step_size"]),
+                        status="skipped",
+                    )
 
-                records.append(record)
-                writer.write(record)
-                print(table_line(record))
+                    reason = ""
+                    if stride_refusal:
+                        reason = stride_refusal
+                    elif row["render"] in ("offscreen", "3D") and ceiling is None:
+                        reason = "no GL context, so no camera can be built here"
+                    elif row["render"] == "3D" and not has_display:
+                        reason = "no display ($DISPLAY and $WAYLAND_DISPLAY unset)"
+                    elif row["policy"] == "remote" and not arguments.policy_url:
+                        reason = "needs --policy-url"
+
+                    env = None
+                    if not reason:
+                        try:
+                            env = build_env(
+                                dataset, row, step_hz, physics_hz, rig=rig,
+                                max_lateral_m=arguments.max_lateral_m,
+                            )
+                            result = drive(
+                                env, row, arguments, url=arguments.policy_url, rig=rig,
+                                decision_hz=rate_set.decision_hz,
+                            )
+                            reason = result.pop("skip_reason", "")
+                        except Exception as error:  # noqa: BLE001 - one row failing is not the run
+                            reason = f"{type(error).__name__}: {error}"
+                        finally:
+                            if env is not None:
+                                env.close()
+
+                    if reason:
+                        record["skip_reason"] = reason.replace("\n", " ")[:200]
+                    else:
+                        record.update(
+                            status="ok", skip_reason="",
+                            physics_ticks_per_sim_second=(
+                                result["decision_repeat"] / result["sim_dt_s"]),
+                            step_ms_mean=result["step"]["mean"],
+                            step_ms_median=result["step"]["median"],
+                            step_ms_p95=result["step"]["p95"],
+                            step_ms_p99=result["step"]["p99"],
+                            step_ms_max=result["step"]["max"],
+                            policy_ms_median=result["policy"]["median"],
+                            sensor_ms_median=result["sensor"]["median"],
+                            rig_ms_median=result["rig"]["median"],
+                        )
+                        for key in (
+                            "sensors", "camera_count", "camera_size", "camera_mb_per_step",
+                            "stack_size", "observation_kind",
+                            "gl_renderer", "force_fps", "scenario_id", "sim_dt_s", "physics_dt_s",
+                            "decision_repeat", "steps", "measured_steps", "warmup_steps",
+                            "sim_seconds",
+                            "wall_seconds", "realtime_factor", "reset_seconds", "arrive_dest",
+                            "ended_by",
+                        ):
+                            record[key] = result[key]
+                        record["physics_hz"] = 1.0 / result["physics_dt_s"]
+                        measured += 1
+
+                    records.append(record)
+                    writer.write(record)
+                    print(table_line(record))
+            if rate_set.name and not drove_a_dataset:
+                # Named rather than left as a silent gap in the table. A set that measured
+                # nothing looks identical to one that was never in the file.
+                print(
+                    f"       no {rate_set.step_hz:g} Hz dataset in this workspace, so this set "
+                    "drove nothing. Convert one:\n"
+                    f"       uv run osm-scenario convert -w <workspace> --config "
+                    f"config/default.yaml --routes <workspace>/routes/routes.json "
+                    f"--step-hz {rate_set.step_hz:g}"
+                )
     except KeyboardInterrupt:
         print("")
         writer.close()
@@ -913,6 +1164,20 @@ def main():
             ",".join(str(number) for number in left)))
     print("  `policy` is the driver's own cost, timed around the call - read that rather than")
     print("  subtracting one row from another, which about 1 ms of run-to-run spread swamps.")
+    if arguments.decision_hz:
+        print("  decide is --decision-hz: how often the policy is asked and the sensors read.")
+        print("  On the replay row it gates the read alone - MetaDrive drives the ego from the")
+        print("  tape in-engine on every step, so there is no decision there to decimate. The")
+        print("  camera still *draws* every step - camera_draw_hz - because MetaDrive redraws")
+        print("  every buffer once per env.step and deactivating them in between was measured")
+        print("  at 1% of a 26 ms step. What a lower decide rate saves is the read: rig_ms.")
+    if arguments.rate_sets:
+        print(f"  set is a whole configuration from {arguments.rate_sets}, and each drives")
+        print("  only the dataset written at its own world tick.")
+        print("  rate_set names it in the CSV.")
+        if 5 in wanted and any(one.physics_hz for one in rate_sets):
+            print("  a set's physics outranks row 5's own 100 Hz pin, so rows 2 and 5 are the")
+            print("  same measurement under any set that names one - the physics column shows it.")
     print("  rpt is decision_repeat: physics ticks per env.step, so ms/step is not comparable")
     print("  across rates - x real is. Every offscreen row draws and reads a camera; MetaDrive")
     print("  builds the observation out of it inside env.step, so that cost is in ms/step and")
@@ -935,7 +1200,7 @@ def main():
     return 0 if measured else 1
 
 
-def prime(arguments, wanted, rig=None):
+def prime(arguments, wanted, rig=None, rate_set=None):
     """Build and throw away one env before anything is measured.
 
     Measured and not guessed: the **first** env of a process is systematically dearer than
@@ -945,6 +1210,11 @@ def prime(arguments, wanted, rig=None):
     short throwaway drive moves it out of the measurements.
 
     Never fatal: if this cannot run, the row that follows will say why properly.
+
+    `rate_set` is the first configuration that will be measured, so the warm-up is built the
+    way the first real row is. It matters under `--rate-sets`, where the rates live on the set
+    and `arguments.step_hz` is None - without it the warm-up happened to be at the first
+    dataset's own rate, which is right only when the first set asks for that rate.
     """
     # The first row that drives itself, not simply the first: a remote row needs a server, so
     # keying off `wanted[0]` alone would skip the warm-up whenever row 3 came first and leave
@@ -957,8 +1227,9 @@ def prime(arguments, wanted, rig=None):
     try:
         native_hz = dataset_step_hz(arguments.dataset[0], arguments.scenario_index)
         env = build_env(
-            arguments.dataset[0], row, arguments.step_hz or native_hz,
-            arguments.physics_hz or row.get("physics_hz"), rig=rig,
+            arguments.dataset[0], row,
+            (rate_set.step_hz if rate_set else None) or native_hz,
+            (rate_set.physics_hz if rate_set else None) or row.get("physics_hz"), rig=rig,
             max_lateral_m=arguments.max_lateral_m,
         )
         env.reset(seed=arguments.scenario_index)

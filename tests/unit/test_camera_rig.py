@@ -115,6 +115,27 @@ def test_what_it_refuses_rather_than_guesses(field, value, reason):
     assert reason in str(raised.value)
 
 
+def test_a_tick_rate_matching_the_interval_it_is_read_at_is_accepted():
+    """A 20 Hz spec is exactly right on a 100 Hz world with 20 Hz decisions, and refusing it
+    against a hard-coded 0.1 s was the whole of what step 2.3 had to undo."""
+    rig = _parse(_with("tick_rate", 0.05), read_interval_s=0.05)
+    assert rig.tick_rate_s == pytest.approx(0.05)
+
+
+def test_a_tick_rate_is_carried_on_when_the_interval_is_not_known_yet():
+    """`step_timing` sweeps every rate a workspace holds, so it has no one interval to judge
+    against at load time. `None` defers the check and the declared rate rides along for it."""
+    rig = _parse(_with("tick_rate", 0.05), read_interval_s=None)
+    assert rig.tick_rate_s == pytest.approx(0.05)
+
+
+def test_a_spec_naming_two_tick_rates_is_refused():
+    """The rate has one source - the flags - so a spec cannot ask for two."""
+    second = _with("name", "cam_two").replace("tick_rate: 0.1", "tick_rate: 0.05")
+    with pytest.raises(RigError, match="declares"):
+        _parse(ONE + second.replace("sensors:", ""), read_interval_s=None)
+
+
 def test_a_missing_transform_key_is_named():
     text = "\n".join(line for line in ONE.splitlines() if not line.strip().startswith("z:"))
     with pytest.raises(RigError, match="transform has no z"):

@@ -185,7 +185,7 @@ got.
 ## 2. The printed columns
 
 ```
-  #  render     policy  sensors        decide  physics  rpt   steps   sim s  wall s  x real  ms/step  policy    p95
+  #  render     policy  sensors          tick  decide  physics  rpt   steps   sim s  wall s  x real  ms/step  policy    p95
 ```
 
 | column | what it is |
@@ -194,15 +194,16 @@ got.
 | `render` | `none`, `offscreen` or `3D` |
 | `policy` | who drives: `replay`, `idm` or `remote` |
 | `sensors` | what the drive **carries**, read off the live env: the camera on every offscreen row, plus whatever this loop reads itself |
-| `decide` | how many times a second `env.step` is called: the decision rate, and also the sensor rate |
+| `tick` | how many times a second `env.step` is called — the world tick, `--step-hz` |
+| `decide` | how many times a second the policy is asked and the sensors are read — `--decision-hz`. Equal to `tick` unless that flag was passed |
 | `physics` | how many times a second the physics is integrated |
 | `rpt` | `decision_repeat`: physics ticks inside one `env.step`, over which the action is held |
 | `steps` | steps in the **measured** window — the drive minus `--warmup` |
-| `sim s` | simulated seconds those steps cover: `steps × (1 / decide)` |
+| `sim s` | simulated seconds those steps cover: `steps × (1 / tick)` |
 | `wall s` | wall-clock seconds they took |
 | `x real` | `sim s / wall s`. **Above 1 is faster than the clock**; 0.6x means an hour of driving takes over an hour |
 | `ms/step` | median `env.step`, milliseconds |
-| `policy` | median time in the policy call alone, milliseconds |
+| `policy` | median time in the policy call alone, milliseconds — **per call, not per step**. Under a `decide` rate below `tick` the call happens once a stride, so multiply by `decide / tick` for its share of a step |
 | `p95` | 95th percentile of `env.step` — the slow tail |
 
 ### Two ways to misread this table
@@ -255,6 +256,55 @@ One frame is drawn per `env.step` whatever the rate (`base_engine.py:458`, uncon
 so the image rate *is* the step rate and a camera costs a full 10x more per simulated second
 at 100 Hz — against 2x for the physics.
 
+### Three rates, and only two of them are MetaDrive's
+
+The shape the question is usually asked in is **world tick / decision + camera / physics**,
+CARLA's three knobs. **MetaDrive has two.** `env.step` advances
+`physics_world_step_size × decision_repeat` and returns; there is no separate sensor tick,
+and the sensor config is `name=(cls, *args)` with **no slot for a rate anywhere**. So
+`env.step` *is* the world tick, *is* the policy call, and *is* the camera draw.
+
+| the rate | the flag | what sets it |
+|---|---|---|
+| world tick | `--step-hz` | the product of the two MetaDrive keys |
+| physics | `--physics-hz` | `physics_world_step_size`; `decision_repeat` falls out |
+| decision + camera | `--decision-hz` | **a stride counted in this tool's own loop** — nothing in MetaDrive |
+
+Two constraints, both arithmetic and both refused rather than rounded:
+
+- **physics ≥ world tick, as a whole multiple.** Ticks are substeps *inside* a step, so a
+  100 Hz world with 50 Hz physics is half a tick per step and does not exist.
+- **decision ≤ world tick, as a whole divisor.** Nothing moves between two steps, so a
+  decision cannot be finer than one.
+
+`--step-hz 100 --decision-hz 20` is `100/20/100`: the world and the physics at 100 Hz, the
+policy asked and the sensors read every fifth step. It is what openpilot's bridge is written
+for — `_DT_MDL = 0.05` is what its lag compensation and its curvature-rate limit are counted
+against — and it beats converting a 20 Hz dataset for the purpose, because the control
+interval is the same 0.05 s with ten times the physics underneath.
+
+**On the replay rows the decision half is vacuous.** `ReplayEgoCarPolicy` runs *in* the
+engine and MetaDrive calls it every `env.step`; nothing outside can decimate that. So on
+rows 1 and 7 `--decision-hz` gates the sensor and camera read alone, and the table says
+`policy replay` so the reader can see which it is.
+
+**What a lower decide rate saves is the read, not the draw**, and the draw cannot be saved —
+which was measured before it was given up on. MetaDrive redraws every camera buffer once per
+`env.step` (`base_engine.py:458`, unconditional), and `buffer.set_active(False)` — its own
+way of stopping that, which the dashboard uses at `dashboard.py:129-135` — **does not move
+the number**: all seven of `rigs/cams.txt`'s buffers deactivated for a whole `mosque` drive
+at 100 Hz gave **26.42 ms/step against 26.57 active, 0.15 ms or 1%**, with `is_active()`
+confirmed `False` on every one. A `--camera-skip-draw` flag was built, measured at
+26.37 ms/step against 26.19 ungated, and **removed**. Do not build it again without
+measuring first.
+
+So the two rates are reported separately and honestly: `camera_hz` is what the cameras were
+**read** at and `camera_draw_hz` what they were **drawn** at, which is always the step rate.
+The read is real money — the seven-camera rig costs 3.12 ms a step read every step and
+6.54 ms read once in five — `rig_ms_median` is per read, so it reports the 6.54 — and the
+drive goes from **0.341x to 0.371x** real time. `ms/step` itself does not move, because the
+read is timed outside it.
+
 ### The rig — `--camera-rig`
 
 **Unflagged, the camera every offscreen row draws is one this tool invented**: a single
@@ -295,11 +345,14 @@ Five things it does, none of which is a preference:
   buffer beside the rig and renders it every step.
 - **More than `camera_rig.MAX_IMAGE_BUFFERS` (9) cameras is refused.** Past it `env.reset`
   fails *intermittently* inside panda3d, which looks like a working rig until it does not.
-- **The spec's `tick_rate` is not honoured, and the run says so.** Cameras draw once per
-  `env.step` whatever the rate, so a rig declaring 0.1 s draws every 0.01 s on a 100 Hz
-  dataset. Nothing here resamples; a line is printed per dataset where the two differ, and
-  `camera_hz` records the rate they really drew at. Resampling is Phase 2 of
-  `docs/implementation-plan/adjustable-simulation-sample-rate.md`.
+- **The spec's `tick_rate` is checked against the rate the cameras are really read at, and
+  never resampled to it.** That rate is `--decision-hz`, so a rig declaring 0.05 s is exactly
+  right under `--step-hz 100 --decision-hz 20` and wrong on an unflagged 10 Hz sweep. Where
+  the two differ a line is printed per dataset — a note rather than a refusal, because this
+  sweep drives every rate a workspace holds and there is no single one to judge against.
+  `sensor-survey.sh` prints the same note, for the same reason - it has no `--decision-hz`
+  to answer a refusal with. `camera_hz` records what they were read at, `camera_draw_hz`
+  what they were drawn at.
 
 Row 6 registers no cameras at all, so a rig changes nothing about it — which is what keeps
 it the reference the rig is priced against.
@@ -367,9 +420,12 @@ only a hand-named `--csv` can reach — the stamp is per-second otherwise.
 | field | holds |
 |---|---|
 | `dataset` | the dataset directory's name, e.g. `scenarionet-100hz` |
+| `rate_set` | which `--rate-sets` configuration this row belongs to, by name, or empty when the rates came from the flags. **The column to pivot on** when one file holds several configurations |
 | `scenario_id` | which scenario was driven |
-| `step_hz` | decisions a second — the `decide` column |
+| `step_hz` | world ticks a second — the `tick` column |
 | `sim_dt_s` | seconds one `env.step` advances: `1 / step_hz` |
+| `decision_hz` | how often the policy is asked and the sensors read — the `decide` column. `step_hz / steps_per_decision`. Equal to `step_hz` unless `--decision-hz` was passed, which is what every CSV written before this column existed had |
+| `steps_per_decision` | the stride it was reached by: `1` normally, `5` for 20 Hz decisions on a 100 Hz world |
 | `physics_hz` | physics integrations a second |
 | `physics_dt_s` | `physics_world_step_size` as the engine held it |
 | `decision_repeat` | ticks per step — the `rpt` column |
@@ -388,7 +444,8 @@ only a hand-named `--csv` can reach — the stamp is per-second otherwise.
 | `camera_count` | how many cameras the live env really held, counted by class rather than by name. `1` unflagged, `0` under `--render none` |
 | `camera_size` | the image the observation actually carried, from the frame's own shape. Under a rig this is the `image_source` camera, which is the spec's first |
 | `camera_mb_per_step` | uint8 megabytes the whole rig produces per step — 5.42 for the seven-camera spec. Empty without a rig |
-| `camera_hz` | the rate the cameras really drew at, which is always the step rate: MetaDrive redraws every buffer once per `env.step`, whatever a spec's `tick_rate` says |
+| `camera_hz` | the rate the cameras were **read** at — `decision_hz`, the read being part of the decision |
+| `camera_draw_hz` | the rate they were **drawn** at, which is always `step_hz`: MetaDrive redraws every buffer once per `env.step` whatever a spec's `tick_rate` says, and deactivating them in between measured 1% (above). Two columns because they are two rates, and one would read as though a decimated camera were cheap |
 | `stack_size` | frames in the image observation, 3, likewise from the frame |
 | `norm_pixel` | `True`: float32 in [0, 1] rather than uint8 |
 | `observation_kind` | `image+state41` offscreen — a dict of image plus the 41-number state, **with no lidar block** — or `lidarstate161` under `--render none` |
@@ -415,13 +472,58 @@ only a hand-named `--csv` can reach — the stamp is per-second otherwise.
 | field | holds |
 |---|---|
 | `step_ms_mean`, `step_ms_median`, `step_ms_p95`, `step_ms_p99`, `step_ms_max` | `env.step` alone |
-| `policy_ms_median` | the policy call alone. **The driver's cost** |
-| `sensor_ms_median` | the numeric sensor read alone — **not** the camera, which is inside `step_ms_*`. About 0.13 ms on this map |
-| `rig_ms_median` | reading the mounted rig cameras back out, under `--camera-rig`. A buffer copy and not a second render — 3.90 ms for seven. Effectively zero without a rig |
+| `policy_ms_median` | the policy call alone. **The driver's cost**, per call |
+| `sensor_ms_median` | the numeric sensor read alone, per read — **not** the camera, which is inside `step_ms_*`. About 0.13 ms on this map |
+| `rig_ms_median` | reading the mounted rig cameras back out, per read, under `--camera-rig`. A buffer copy and not a second render — 3.90 ms for seven. Effectively zero without a rig |
+
+**Those three are per call; `step_ms_*` is per step.** They are collected only on the steps
+they happen on, and that is a correction rather than a preference: charging them to skipped
+steps as well makes the median a skipped step the moment the stride is 2 or more. Measured at
+`--decision-hz 10` on a 100 Hz world, `policy` printed **0.00 ms** against 0.20 at full rate,
+which is not the model getting faster. How often they happen is the `decide` column; what one
+costs is these.
 
 ---
 
-## 4. Reading two machines' files together
+## 4. Sweeping several configurations — `--rate-sets`
+
+Comparing `10/10/50` against `100/20/100` means three flags per run and as many CSVs to
+reconcile afterwards. `--rate-sets` takes a file of whole configurations instead, drives them
+one after another **in one process**, and writes them to **one CSV** with a `rate_set` column.
+
+```bash
+./scripts/step-timing.sh mosque -- --rate-sets scripts/rate-sets.csv
+./scripts/step-timing-docker.sh mosque -- --rate-sets scripts/rate-sets.csv --camera-rig rigs/cams.txt
+```
+
+The file is `name,step_hz,decision_hz,physics_hz`, one a row, `#` comments allowed; a blank
+`decision_hz` or `physics_hz` means "whatever `step_hz` derives", so a bare `10` is `10/10/50`.
+`scripts/rate-sets.csv` is the one in the repo, and the path is the same inside the container
+and out — the repo is mounted at `/work`, the same reason `rigs/cams.txt` lives in the repo.
+
+Four things it does that are decisions rather than conveniences:
+
+- **One process, so the sets are comparable.** `prime` is paid once — the first env of a
+  process is dearer than the ones after it — and every machine column is identical by
+  construction rather than by two runs happening to agree.
+- **A set drives only the dataset written at its own `step_hz`.** This is the one place
+  `--rate-sets` behaves differently from the flags. A set is a whole configuration, so running
+  it against a tape written at another rate measures something nobody asked for, and every
+  replay row of it would skip anyway. Without a set the sweep still drives every rate the
+  workspace holds, each at its own — that is the comparison it exists to make. A set whose
+  dataset does not exist simply contributes no rows; `convert --step-hz <rate>` is what makes
+  one.
+- **A set's `physics_hz` outranks row 5's own 100 Hz pin**, because a set describes the whole
+  configuration and a row overriding half of it would be measuring something the table does not
+  name. Rows 2 and 5 then coincide, which the `physics` column shows and the footer says once.
+- **It cannot be combined with `--step-hz`, `--decision-hz` or `--physics-hz`.** The file is the
+  source of the rates; two sources is how a CSV comes to describe a run that did not happen.
+
+Everything else still applies per set: `--rows` selects which rows each one drives, `--camera-rig`
+mounts the vehicle's cameras on all of them, and an arithmetically impossible pair inside a set
+shows as a skipped row saying why rather than refusing the file.
+
+## 5. Reading two machines' files together
 
 The machine columns repeat on every row precisely so this works:
 
@@ -430,7 +532,8 @@ cat step-timing-laptop-*.csv > both.csv
 tail -n +2 -q step-timing-rig-*.csv >> both.csv
 ```
 
-Then pivot on `label` × `row` × `step_hz`. Nothing needs lining up by hand.
+Then pivot on `label` × `rate_set` × `row`. Nothing needs lining up by hand — and `rate_set`
+is the column to pivot on when one file holds several configurations.
 
 Four things to check before believing a comparison:
 

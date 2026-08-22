@@ -7,6 +7,7 @@
 #   ./scripts/drive.sh -- --render 2D           # everything after -- goes to tools/drive.py
 #   ./scripts/drive.sh -- --line-width-m 0.1    # thinner lane lines, this run only
 #   ./scripts/drive.sh -- --step-hz 100         # drives that workspace's 100 Hz dataset
+#   ./scripts/drive.sh -- --step-hz 100 --decision-hz 20   # 100/20/100: 20 Hz decisions
 #   GPU=integrated ./scripts/drive.sh           # force the built-in graphics
 #
 # Why a script rather than a command: MetaDrive runs on its own interpreter (3.8 / numpy 1.24,
@@ -25,6 +26,13 @@
 #                     workspace holds one per rate -- STEP_HZ=100 drives scenarionet-100hz --
 #                     and a dataset can only be replayed at the rate it was written at. A
 #                     --step-hz after -- wins over this, for the dataset as well as the run.
+#   DECISION_HZ       how many times a second the policy is asked and the --sensors are
+#                     read, when that should be slower than the simulator itself. Unset it
+#                     is the step rate: MetaDrive has no separate clock for it, env.step
+#                     being the world tick, the policy call and the camera draw at once.
+#                     Must divide the step rate. STEP_HZ=100 with DECISION_HZ=20 is what
+#                     openpilot's bridge is written for (_DT_MDL 0.05). It does NOT pick
+#                     the dataset -- STEP_HZ still does.
 
 # shellcheck source=scripts/_common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
@@ -34,7 +42,7 @@ PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --) shift; PASSTHROUGH=("$@"); break ;;
-        -h|--help) sed -n '2,27p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
+        -h|--help) sed -n '2,36p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
         -*) die "unknown option: $1
   This script takes only a workspace. To pass $1 to drive.py, put it after --:
     ./scripts/drive.sh ${POSITIONAL:-<workspace>} -- $1" ;;
@@ -87,6 +95,9 @@ if [[ -n "${LINE_INTERVAL_M:-}" ]]; then
 fi
 if [[ -n "${STEP_HZ:-}" ]]; then
     ARGS+=(--step-hz "$STEP_HZ")
+fi
+if [[ -n "${DECISION_HZ:-}" ]]; then
+    ARGS+=(--decision-hz "$DECISION_HZ")
 fi
 # Last wins in argparse, so anything repeated after -- overrides what this script chose.
 ARGS+=(${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"})

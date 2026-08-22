@@ -161,6 +161,11 @@ def _region_for(dataset: str) -> tuple[int, float, str]:
 # keys are configurable; this is only the default `physics_world_step_size`.
 PHYSICS_TICK_S = 0.02
 
+# MetaDrive's own `env.step` rate, the product of its two defaults (0.02 x 5 = 0.1 s). What an
+# unflagged run advances by, and so the rate `--decision-hz` is counted against when `--step-hz`
+# was not passed.
+DEFAULT_STEP_HZ = 10.0
+
 
 def step_config(step_hz):
     """The two MetaDrive keys that make one `env.step` last `1 / step_hz` seconds.
@@ -180,6 +185,44 @@ def step_config(step_hz):
     dt = 1.0 / float(step_hz)
     repeat = max(1, int(math.ceil(dt / PHYSICS_TICK_S - 1e-9)))
     return {"physics_world_step_size": dt / repeat, "decision_repeat": repeat}
+
+
+def decision_stride(step_hz, decision_hz):
+    """How many `env.step`s pass between two decisions. 1 when nothing was asked for.
+
+    The middle rate of `world tick / decision + camera / physics`. MetaDrive has no clock for
+    it: `env.step` *is* the world tick, the policy is called once per step, and
+    `base_engine.py:458` calls `task_manager.step()` once per step so every camera buffer
+    redraws on it. There is no per-sensor rate anywhere in the sensor config either, which is
+    `name=(cls, *args)` with no slot for one. So a decision rate below the world tick is a
+    stride counted in the caller's loop, and this is the one place that counts it.
+
+    Refused rather than rounded when the ratio is not a whole number, for the same reason
+    `step_timing.rate_keys` refuses a physics rate that does not divide a step: a rate nobody
+    asked for is worse than an error. A decision cannot be *finer* than a world tick either -
+    nothing moves between two steps - so the ratio has a floor of 1.
+    """
+    if decision_hz is None:
+        return 1
+    ratio = float(step_hz) / float(decision_hz)
+    stride = int(round(ratio))
+    if stride < 1 or abs(ratio - stride) > 1e-6:
+        raise ValueError(
+            f"{decision_hz:g} Hz decisions do not divide a {step_hz:g} Hz step: that is "
+            f"{ratio:.4g} steps per decision. A decision cannot be finer than a world tick, "
+            "and a fraction of one is not a rate."
+        )
+    return stride
+
+
+def decides_on(step, stride):
+    """Whether a decision is taken on step `step` (0-based). Every step at stride 1.
+
+    A predicate rather than an inline `%` because two loops share it - this module's and
+    `step_timing.drive`'s - and a benchmark whose schedule differs from the tool it is meant
+    to be timing would be measuring something nobody runs.
+    """
+    return step % stride == 0
 
 
 def sim_step_seconds(env) -> float:
@@ -537,6 +580,19 @@ def main() -> int:
         "per step with no interpolation - so a mismatch is refused rather than driven at the "
         "wrong speed.",
     )
+    parser.add_argument(
+        "--decision-hz",
+        type=float,
+        default=None,
+        help="How many times a second the policy is consulted and the --sensors are read, "
+        "when that should be slower than the simulator itself. Unset, it is the step rate: "
+        "MetaDrive has no separate clock for it, so `env.step` is the world tick, the "
+        "decision and the camera sample all at once. Must divide --step-hz. On "
+        "--agent-policy replay it gates the sensor read alone, MetaDrive calling the replay "
+        "policy in-engine every step whatever this says; on `idm`, `manual` and `remote` the "
+        "action is held across the skipped steps. openpilot's bridge is written for 20 Hz "
+        "(_DT_MDL 0.05), so --step-hz 100 --decision-hz 20 is what matches it.",
+    )
     parser.add_argument("--height-scale", type=int, default=HEIGHT_SCALE)
     parser.add_argument("--drivable-area-extension", type=int, default=DRIVABLE_AREA_EXTENSION_M)
     parser.add_argument(
@@ -805,6 +861,25 @@ def main() -> int:
     # Folded in only when it was asked for, so an unflagged run's config is unchanged
     # key-for-key rather than merely equal by arithmetic.
     rate = {} if arguments.step_hz is None else step_config(arguments.step_hz)
+    # Counted against the rate actually in force, which is MetaDrive's own 10 when --step-hz
+    # was not passed - so `--decision-hz 5` alone is a legal 2x stride rather than an error
+    # about a flag the caller did not use.
+    effective_hz = arguments.step_hz if arguments.step_hz is not None else DEFAULT_STEP_HZ
+    try:
+        stride = decision_stride(effective_hz, arguments.decision_hz)
+    except ValueError as error:
+        print(f"result       FAILED: {error}")
+        return 2
+    decision_seconds = stride / float(effective_hz)
+    if stride > 1:
+        print(
+            "decision     {:g} Hz: every {} env.step, {:g} s apart. {}".format(
+                arguments.decision_hz, stride, decision_seconds,
+                "the sensor read only - MetaDrive calls the replay policy in-engine on every "
+                "step" if arguments.agent_policy == "replay"
+                else "the action is held across the steps in between",
+            )
+        )
     if rate:
         print(
             "step rate    {:g} Hz: physics_world_step_size={:g}, decision_repeat={}".format(
@@ -880,9 +955,29 @@ def main() -> int:
         remote = RemotePolicy(
             arguments.policy_url,
             pack=SensorPack(env, sensor_names),
-            step_seconds=sim_step_seconds(env),
+            # The interval between two *calls*, which is what a controller integrating
+            # anything is working in - not `sim_step_seconds`, which is the interval between
+            # two `env.step`s and is `stride` times shorter. openpilot's bridge counts its lag
+            # compensation and its curvature-rate limit against exactly this number
+            # (`openpilot_policy.BRIDGE_DT_S`), so getting it wrong mis-scales them silently.
+            step_seconds=sim_step_seconds(env) * stride,
         )
-        remote.spec({"dataset": dataset})
+        # The rates go through `spec`'s existing `extra`, which is why `policy_client` needs
+        # no new field: what a model has to know is the interval between two calls, and
+        # `step_seconds` above already carries it. These name the clocks underneath it, so a
+        # controller written for one rate can say so - openpilot's does.
+        remote.spec(
+            {
+                "dataset": dataset,
+                "rates": {
+                    "decision_hz": effective_hz / stride,
+                    "world_tick_hz": effective_hz,
+                    "physics_hz": float(env.config["decision_repeat"])
+                    / sim_step_seconds(env),
+                    "steps_per_decision": stride,
+                },
+            }
+        )
         print(
             "sensors      {}".format(
                 ", ".join(sensor_names) if sensor_names else "the observation only"
@@ -1004,13 +1099,20 @@ def main() -> int:
             path = []
             info = {}
             steps = 0
+            action = [0, 0]
             while budget is None or steps < budget:
                 previous_observation = observation
                 # `[0, 0]` for the three policies that ignore it - `replay` and `idm` are
                 # chosen through `agent_policy` and never read the argument, and `manual` reads
                 # the keyboard instead. Only `remote` puts anything here, which is exactly what
                 # makes it the same socket as the keyboard rather than a fourth mechanism.
-                action = remote(observation) if remote is not None else [0, 0]
+                #
+                # On a step between two decisions the previous action is **held**, never reset
+                # to `[0, 0]`: zeroing it would take the foot off the throttle four steps in
+                # five and the car would coast rather than drive at a lower decision rate.
+                deciding = decides_on(steps, stride)
+                if deciding and remote is not None:
+                    action = remote(observation)
                 observation, _, terminated, truncated, info = env.step(action)
                 if recorder is not None:
                     # The observation that *produced* the action, paired with the action the
