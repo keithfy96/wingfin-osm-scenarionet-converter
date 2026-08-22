@@ -7,5 +7,10 @@ __pycache__/
 dist/
 build/
 #workspaces/
+
+# Generated per run, by the pipeline and by the timing sweep. A step-timing CSV in
+# particular is one file per run, stamped, and never overwritten -- so tracking them
+# means the repo grows a file every time anyone measures anything.
+workspaces/*/reports/
 node_modules/
 
