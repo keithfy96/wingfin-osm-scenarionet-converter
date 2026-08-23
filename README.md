@@ -1065,12 +1065,51 @@ Four things worth knowing before tuning anything:
   interval with ten times the physics under it. Measured on `mosque`: 868 calls over 4337
   steps, `arrive_dest=True`, completion 0.950, and no note. The server prints one at any
   other decision rate.
-- **Its pedal map is CARLA calibration**, measured on Town10HD with a Tesla M3. Speed tracking
-  will be poor here until it is re-measured. Steering is unaffected — that path is geometric,
-  which is what `carla_steer_curvature_gain: 0` selects.
+- **Its pedal map is CARLA calibration**, measured on Town10HD with a Tesla M3, and
+  `--longitudinal table` is the re-measurement. See below. Steering is unaffected — that path
+  is geometric, which is what `carla_steer_curvature_gain: 0` selects.
 - **The openpilot fork itself is private.** `wing-sim/openpilot/pull.sh` clones
   `zapetaai/openpilot` with private submodules, so `--backend bridge` needs access that the
   stub does not.
+
+#### Measure the pedals on MetaDrive's own car
+
+The bridge plans in m/s² and turns that into pedals with two 8×11 tables from a *"Town10HD
+calibration sweep on Tesla M3"*. Their zero crossing is the CARLA Tesla's own zero-throttle
+drag, **−1.582 m/s²**; MetaDrive's car coasts at **−0.364**, because the only resistance in
+`_apply_throttle_brake` is a constant brake on all four wheels and there is no aerodynamic
+term at all. So every request to slow down more gently than the CARLA car's drag came back as
+*throttle* — 58% of them on `junction-1`, 90% on `mosque` — and on `junction-1` the car
+accelerated from 13.9 to 20.5 m/s and left the road.
+
+```bash
+./pedal-sweep.sh junction-1        # ~9 s, no GPU and no display
+```
+
+writes `calibration/metadrive-pedal-map.json`, and then
+
+```bash
+python examples/openpilot_server.py --backend bridge --longitudinal table --port 8642
+```
+
+Measured against the real bridge, both extracts, at 100 Hz / 20 Hz decisions: **no request
+below the coast comes back as throttle, and the chosen pedal delivers what was asked for to
+0.000 m/s²** — against 1.371 m/s² of error under `pedal` and 0.308 under `accel`.
+
+Three things worth knowing:
+
+- **`--longitudinal` has three values and only one is a calibration.** `pedal` is what the
+  bridge emits and what a CARLA consumer gets, so it stays reproducible; `accel` normalises
+  `accel_cmd` by the Tesla envelope, which is sign-correct and nothing more; `table` is the
+  measurement. Only `pedal` works against `--backend stub`, which answers in pedals and
+  carries no `accel_cmd`.
+- **The table does not fix speed tracking, and nothing on this side can.** The car still
+  averages about 4 m/s against a 10 m/s target, because the bridge is not asking to
+  accelerate — median `accel_cmd` −0.30 m/s², and *doubling* the target takes it to −2.00.
+  The trajectory it is given is `route_gt.py`'s constant-speed model, so it carries no speed
+  intent; that is the model's half of the job, not the controller's.
+- **The table describes one car.** `max_engine_force` is sampled from a `BoxSpace`, so the
+  file records what it was measured on and every episode checks the live vehicle against it.
 
 ---
 

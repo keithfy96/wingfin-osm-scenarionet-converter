@@ -49,8 +49,12 @@ route in metres, which is the same object `TrajectoryNavigation` steers by.
   868 calls over 4337 steps, `arrive_dest=True`, completion 0.950, and no note from `spec`.
   A run at any other decision rate mis-scales the three limits above, and says so.
 * **`accel_map.py` is CARLA pedal calibration**, not physics - two 8x11 tables from a
-  "Town10HD calibration sweep on Tesla M3 @ 20 Hz sync". Speed tracking will be poor here
-  until they are re-measured. Steering is unaffected, because that path is geometric.
+  "Town10HD calibration sweep on Tesla M3 @ 20 Hz sync", whose zero crossing is the CARLA
+  Tesla's own -1.582 m/s^2 of drag. MetaDrive's car coasts at -0.364, so **every request to
+  slow down more gently than that comes back as throttle** - 137 of 201 on `junction-1`, and
+  the car ran away and left the road. `--longitudinal table` is the re-measurement,
+  `tools/pedal_sweep.py` makes it and `tools/pedal_map.py` reads it. Steering is unaffected,
+  because that path is geometric.
 
 `StubBridge` speaks the same protocol with a pure-pursuit law and needs no fork, no Docker
 and no SSH key. It is what proves the frame, the signs and the round trip before the real
@@ -62,9 +66,15 @@ from __future__ import annotations
 import contextlib
 import json
 import math
+import os
 import socket
 import struct
+import sys
 import threading
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from pedal_map import PedalMap, PedalMapError  # noqa: E402
 
 # ---------------------------------------------------------------------------------------
 # Framing. Copied from `wing-sim/openpilot/bridge/bridge_protocol.py` rather than imported,
@@ -94,7 +104,11 @@ DEFAULT_STEER_RATIO = 12.0
 TESLA_ACCEL_MAX_MPS2 = 2.0
 TESLA_ACCEL_MIN_MPS2 = -3.48
 
-LONGITUDINAL_MODES = ("pedal", "accel")
+# `table` is the measured one and the only one that is a calibration; the other two are the
+# two ways of being wrong that existed before there was a table. Both stay: `pedal` is what
+# the bridge emits and what a CARLA consumer gets, so it has to remain reproducible, and
+# `accel` is the sign-correct fallback when no table has been measured for a vehicle.
+LONGITUDINAL_MODES = ("pedal", "accel", "table")
 
 
 class BridgeError(RuntimeError):
@@ -195,7 +209,7 @@ def ego_state(sensors, steering, max_steering_deg, steer_ratio=DEFAULT_STEER_RAT
     }
 
 
-def to_metadrive_action(reply, longitudinal="pedal"):
+def to_metadrive_action(reply, longitudinal="pedal", speed_mps=0.0, table=None):
     """`{"steer", "throttle", "brake"}` -> `[steering, throttle_brake]`, both in [-1, 1].
 
     The steer is negated because the bridge emits CARLA's right-positive normalised value,
@@ -222,6 +236,11 @@ def to_metadrive_action(reply, longitudinal="pedal"):
       not a calibration either** - MetaDrive's `action[1]` is engine force and brake force,
       not acceleration, so the magnitude is only roughly right. What it is is *sign*-correct
       and unit-consistent, which on this simulator the pedal map is not.
+    * `table` takes the same `accel_cmd` and looks it up in a pedal map **measured on this
+      car**, by `tools/pedal_sweep.py`, which is what the other two are standing in for. It
+      is the only one of the three that is a calibration, and it needs `speed_mps`: MetaDrive
+      cuts the engine entirely above `max_speed_km_h`, so what a throttle is worth depends on
+      how fast the car is already going, and nothing else in this module needs to know that.
 
     Refused here rather than at `RemotePolicy._validated`, so a bad number names the bridge
     that produced it instead of the wire that carried it.
@@ -233,19 +252,27 @@ def to_metadrive_action(reply, longitudinal="pedal"):
     if reply.get("type") == "error" or "steer" not in reply:
         raise BridgeError(f"the bridge did not reply with a control: {str(reply)[:200]}")
     steer = -float(reply["steer"])
-    if longitudinal == "accel":
+    if longitudinal in ("accel", "table"):
         if "accel_cmd" not in reply:
             raise BridgeError(
-                "--longitudinal accel needs `accel_cmd`, which this reply does not carry. "
-                "The stub answers in pedals only; use --longitudinal pedal with it."
+                f"--longitudinal {longitudinal} needs `accel_cmd`, which this reply does not "
+                "carry. The stub answers in pedals only; use --longitudinal pedal with it."
             )
         accel = float(reply["accel_cmd"])
         # Before the clip, not after: `min(1.0, nan)` is 1.0 in Python, so clipping first
         # would turn a NaN into full throttle rather than into the refusal below.
         if accel != accel or accel in (float("inf"), float("-inf")):
             raise BridgeError(f"the bridge returned accel_cmd = {accel}")
-        envelope = TESLA_ACCEL_MAX_MPS2 if accel >= 0.0 else -TESLA_ACCEL_MIN_MPS2
-        throttle_brake = max(-1.0, min(1.0, accel / envelope))
+        if longitudinal == "table":
+            if table is None:
+                raise BridgeError(
+                    "--longitudinal table needs a pedal map, and none was loaded. Measure "
+                    "one with ./scripts/pedal-sweep.sh, or use --longitudinal accel."
+                )
+            throttle_brake = table.pedal_for(accel, speed_mps)
+        else:
+            envelope = TESLA_ACCEL_MAX_MPS2 if accel >= 0.0 else -TESLA_ACCEL_MIN_MPS2
+            throttle_brake = max(-1.0, min(1.0, accel / envelope))
     else:
         throttle_brake = float(reply.get("throttle", 0.0)) - float(reply.get("brake", 0.0))
     for name, value in (("steering", steer), ("throttle_brake", throttle_brake)):
@@ -463,7 +490,7 @@ class OpenpilotDriver:
 
     def __init__(self, host="127.0.0.1", port=5558, target_speed_mps=10.0,
                  steer_ratio=DEFAULT_STEER_RATIO, offsets=WAYPOINT_OFFSETS_S,
-                 longitudinal="pedal"):
+                 longitudinal="pedal", pedal_map=None):
         self.bridge = BridgeConnection(host, port)
         self.target_speed_mps = float(target_speed_mps)
         self.steer_ratio = float(steer_ratio)
@@ -471,11 +498,31 @@ class OpenpilotDriver:
         if longitudinal not in LONGITUDINAL_MODES:
             raise BridgeError(f"unknown longitudinal mode {longitudinal!r}")
         self.longitudinal = longitudinal
+        # A path, an already-loaded PedalMap, or None. Loaded here rather than in the server
+        # so that a bad table is refused at construction rather than on the first step of a
+        # drive that has already built a map and opened a window.
+        # Re-raised as a BridgeError so that everything this module can fail with is one
+        # type: `examples/openpilot_server.py` and `tools/drive.py` both catch that already,
+        # and a second exception class would reach them as a traceback.
+        if isinstance(pedal_map, str):
+            try:
+                pedal_map = PedalMap.load(pedal_map)
+            except PedalMapError as error:
+                raise BridgeError(str(error)) from error
+        if longitudinal == "table" and pedal_map is None:
+            raise BridgeError(
+                "--longitudinal table needs a pedal map. Measure one with:\n"
+                "    ./scripts/pedal-sweep.sh junction-1"
+            )
+        self.pedal_map = pedal_map
         self.max_steering_deg = 40.0
         self.wheelbase_m = 2.5
         self.step_seconds = None
         self.last_action = [0.0, 0.0]
         self.last_reply = {}
+        # The speed the last action was chosen at. Only `table` reads it while driving; it is
+        # kept for every mode so a telemetry line means the same thing whichever was used.
+        self.last_v_ego = 0.0
         self.notes = []
 
     def spec(self, payload):
@@ -504,6 +551,11 @@ class OpenpilotDriver:
         self.max_steering_deg = float(vehicle.get("max_steering_deg", self.max_steering_deg))
         self.wheelbase_m = float(vehicle.get("wheelbase_m", self.wheelbase_m))
         self.last_action = [0.0, 0.0]
+        # Once an episode, not once a step: the forces are sampled when the vehicle is built
+        # (`pg_space.py:239-240`) and do not move while it drives. `/episode` is the first
+        # message that has a car to describe at all - `/spec` is sent before `env.reset()`.
+        if self.pedal_map is not None:
+            self.notes = list(self.pedal_map.vehicle_notes(vehicle))
         return self.bridge.connect(
             max_steer_angle=self.max_steering_deg,
             steer_ratio=self.steer_ratio,
@@ -529,8 +581,11 @@ class OpenpilotDriver:
             "target_speed": self.target_speed_mps,
             "creep_state": "idle",
         }
+        self.last_v_ego = state["v_ego"]
         self.last_reply = self.bridge.step(payload)
-        self.last_action = to_metadrive_action(self.last_reply, self.longitudinal)
+        self.last_action = to_metadrive_action(
+            self.last_reply, self.longitudinal, state["v_ego"], self.pedal_map
+        )
         return self.last_action
 
     def close(self):

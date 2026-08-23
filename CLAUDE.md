@@ -1391,6 +1391,7 @@ sign-correct the bridge completes **`junction-1` 0.950 and `mosque` 0.950**, the
 the stub reaches.
 
 **The longitudinal fit is not usable, and `--longitudinal` is which of two wrongs to take.**
+*(Superseded by `--longitudinal table`, below — the two wrongs both remain, and this is why.)*
 `accel_map.accel_to_carla` returns throttle whenever `accel_cmd >= coast_accel(v_ego)`, and
 `coast_accel` is the CARLA Tesla M3's *measured zero-throttle deceleration* — **−1.582 m/s² above
 10 m/s**, −1.150 at 5, −1.377 at 3.5. MetaDrive's vehicle does not coast down anywhere near that
@@ -1436,6 +1437,90 @@ Three things not to re-derive:
 `SensorPack` re-reads the projection lazily. It does now. And **`--policy-sensors` overrides row 3's
 `read` list rather than ROWS being edited**: what a hosted model is sent is the model's business,
 and changing the row definition would make every CSV taken under it mean something else.
+
+### The pedals are measured on MetaDrive's own car now (2026-08-23)
+
+Stage 9 Phase 0, `docs/implementation-plan/stage-9-a-model-at-the-wheel.md`.
+`tools/pedal_sweep.py` measures the table, `tools/pedal_map.py` inverts it,
+`calibration/metadrive-pedal-map.json` is the file, `--longitudinal table` is the third mode.
+The fork is never touched — the reply already carries `accel_cmd` in m/s², so the conversion
+is entirely on our side.
+
+```bash
+cd scripts && ./pedal-sweep.sh junction-1        # ~9 s, no GPU, no display
+uv run python examples/openpilot_server.py --backend bridge --longitudinal table --port 8642
+```
+
+**MetaDrive has no aerodynamic term at all**, which is the whole reason the CARLA table is
+wrong here rather than merely imprecise. `_apply_throttle_brake` (`base_vehicle.py:493-520`)
+applies a constant `setBrake(2.0)` to all four wheels *even under throttle* and nothing else
+resists, so the car coasts at a **flat −0.364 m/s² at every speed** — a quarter of the −1.582
+the bridge assumes. Above `max_speed_km_h` (80, so 22.22 m/s) engine force is cut to zero,
+which is the one place the table's speed axis earns its keep; everywhere else the response is
+speed-independent to within 6%. And **`max_engine_force` / `max_brake_force` are sampled**,
+not constants — `BoxSpace(750, 850)` / `BoxSpace(80, 180)` at `pg_space.py:239-240` — measured
+**759.464 / 89.464** identically on both extracts at both rates, because the parameter seed is
+the scenario index and each of our datasets holds one scenario. The file records them and
+every episode checks the live car against them.
+
+**The sweep visits speeds; it must not let the pedal choose them.** Holding one pedal and
+letting the car sweep the range is the obvious shape and the flat coast kills it: near the
+pedal that cancels the coast (+0.036) the car would take **440 s and 4.9 km** to cross the
+range, and the pedals either side never leave the end they start at. So the car is trimmed
+*to* 23 speeds and all 41 pedals are probed at each — 2,829 steps, nine seconds.
+`BulletPlaneShape(Vec3(0, 0, 1), 0)` (`terrain.py:179`) is **infinite**, so driving straight
+for kilometres is fine and `map_region_size` never bounds it.
+
+Measured against the real bridge, both extracts, `--step-hz 100 --decision-hz 20`. "hard
+decels" are requests below the coast (`accel_cmd < −0.5`), where the sign is not in dispute;
+"delivers" is the median `|produced − requested|` over every call:
+
+| | calls | hard decels | answered with throttle | delivers | outcome |
+|---|---|---|---|---|---|
+| `junction-1` `pedal` | 262 | 153 | **89 (58%)** | 1.371 m/s² | out_of_road, 0.529 |
+| `junction-1` `accel` | 1746 | 8 | 0 (0%) | 0.308 m/s² | arrived, 0.950 |
+| `junction-1` `table` | 1559 | 195 | **0 (0%)** | **0.000 m/s²** | out_of_road, 0.815 |
+| `mosque` `pedal` | 2427 | 2387 | **2158 (90%)** | 1.170 m/s² | arrived, 0.950 |
+| `mosque` `accel` | 2836 | 1 | 0 (0%) | 0.362 m/s² | arrived, 0.950 |
+| `mosque` `table` | 2498 | 85 | **0 (0%)** | **0.000 m/s²** | arrived, 0.950 |
+
+Six things not to re-derive:
+
+- **A pedal table does not fix the speed undershoot, and this was measured rather than
+  hoped.** The mean speed barely moves — `junction-1` 4.41 → 4.19 m/s, `mosque` 3.06 → 3.47,
+  against a 10 m/s target — because **the bridge is not asking to accelerate**: median
+  `accel_cmd` −0.30 m/s², only 159 of 1559 calls positive. The target reaches it correctly
+  (`v_cruise_kph` 36.0) and **doubling it makes the bridge brake harder**: at
+  `--target-speed-mps 20` the cruise reads 72.0 and the median request falls to **−2.003**,
+  with the car nearly stopped. So it is the longitudinal *plan*, upstream of any pedal
+  conversion, exactly where the constant-speed `waypoints_from_route` above says it would be.
+  That is the model's half.
+- **A braking step that ends at zero is not a measurement of the brake**, and it is the one
+  fault this sweep has. At 11.2 m/s² a 10 Hz step loses 1.12 m/s, so from 1 m/s the car
+  reaches zero *inside* the step and the average reads −3.18 rather than −11.19. Before
+  `TRUNCATION_FLOOR_MPS` existed that artefact alone put 60 cells out of order by up to
+  0.90 m/s² and made the bottom four rows describe a car that cannot brake. A step is kept
+  only when it ends above the floor **or** ends faster than it started — the second being a
+  car pulling away from rest, which is the only real measurement the 0 m/s row can hold.
+- **The bottom rows are filled, not measured, and the file says which.** 45 of 943 cells,
+  none above 1.0 m/s, take the nearest measured speed; `sample_counts` is 0 for exactly
+  those. A stationary car cannot be measured braking at all.
+- **The crossover is +0.036 pedal, not 0.** That is the throttle that cancels the coast, and
+  it is why a request between −0.364 and 0 correctly comes back as a *touch of throttle*. A
+  naive "did a deceleration request produce throttle?" count therefore reads 67% against the
+  table and means nothing — the honest test is requests **below** the coast, and the direct
+  test is whether the chosen pedal delivers what was asked.
+- **`--longitudinal` keeps all three.** `pedal` is what the bridge emits and what a CARLA
+  consumer gets, so it must stay reproducible; `accel` is the sign-correct fallback where no
+  table has been measured; only `table` is a calibration. `--backend stub` answers in pedals
+  and carries no `accel_cmd`, so it refuses both of the others by name.
+- **`--log-telemetry` now writes `v_ego_mps` and `metadrive_action`** beside the bridge's
+  forty reply fields, because none of the above can be answered from the reply alone. The
+  reply stays at the top level so an existing grep still works.
+
+`junction-1` `table` ends `out_of_road` at −4.01 m lateral where `accel` arrives at 0.950.
+Both steer through identical code, so the difference is where along the route the car is when
+the lateral error accumulates. **Not diagnosed.**
 
 ### Other cars are placed by this repo and driven by MetaDrive (2026-08-22)
 

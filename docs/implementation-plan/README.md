@@ -538,5 +538,7 @@ are not: two-point lane polylines load (MetaDrive skips a lane only at
   and scenario timelines are intentionally deferred. Traffic-light cycles arrived
   with `convert --signals`; the rest is picked up, as plans and not yet as code,
   in `stage-7-an-agent-at-the-wheel.md` (the ego driven by a keyboard and then by
-  a model) and `stage-8-live-traffic.md` (other vehicles on the road). Both sit
-  entirely downstream of a finished Stage 6 dataset.
+  a model), `stage-8-live-traffic.md` (other vehicles on the road) and
+  `stage-9-a-model-at-the-wheel.md` (cameras to a real model, and the model's
+  waypoints to openpilot's controller). All three sit entirely downstream of a
+  finished Stage 6 dataset, and none depends on the others.

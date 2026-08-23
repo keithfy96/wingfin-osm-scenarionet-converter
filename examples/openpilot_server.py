@@ -48,6 +48,7 @@ from openpilot_policy import (  # noqa: E402
     OpenpilotDriver,
     StubBridge,
 )
+from pedal_map import DEFAULT_PEDAL_MAP  # noqa: E402
 
 
 def build_handler(driver, telemetry):
@@ -101,7 +102,16 @@ def build_handler(driver, telemetry):
                         payload.get("observation"), payload.get("sensors") or {}, None
                     )
                     if telemetry is not None:
-                        telemetry.write(json.dumps(driver.last_reply) + "\n")
+                        # The bridge's own reply at the top level, so a grep for one of its
+                        # forty fields still works, plus the two things only this side knows:
+                        # the speed the pedal was chosen at and the pedal that was chosen.
+                        # Without them "how often did a request to slow down come back as
+                        # throttle" cannot be answered from the log, and that question is the
+                        # whole reason --longitudinal has three values.
+                        record = dict(driver.last_reply)
+                        record["v_ego_mps"] = driver.last_v_ego
+                        record["metadrive_action"] = [float(action[0]), float(action[1])]
+                        telemetry.write(json.dumps(record) + "\n")
                     self._reply({"action": [float(action[0]), float(action[1])]})
                     return
             except BridgeError as error:
@@ -150,16 +160,26 @@ def main() -> int:
         "--longitudinal",
         default="pedal",
         choices=list(LONGITUDINAL_MODES),
-        help="`pedal` takes the bridge's own throttle/brake, which come from a CARLA pedal "
-        "map whose zero crossing is near -1.6 m/s2 - so a gentle-braking request arrives "
-        "here as a fifth of full throttle. `accel` normalises `accel_cmd` instead: not "
-        "calibrated either, but sign-correct. Only `pedal` works against --backend stub.",
+        help="`table` looks `accel_cmd` up in a pedal map measured on MetaDrive's own car by "
+        "tools/pedal_sweep.py, and is the only one of the three that is a calibration. "
+        "`pedal` takes the bridge's own throttle/brake, which come from a CARLA pedal map "
+        "whose zero crossing is near -1.6 m/s2 - so a gentle-braking request arrives here as "
+        "a fifth of full throttle. `accel` normalises `accel_cmd` by the Tesla envelope: not "
+        "calibrated either, but sign-correct. Only `pedal` works against --backend stub, "
+        "which answers in pedals and carries no accel_cmd.",
+    )
+    parser.add_argument(
+        "--pedal-map",
+        default=DEFAULT_PEDAL_MAP,
+        help=f"--longitudinal table: the measured table (default: {DEFAULT_PEDAL_MAP}). "
+        "Read only in that mode, so the other two need no file.",
     )
     parser.add_argument(
         "--log-telemetry",
         default=None,
-        help="Write the bridge's whole reply, one JSON object per step, to this .jsonl. About "
-        "forty diagnostic fields covering the MPC solution and the longitudinal state.",
+        help="Write one JSON object per step to this .jsonl: the bridge's whole reply - about "
+        "forty diagnostic fields covering the MPC solution and the longitudinal state - plus "
+        "`v_ego_mps` and the `metadrive_action` this side turned it into.",
     )
     arguments = parser.parse_args()
 
@@ -175,13 +195,28 @@ def main() -> int:
         bridge_port = int(port_text)
         print(f"backend      openpilot bridge at {bridge_host}:{bridge_port}", flush=True)
 
-    driver = OpenpilotDriver(
-        bridge_host,
-        bridge_port,
-        target_speed_mps=arguments.target_speed_mps,
-        steer_ratio=arguments.steer_ratio,
-        longitudinal=arguments.longitudinal,
-    )
+    try:
+        driver = OpenpilotDriver(
+            bridge_host,
+            bridge_port,
+            target_speed_mps=arguments.target_speed_mps,
+            steer_ratio=arguments.steer_ratio,
+            longitudinal=arguments.longitudinal,
+            # Only in `table` mode, so a missing file is not an error for the other two - and
+            # the default path means `--longitudinal table` alone is enough once swept.
+            pedal_map=(
+                arguments.pedal_map if arguments.longitudinal == "table" else None
+            ),
+        )
+    except BridgeError as error:
+        # Before the socket is bound, so a bad table stops here rather than on the first step
+        # of a drive that has already built a map.
+        print(f"error        {error}", flush=True)
+        if stub is not None:
+            stub.close()
+        return 2
+    if driver.pedal_map is not None:
+        print(f"pedal map    {driver.pedal_map.summary()}", flush=True)
     # Held open for the life of the server and closed in `finally`; a context manager here
     # would have to wrap `serve_forever`, which is the rest of the function.
     telemetry = (
