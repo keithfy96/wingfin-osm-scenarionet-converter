@@ -43,6 +43,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.p
 
 from openpilot_policy import (  # noqa: E402
     DEFAULT_STEER_RATIO,
+    LONGITUDINAL_MODES,
     BridgeError,
     OpenpilotDriver,
     StubBridge,
@@ -146,6 +147,15 @@ def main() -> int:
         "init says. A mismatch mis-reports the wheel angle rather than changing the output.",
     )
     parser.add_argument(
+        "--longitudinal",
+        default="pedal",
+        choices=list(LONGITUDINAL_MODES),
+        help="`pedal` takes the bridge's own throttle/brake, which come from a CARLA pedal "
+        "map whose zero crossing is near -1.6 m/s2 - so a gentle-braking request arrives "
+        "here as a fifth of full throttle. `accel` normalises `accel_cmd` instead: not "
+        "calibrated either, but sign-correct. Only `pedal` works against --backend stub.",
+    )
+    parser.add_argument(
         "--log-telemetry",
         default=None,
         help="Write the bridge's whole reply, one JSON object per step, to this .jsonl. About "
@@ -170,6 +180,7 @@ def main() -> int:
         bridge_port,
         target_speed_mps=arguments.target_speed_mps,
         steer_ratio=arguments.steer_ratio,
+        longitudinal=arguments.longitudinal,
     )
     # Held open for the life of the server and closed in `finally`; a context manager here
     # would have to wrap `serve_forever`, which is the rest of the function.

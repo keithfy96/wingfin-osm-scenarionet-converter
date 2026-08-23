@@ -179,6 +179,46 @@ def test_the_reply_is_negated_and_the_two_pedals_become_one_signed_number():
     assert braking[1] == pytest.approx(-0.6)
 
 
+def test_accel_mode_takes_the_acceleration_and_ignores_the_two_pedals():
+    """The pedal map answers a request to slow down with throttle, and `accel` is the way
+    past it. Measured on a real `junction-1` drive: 68% of the decelerations the planner
+    asked for came back as throttle, because `accel_to_carla` throttles whenever the request
+    is gentler than `coast_accel(v_ego)` - the CARLA Tesla M3's own zero-throttle
+    deceleration, -1.582 m/s2 above 10 m/s. MetaDrive's vehicle does not coast down that
+    hard, so that crossover is in the wrong place here."""
+    reply = {"type": "control", "steer": 0.0, "throttle": 0.274, "brake": 0.0,
+             "accel_cmd": -1.0}
+    assert to_metadrive_action(reply, "pedal")[1] == pytest.approx(0.274)
+    assert to_metadrive_action(reply, "accel")[1] == pytest.approx(-1.0 / 3.48)
+
+
+def test_accel_mode_normalises_each_direction_by_its_own_end_of_the_envelope():
+    """Braking has more of it than accelerating does (-3.48 against +2.0), so one divisor
+    would make a full-authority brake read as half of one."""
+    up = to_metadrive_action({"steer": 0.0, "accel_cmd": 2.0}, "accel")
+    down = to_metadrive_action({"steer": 0.0, "accel_cmd": -3.48}, "accel")
+    assert up[1] == pytest.approx(1.0)
+    assert down[1] == pytest.approx(-1.0)
+
+
+def test_accel_mode_refuses_a_reply_that_carries_no_acceleration():
+    """The stub answers in pedals only, so this names the mismatch rather than driving on a
+    silently-zero throttle."""
+    with pytest.raises(BridgeError, match="accel_cmd"):
+        to_metadrive_action({"steer": 0.0, "throttle": 0.3, "brake": 0.0}, "accel")
+
+
+def test_accel_mode_refuses_a_nan_the_clip_would_have_turned_into_full_throttle():
+    """`min(1.0, nan)` is 1.0 in Python, so the guard has to come before the clip."""
+    with pytest.raises(BridgeError, match="accel_cmd"):
+        to_metadrive_action({"steer": 0.0, "accel_cmd": float("nan")}, "accel")
+
+
+def test_an_unknown_longitudinal_mode_is_refused():
+    with pytest.raises(BridgeError, match="longitudinal"):
+        to_metadrive_action({"steer": 0.0, "throttle": 0.0, "brake": 0.0}, "pedals")
+
+
 @pytest.mark.parametrize(
     "reply",
     [

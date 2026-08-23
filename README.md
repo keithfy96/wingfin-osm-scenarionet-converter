@@ -453,6 +453,10 @@ then from inside `scripts/`:
 
 ```bash
 ./drive.sh junction-1 -- --traffic live --traffic-count 25 --render 3D
+
+  cd scripts
+  ./drive.sh junction-1 -- --agent-policy idm --traffic live --traffic-count 25 --render 3D
+
 ```
 
 `--count` is a pool of *routes*, not cars; `--traffic-count` is how many cars are on the road

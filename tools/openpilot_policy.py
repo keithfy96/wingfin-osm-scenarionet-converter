@@ -89,6 +89,13 @@ MIN_WAYPOINT_SPEED_MPS = 3.0
 # See the module docstring: the bridge divides by its own `CP.steerRatio` whatever this says.
 DEFAULT_STEER_RATIO = 12.0
 
+# The Tesla envelope the bridge itself plans within (`bridge_constants.py`), used by the
+# `accel` longitudinal mode below to turn an acceleration into MetaDrive's one signed number.
+TESLA_ACCEL_MAX_MPS2 = 2.0
+TESLA_ACCEL_MIN_MPS2 = -3.48
+
+LONGITUDINAL_MODES = ("pedal", "accel")
+
 
 class BridgeError(RuntimeError):
     """The bridge could not be reached, or answered with something undrivable."""
@@ -188,23 +195,59 @@ def ego_state(sensors, steering, max_steering_deg, steer_ratio=DEFAULT_STEER_RAT
     }
 
 
-def to_metadrive_action(reply):
+def to_metadrive_action(reply, longitudinal="pedal"):
     """`{"steer", "throttle", "brake"}` -> `[steering, throttle_brake]`, both in [-1, 1].
 
-    Two conversions and both are the protocol's, not a preference. The steer is negated
-    because the bridge emits CARLA's right-positive normalised value. Throttle and brake are
-    two non-negative numbers there and one signed number here: MetaDrive brakes below zero
-    (`base_vehicle.py:494`), which is why an action in [0, 1] cannot brake at all.
+    The steer is negated because the bridge emits CARLA's right-positive normalised value,
+    and it needs nothing else: `carla_steer_curvature_gain: 0.0` selects a geometric branch
+    whose output is already `road_wheel_deg / max_steer_angle`. Measured against the real
+    bridge - a 124.95 deg column angle came back as steer 0.2603, which is 124.95 / 12 / 40
+    exactly. That half of the fit is right.
+
+    **The longitudinal half is not, and `longitudinal` is which of the two wrongs to take.**
+    MetaDrive wants one signed number, braking below zero (`base_vehicle.py:494`), which is
+    why an action in [0, 1] cannot brake at all.
+
+    * `pedal` is what the bridge emits and what a CARLA consumer uses: `throttle - brake`,
+      produced by `accel_map.accel_to_carla` from two 8x11 tables measured in a "Town10HD
+      calibration sweep on Tesla M3 @ 20 Hz sync". **Its zero crossing is not at zero.**
+      Measured off a real `junction-1` drive: `accel_cmd` -1.91 gives brake 0.042, -1.65
+      gives nothing at all, and **-1.55 gives throttle 0.204**, rising monotonically to 0.43.
+      So every request to slow down gently - the commonest request there is - comes back as
+      a fifth to a half of full throttle. On a route whose trajectory carries no speed intent
+      (`waypoints_from_route` is `route_gt.py`'s constant-speed model, by construction) there
+      is nothing opposing that, and the car ran away from 13.9 to 20.5 m/s and left the road.
+    * `accel` ignores the two pedals and normalises `accel_cmd`, which is in m/s^2 and owes
+      nothing to any vehicle, by the Tesla envelope the bridge itself plans within. **This is
+      not a calibration either** - MetaDrive's `action[1]` is engine force and brake force,
+      not acceleration, so the magnitude is only roughly right. What it is is *sign*-correct
+      and unit-consistent, which on this simulator the pedal map is not.
 
     Refused here rather than at `RemotePolicy._validated`, so a bad number names the bridge
     that produced it instead of the wire that carried it.
     """
+    if longitudinal not in LONGITUDINAL_MODES:
+        raise BridgeError(f"unknown longitudinal mode {longitudinal!r}")
     if not isinstance(reply, dict):
         raise BridgeError(f"the bridge replied with {type(reply).__name__}, not an object")
     if reply.get("type") == "error" or "steer" not in reply:
         raise BridgeError(f"the bridge did not reply with a control: {str(reply)[:200]}")
     steer = -float(reply["steer"])
-    throttle_brake = float(reply.get("throttle", 0.0)) - float(reply.get("brake", 0.0))
+    if longitudinal == "accel":
+        if "accel_cmd" not in reply:
+            raise BridgeError(
+                "--longitudinal accel needs `accel_cmd`, which this reply does not carry. "
+                "The stub answers in pedals only; use --longitudinal pedal with it."
+            )
+        accel = float(reply["accel_cmd"])
+        # Before the clip, not after: `min(1.0, nan)` is 1.0 in Python, so clipping first
+        # would turn a NaN into full throttle rather than into the refusal below.
+        if accel != accel or accel in (float("inf"), float("-inf")):
+            raise BridgeError(f"the bridge returned accel_cmd = {accel}")
+        envelope = TESLA_ACCEL_MAX_MPS2 if accel >= 0.0 else -TESLA_ACCEL_MIN_MPS2
+        throttle_brake = max(-1.0, min(1.0, accel / envelope))
+    else:
+        throttle_brake = float(reply.get("throttle", 0.0)) - float(reply.get("brake", 0.0))
     for name, value in (("steering", steer), ("throttle_brake", throttle_brake)):
         if value != value or value in (float("inf"), float("-inf")):
             raise BridgeError(f"the bridge returned {name} = {value}, which MetaDrive does "
@@ -419,11 +462,15 @@ class OpenpilotDriver:
     """
 
     def __init__(self, host="127.0.0.1", port=5558, target_speed_mps=10.0,
-                 steer_ratio=DEFAULT_STEER_RATIO, offsets=WAYPOINT_OFFSETS_S):
+                 steer_ratio=DEFAULT_STEER_RATIO, offsets=WAYPOINT_OFFSETS_S,
+                 longitudinal="pedal"):
         self.bridge = BridgeConnection(host, port)
         self.target_speed_mps = float(target_speed_mps)
         self.steer_ratio = float(steer_ratio)
         self.offsets = tuple(offsets)
+        if longitudinal not in LONGITUDINAL_MODES:
+            raise BridgeError(f"unknown longitudinal mode {longitudinal!r}")
+        self.longitudinal = longitudinal
         self.max_steering_deg = 40.0
         self.wheelbase_m = 2.5
         self.step_seconds = None
@@ -483,7 +530,7 @@ class OpenpilotDriver:
             "creep_state": "idle",
         }
         self.last_reply = self.bridge.step(payload)
-        self.last_action = to_metadrive_action(self.last_reply)
+        self.last_action = to_metadrive_action(self.last_reply, self.longitudinal)
         return self.last_action
 
     def close(self):

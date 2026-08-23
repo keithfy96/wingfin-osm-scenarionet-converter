@@ -1339,13 +1339,98 @@ Five things not to re-derive, each read off the bridge rather than assumed:
   (see the section above) — better than the `convert --step-hz 20` this used to recommend,
   the control interval being the same 0.05 s with ten times the physics under it. And **`accel_map.py` is CARLA pedal calibration** — two 8×11 tables from a
   "Town10HD calibration sweep on Tesla M3 @ 20 Hz sync" — so longitudinal tracking is wrong here
-  until re-measured. Steering is not, because that path is geometric.
+  until re-measured. Steering is not, because that path is geometric. Both halves are now
+  measured against the real bridge — see the section below, where the pedal map answers a
+  gentle braking request with a fifth of full throttle.
 
-**`--backend stub` is a real socket, not a mock**, and is what proves the frame and the signs
-before there is a fork to blame — the fork is private (`pull.sh` clones `zapetaai/openpilot` with
-private submodules). Measured: `junction-1` **380 steps, arrive_dest=True, completion 0.951** and
-`mosque` **435 / 0.951**, 0.5 ms and 2.5 KB a step, against `--backend constant --steering 1.0`
-leaving the road in 13.
+**`--backend stub` is a real socket, not a mock**, and is what proved the frame and the signs
+before there was a fork to blame. Measured: `junction-1` **380 steps, arrive_dest=True,
+completion 0.951** and `mosque` **435 / 0.951**, 0.5 ms and 2.5 KB a step, against
+`--backend constant --steering 1.0` leaving the road in 13.
+
+### The real bridge drives it, and only the steering half of the fit was right (2026-08-23)
+
+The fork is on this machine now — `/home/keith/Desktop/work/wingfin/wingfin-openpilot-temp/`,
+which is wing-sim's own `openpilot/` tree filled in: `bridge/zapeta/` plus the fork cloned at
+`c767ace8` with its seven submodules. `--backend bridge` had been written against
+`server.py` and never run; it works, and what it measured is worth not re-deriving.
+
+```bash
+docker build -t wing-sim-openpilot:prod \
+  -f /home/keith/Desktop/work/wingfin/wing-sim/docker/Dockerfile.openpilot \
+  /home/keith/Desktop/work/wingfin/wingfin-openpilot-temp/openpilot
+docker run -d --name openpilot-bridge --network host \
+  -e SIMULATION=1 -e NOBOARD=1 -e SKIP_FW_QUERY=1 -e "FINGERPRINT=TESLA MODEL 3" \
+  -e OPENPILOT_TRAJECTORY_TYPE=0 -e BRIDGE_PORT=5558 \
+  -e PYTHONPATH=/opt/bridge:/opt/openpilot:/opt/project/common \
+  -w /opt/project wing-sim-openpilot:prod python3 -m zapeta.server
+uv run python examples/openpilot_server.py --backend bridge --longitudinal accel --port 8642
+# then, from inside scripts/
+./drive.sh junction-1 -- --agent-policy remote --policy-url http://127.0.0.1:8642 \
+    --sensors imu,route --step-hz 100 --decision-hz 20 --render none
+```
+
+**The checkout arrives with every symlink missing, and scons is what tells you.** `git status`
+inside the fork showed ten deletions — `rednose`, `laika`, `tinygrad`, `selfdrive/hardware` and
+six `third_party` entries, all mode 120000 in the index — and the build died on
+`Missing SConscript 'rednose/SConscript'`, which reads as a broken Dockerfile rather than a
+transport that dropped symlinks. `git checkout --` on those paths alone is the repair; the
+`M` entries beside them are the LFS model files `pull.sh` deliberately does not pull, and must
+be left. Docker copies symlinks as symlinks, so nothing else was needed.
+
+**`AV3_MPC_MENU` defaults to `"4 16 20 32"` and `WAYPOINT_OFFSETS_S` is four waypoints**, so the
+acados solver this repo needs is in the prebuilt menu — confirmed in the build log
+(`[prebuild_lat_menu] done N=4`), not assumed. A count outside the menu is code-generated at
+connect time and shows up as a long first tick, not an error.
+
+**The steering fit is exactly right, and that is now measured rather than argued.** A 124.95°
+column angle came back as `steer` 0.2603, which is `124.95 / 12 / 40` to four figures — the
+geometric branch `carla_steer_curvature_gain: 0.0` selects, with `max_steer_angle: 40.0` and the
+bridge's own `CP.steerRatio` cancelling ours. Both negations are right: with the longitudinal made
+sign-correct the bridge completes **`junction-1` 0.950 and `mosque` 0.950**, the same completion
+the stub reaches.
+
+**The longitudinal fit is not usable, and `--longitudinal` is which of two wrongs to take.**
+`accel_map.accel_to_carla` returns throttle whenever `accel_cmd >= coast_accel(v_ego)`, and
+`coast_accel` is the CARLA Tesla M3's *measured zero-throttle deceleration* — **−1.582 m/s² above
+10 m/s**, −1.150 at 5, −1.377 at 3.5. MetaDrive's vehicle does not coast down anywhere near that
+hard, so every request gentler than the M3's own drag comes back as throttle: `accel_cmd` −1.0
+gives **throttle 0.274** at any speed over 10 m/s. Measured over the real drives:
+
+| | decel requests | answered with throttle | v mean | outcome |
+|---|---|---|---|---|
+| `junction-1` `--longitudinal pedal` | 201 | **137 (68%)** | 16.4 m/s | ran away 13.9 → 20.5 m/s, **out_of_road at 4.08 m**, completion 0.529 |
+| `mosque` `--longitudinal pedal` | 2469 | 11 (0%) | 3.5 m/s | arrived, 0.950 |
+| `junction-1` `--longitudinal accel` | — | — | 4.4 m/s | arrived, 0.950 |
+
+**It is speed that decides, not the map**, which is why `mosque` survived and reading one run
+would have got this backwards: `mosque` sat at 3.5 m/s where `coast_accel` is −1.38 and its
+requests averaged −1.42, so they braked. `junction-1` started at 13.9 m/s where coast is −1.58
+and asked for −0.2 to −1.5, all of it above the crossover. **Nothing opposes the resulting
+throttle**, because `waypoints_from_route` is `route_gt.py`'s constant-speed model by
+construction — the trajectory says "I am going as fast as I am going", so in
+`blended_except_creep` the e2e planner reads no intent to slow. That is faithful to wing-sim, not
+a porting error: `route_gt.py` exists "to isolate whether drift is caused by the model or the
+controller", and it is the *model* half that is still missing here.
+
+**`--longitudinal accel` normalises `accel_cmd` by the Tesla envelope the bridge plans within**
+(`TESLA_ACCEL_MAX/MIN`, +2.0 / −3.48, each direction by its own end). **It is not a calibration
+either** — MetaDrive's `action[1]` is engine and brake *force*, not acceleration — and it
+undershoots badly: 4.4 m/s mean against a 10 m/s target, 8726 steps where the stub takes 3788.
+What it is, is sign-correct and unit-consistent, which on this simulator the pedal map is not, and
+it is what makes the steering claim above measurable at all. `pedal` stays the default because it
+is what the bridge emits and what a CARLA consumer gets; `--backend stub` answers in pedals only
+and refuses `accel` by name.
+
+Three things not to re-derive:
+
+- **The container has no clock of its own** — its log stamps came out 8 hours off (UTC against
+  `Asia/Singapore`). Mount `/etc/localtime` if a stamp from it is ever compared with a host one,
+  the same fix `docker/compose` already carries for the step-timing image.
+- **The bridge round trip is 3.5–3.8 ms a call** against the stub's 0.8, on the same 2.5 KB. That
+  is the real MPC solving, and it is small beside `env.step` at 100 Hz.
+- **`v_cruise_kph` arrives correctly** — 36.0 for `--target-speed-mps 10`, so a runaway is never
+  the target failing to reach the bridge.
 
 **`step_timing.drive` did not call `policy.start_episode`**, which was invisible only because
 `SensorPack` re-reads the projection lazily. It does now. And **`--policy-sensors` overrides row 3's
