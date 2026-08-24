@@ -426,8 +426,32 @@ for -0.2 to -1.5, all of it above.
   And **the reference checkout's 3.8 venv has had all three packages installed the whole
   time with `_cuda_enable` False the whole time** (its cupy 12.3.0 fails to import), which
   is why `drive.py` checks `_cuda_enable` itself and refuses by name printing
-  `sys.executable`: MetaDrive's own assert fires later and its hint is "pip install
-  pypiwin32".
+  `sys.executable`. MetaDrive does raise rather than falling back, but late and from one of
+  two places: offscreen `ImageObservation.__init__` (`image_obs.py:57`), which gates on cupy
+  alone and so hints at cupy whichever of the three is missing; under `--render 3D`
+  `BaseCamera.__init__` (`base_camera.py:56`), hinting "pip install pypiwin32".
+
+  **A review afterwards found six defects and two of them were Keith's call.** All six are
+  closed (2026-08-24):
+
+  - **`--render 3D` is now refused**, and the drive was never what failed: 352 of 370 steps,
+    `arrive_dest=True`, completion 0.953, and then `env.close()` raising
+    `cudaErrorInvalidGraphicsContext(219)` from `MainCamera.unregister`
+    (`main_camera.py:585`). MetaDrive's bug, so not patched here. Refused rather than caught
+    because a successful drive exiting non-zero destroys the only thing `drive.py`'s status
+    means, and because the pairing buys nothing until Phase C - at which point catching that
+    one error around `close()` is the way back, should a CUDA-fed model need a window.
+  - **`--record --render offscreen` was broken long before Phase B** and is fixed: the
+    observation is `{"image", "state"}` offscreen and was being ravelled. That is what had
+    left the `to_host` in `ActionRecorder.record` on a path nothing could reach, guarded by
+    an AST test that could not fail. The recorder writes the camera stack now - `images`
+    uint8 with `image_scale`, 84.4 MB for a 352-step `junction-1` drive - and
+    `tests/unit/test_agent_env.py` exercises the copy for real.
+  - Four smaller ones: a false "falls back to the CPU silently" claim (it asserts, from two
+    places, see above); an orphaned comment; the `--image-on-cuda` proof line reading only
+    the observation, so it said "nothing to check" under `--render 3D` where the frame lives
+    in the camera; and the fourth `numpy.asarray` on a frame, in `camera_rig.CameraRig.read`,
+    written down rather than pre-solved because nothing can reach it today.
 
 - [ ] **Phase C - the model in the same process**
 

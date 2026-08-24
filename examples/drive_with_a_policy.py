@@ -160,10 +160,11 @@ def main() -> int:
         if written is None:
             print("recorded     nothing: the drive took no steps")
         else:
-            observations, actions = written
+            observations = written["observations"]
             print(
                 f"recorded     {observations[0]} steps, observations {observations}, "
-                f"actions {actions} -> {arguments.record}"
+                f"actions {written['actions']} -> {arguments.record}"
+                + ("" if not written["images"] else f", images {written['images']} uint8")
             )
     return 0
 

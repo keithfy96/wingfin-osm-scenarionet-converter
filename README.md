@@ -292,8 +292,8 @@ is road-surface detail, because the GL texture ceiling is what caps resolution: 
 8 px/m instead of 4. `drive.py` asks the card rather than assuming, and prints which it got.
 
 **`--image-on-cuda` keeps rendered frames in GPU memory** instead of copying them to the
-host, as CuPy arrays. It needs the opt-in `gpu` dependency group and this repo's own
-interpreter:
+host, as CuPy arrays. It needs `--render offscreen`, the opt-in `gpu` dependency group and
+this repo's own interpreter:
 
 ```bash
 uv sync --group sim --group gpu
@@ -316,6 +316,16 @@ with `cudaErrorUnknown(999)`; `scripts/drive.sh` sets them already. And it needs
 `cuda-python` **below 13**, which the group pins: 13.0 removed the `cuda.cudart` shim
 MetaDrive imports, and without it MetaDrive's gate is off. `drive.py` checks that gate itself
 and refuses by name, printing which interpreter it looked in.
+
+**It is refused with `--render 3D`, and the drive is not what fails.** Measured on
+`junction-1`: 352 of 370 steps, `arrive_dest=True`, completion 0.953 — and then
+`env.close()` raises `cudaErrorInvalidGraphicsContext(219)` out of MetaDrive's own
+`MainCamera.unregister` (`main_camera.py:585`), handing a CUDA graphics resource back against
+a GL context that has already gone. So a successful drive exits non-zero, and the exit status
+is the one thing `drive.py` is for. Watch with `--render 3D` alone; keep frames on the card
+with `--render offscreen --image-on-cuda`. Nothing is lost by the split — the point of holding
+a frame on the card is a model reading the pointer in the same process, which does not need a
+window.
 
 **Lane lines are `--line-width-m`, in metres, default 0.15** — about a real road
 marking. MetaDrive's own thickness is in *pixels*, so its real width moves with the
@@ -634,6 +644,29 @@ right home for it: `workspaces/` is gitignored, so a demonstration set does not 
 It reads the action the car *executed*, not the one it was asked for. Under
 `--agent-policy replay` there is no action at all — that policy places the car directly — so
 every recorded action is `[0, 0]` and the run says so.
+
+**With `--render offscreen` the camera goes in too**, which is what makes the file training
+data rather than a table of numbers. The observation is two different things by render mode:
+with no graphics it is a flat 161-number vector, and offscreen MetaDrive swaps it for
+`{"image", "state"}` — a `(H, W, 3, 3)` camera stack and a **41**-number state with no lidar
+block. Both halves are written, as `observations` and `images`, beside `actions`,
+`episode_starts` and `scenario_ids`:
+
+```bash
+./drive.sh junction-1 -- --render offscreen --sensors camera --record /tmp/drive.npz
+# recorded  352 steps, observations (352, 41), actions (352, 2) -> /tmp/drive.npz (84.4 MB)
+#           images (352, 180, 320, 3, 3) uint8, divide by 255 for the float the car saw
+```
+
+**The images are `uint8` and nothing is lost by it.** MetaDrive hands them over as float32 in
+[0, 1], but the camera renders 8-bit and it is `BaseCamera._format`'s `ret / 255` that made
+the float — so `round(x * 255)` is the inverse, not a quantisation, and the file carries
+`image_scale` to undo it. It is a quarter of the size: 518 KB a step instead of 2.07 MB, 84 MB
+compressed for the 352-step drive above rather than a third of a gigabyte. `--record-no-images`
+keeps the numbers and drops the frames (29 KB for the same drive).
+
+`--record --render offscreen` had never worked before 2026-08-24 — it ravelled the dict and
+died with `TypeError: float() argument must be a string or a real number, not 'dict'`.
 
 ### What a model can actually see
 

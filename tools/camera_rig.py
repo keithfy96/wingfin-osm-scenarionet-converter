@@ -223,6 +223,12 @@ class CameraRig:
         `perceive` is called with no parent node, so it reads the buffer the frame pass has
         already filled rather than re-aiming and re-rendering - which is the whole reason the
         cameras are mounted.
+
+        **`numpy.asarray` here would raise under `image_on_cuda`** - CuPy refuses the implicit
+        copy by design - and it is left as it is because nothing can reach it: only `drive.py`
+        sets that key and it does not use a rig, while the rig's callers (`sensor_survey.py`,
+        `step_timing.py`) never set it. Wiring the flag into either means wrapping this in
+        `gpu_frames.to_host`, which is where that copy is written out.
         """
         import numpy
 

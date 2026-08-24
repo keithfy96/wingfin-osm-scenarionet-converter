@@ -197,9 +197,17 @@ def test_the_observation_is_copied_off_the_card_before_it_is_encoded():
 
 
 def test_the_recorder_is_copied_off_the_card_before_it_is_written():
+    """The subjects are the halves now, not the whole observation.
+
+    `record` splits a `{"image", "state"}` observation before it converts anything, so naming
+    only `observation` would pass vacuously -- there is no longer an `asarray(observation)` to
+    catch. This is the one of the three call sites that is *reachable* from pytest since the
+    recorder learned that dict; `test_agent_env.py` exercises it for real, and this stays as
+    the cheap structural check beside its two siblings.
+    """
     from agent_env import ActionRecorder
 
-    assert _copies_before_asarray(ActionRecorder.record, {"observation"}), (
+    assert _copies_before_asarray(ActionRecorder.record, {"observation", "state", "image"}), (
         "an .npz is host bytes"
     )
 

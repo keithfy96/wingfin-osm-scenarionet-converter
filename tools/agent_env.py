@@ -231,13 +231,52 @@ class ActionRecorder:
       rather than pedals.
 
     `record` is called *after* `env.step`, with the observation that produced the action.
+
+    **The observation is two different shapes and the recorder has to know both.** With no
+    graphics it is a flat 161-number vector. Under `--render offscreen` MetaDrive swaps the
+    observation for `ImageStateObservation`, which returns `{"image", "state"}` -- a
+    `(H, W, C, stack)` camera stack and a **41**-number state with no lidar block at all
+    (`image_obs.py:40`). Ravelling that dict was what made `--record --render offscreen` die
+    with `TypeError: float() argument must be a string or a real number, not 'dict'` until
+    2026-08-24; the image half is kept now, which is the half worth having.
+
+    **The image is stored as uint8 and nothing is lost by it.** `norm_pixel` makes the stack
+    float32 in [0, 1] (`image_obs.py:75-77`), but the camera renders 8-bit and it is
+    `BaseCamera._format`'s `ret / 255` that created the float in the first place
+    (`base_camera.py:208-214`) -- Phase A measured `(v / 255 * 255).round()` returning all 256
+    values exactly. So `round(x * 255)` is the same picture at a quarter of the size: 518 KB a
+    step against 2.07 MB, which on a measured 352-step `junction-1` drive is 182.5 MB of frames
+    rather than 729.9, and **84.4 MB** on disk once `savez_compressed` has had them.
+    `image_scale` goes in the file so a reader gets the float back without guessing.
+
+    **The whole stack is kept, not just the newest frame**, though the older two are the
+    previous steps' frames and look redundant. They are not recoverable: under `--decision-hz`
+    the frame gate returns the stack *unrolled* on a held step (`tools/frame_gate.py`,
+    `image_obs.py:80-88`), so rebuilding a stack from a sequence of newest frames would shift
+    frames the real stack never shifted.
     """
 
-    def __init__(self):
+    def __init__(self, normalised_images=True, store_images=True):
+        """`normalised_images` says the image half is float32 in [0, 1] and may be scaled.
+
+        Decided by the caller because the recorder cannot see the env: `drive.py` reads
+        `norm_pixel` and the image source off the config it built. It matters because a
+        `PointCloudLidar` image source is float32 and **unbounded** (`image_obs.py:73-74`) --
+        metres, not pixels -- and multiplying that by 255 would destroy it exactly as Phase A's
+        `to_float=False` would have.
+
+        `store_images=False` keeps the state half and drops the frames, for a caller that wants
+        a small file. It is the flag, not the default: the frames are the reason an offscreen
+        recording is worth making.
+        """
         self.observations = []
+        self.images = []
         self.actions = []
         self.episode_starts = []
         self.scenario_ids = []
+        self.normalised_images = bool(normalised_images)
+        self.store_images = bool(store_images)
+        self._image_scale = None
 
     def start_episode(self, scenario_id=""):
         self.episode_starts.append(len(self.actions))
@@ -246,13 +285,40 @@ class ActionRecorder:
     def record(self, observation, vehicle):
         import numpy
 
-        # An `.npz` is host bytes. Under `image_on_cuda` the offscreen observation is a CuPy
-        # array and `numpy.asarray` on one raises rather than copying, so the copy is made
-        # here and named -- see `tools/gpu_frames`.
-        self.observations.append(
-            numpy.asarray(to_host(observation), dtype=numpy.float32).ravel()
-        )
+        state = observation
+        image = None
+        if isinstance(observation, dict):
+            state = observation.get("state", ())
+            image = observation.get("image")
+        # An `.npz` is host bytes. Under `image_on_cuda` the offscreen observation's image half
+        # is a CuPy array and `numpy.asarray` on one raises rather than copying, so the copy is
+        # made here and named -- see `tools/gpu_frames`.
+        self.observations.append(numpy.asarray(to_host(state), dtype=numpy.float32).ravel())
+        if image is not None and self.store_images:
+            self.images.append(self._as_uint8(numpy.asarray(to_host(image))))
         self.actions.append(numpy.asarray(vehicle.current_action, dtype=numpy.float32))
+
+    def _as_uint8(self, image):
+        """The frame as 8-bit, or untouched when it is not a normalised picture."""
+        import numpy
+
+        if not self.normalised_images or image.dtype == numpy.uint8:
+            # Already 8-bit: nothing was divided, so nothing has to be multiplied back. That
+            # is `norm_pixel` off, where MetaDrive hands over the render as it came.
+            self._image_scale = 1.0
+            return image
+        self._image_scale = 255.0
+        return numpy.rint(image * 255.0).astype(numpy.uint8)
+
+    @property
+    def image_scale(self):
+        """Divide a stored image by this to get back the float the car was handed.
+
+        What was *applied*, not what was asked for: a caller can pass `normalised_images=True`
+        and then hand over frames that are already 8-bit, and a scale of 255 there would tell
+        a reader to divide a picture that was never multiplied.
+        """
+        return 1.0 if self._image_scale is None else self._image_scale
 
     def __len__(self):
         return len(self.actions)
@@ -263,22 +329,75 @@ class ActionRecorder:
 
         return bool(self.actions) and not numpy.stack(self.actions).any()
 
-    def save(self, path):
-        """Write an `.npz` and return what went into it, or None when nothing was recorded."""
+    def save_arrays(self):
+        """Everything the file will hold, as arrays, or `{}` when nothing was recorded.
+
+        Separate from `save` so the contents can be asserted without a path -- the recorder is
+        the one half of this module pytest can reach, the env being out of its interpreter's
+        reach entirely. **It consumes the frames**: `_stacked_images` drops the list once it has
+        stacked it, so this is a once-per-recorder call, which is how it is used.
+        """
         import numpy
 
         if not self.actions:
+            return {}
+        arrays = {
+            "observations": numpy.stack(self.observations),
+            "actions": numpy.stack(self.actions),
+            "episode_starts": numpy.asarray(self.episode_starts, dtype=numpy.int64),
+            "scenario_ids": numpy.asarray(self.scenario_ids),
+        }
+        images = self._stacked_images()
+        if images is not None:
+            arrays["images"] = images
+            # In the file rather than inferred from the dtype, because uint8 is not proof of
+            # a scale -- a camera whose `norm_pixel` is off is uint8 and already unscaled.
+            arrays["image_scale"] = numpy.asarray(self.image_scale, dtype=numpy.float32)
+        return arrays
+
+    def save(self, path):
+        """Write an `.npz` and return the shapes that went into it, or None if nothing did.
+
+        Returns a dict rather than the old `(observations, actions)` pair, because there is a
+        third array now and a silently-lengthened tuple is how a caller ends up printing the
+        wrong one.
+        """
+        import numpy
+
+        arrays = self.save_arrays()
+        if not arrays:
             return None
-        observations = numpy.stack(self.observations)
-        actions = numpy.stack(self.actions)
         directory = os.path.dirname(os.path.abspath(path))
         if directory:
             os.makedirs(directory, exist_ok=True)
-        numpy.savez_compressed(
-            path,
-            observations=observations,
-            actions=actions,
-            episode_starts=numpy.asarray(self.episode_starts, dtype=numpy.int64),
-            scenario_ids=numpy.asarray(self.scenario_ids),
-        )
-        return observations.shape, actions.shape
+        numpy.savez_compressed(path, **arrays)
+        images = arrays.get("images")
+        return {
+            "observations": arrays["observations"].shape,
+            "actions": arrays["actions"].shape,
+            "images": None if images is None else images.shape,
+            "image_scale": self.image_scale,
+        }
+
+    def _stacked_images(self):
+        """One array of every frame, and the list dropped before anything compresses it.
+
+        **The frames are unavoidably held twice**, and that was measured before it was
+        accepted. Filling a pre-allocated `numpy.empty` frame by frame and freeing each as it
+        is copied -- which is what this was, for an afternoon -- gives exactly the same peak,
+        because the destination is allocated whole before the first frame can be dropped:
+        348.1 MB against 348.2 over 352 `junction-1` frames. No saving at all, so the loop
+        that looked like one is not here.
+
+        Releasing the list before `savez_compressed` runs **is** worth something, and only a
+        little: 348.1 MB against 364.4 across the whole build-stack-compress span, 16 MB of
+        364, because `savez_compressed` streams in chunks rather than building a second copy.
+        Hence two lines rather than fifteen.
+        """
+        import numpy
+
+        if not self.images:
+            return None
+        stacked = numpy.stack(self.images)
+        self.images = []
+        return stacked

@@ -977,14 +977,107 @@ Eight things not to re-derive:
   which has no `gpu` group. `tests/unit/test_gpu_frames.py` pins all three call sites and the
   two version caps by AST and by reading `pyproject.toml`; all six guards were shown to fail
   against the pre-Phase-B code before being kept.
+- **There is a fourth such `asarray` and it is deliberately left alone.**
+  `camera_rig.CameraRig.read` would raise the moment `image_on_cuda` reached it, and cannot
+  today: only `drive.py` sets the key and it does not use a rig, while the rig's callers
+  (`sensor_survey.py`, `step_timing.py`) never set it. Wiring `--image-on-cuda` into the sweep
+  means wrapping that one line in `gpu_frames.to_host`. Said in both docstrings rather than
+  pre-solved, so it is not a `to_host` on a path no test can reach -- which is what the
+  `ActionRecorder` call site was until the recorder learned to split an offscreen observation
+  (see below), and is the one thing to check before adding a fourth.
+- **`--render 3D` is refused, and the drive is not what fails.** Measured on `junction-1`:
+  352 of 370 steps, `arrive_dest=True`, completion 0.953, and then `env.close()` raises
+  `cudaErrorInvalidGraphicsContext(219)` from `MainCamera.unregister` (`main_camera.py:585`,
+  via `base_engine.py:529`) -- a CUDA graphics resource handed back against a GL context that
+  has already gone. MetaDrive's bug, so not patched here; refused rather than caught because
+  the pairing buys nothing today (the point of a frame on the card is a model reading the
+  pointer in this process, and 3D is for a person to watch) and because a successful drive
+  exiting non-zero destroys the one thing `drive.py`'s status means. Catching that single
+  error around `close()` is the other way, and is what Phase C would want if it ever needs to
+  watch a CUDA-fed model in a window.
+- **A recording made with the flag is the same picture and not the same bytes, and the control
+  is what says so.** Two CPU-path recordings of the same drive are **bit-identical** -- 100%,
+  because `ImageObservation.observe` reads the buffer with no parent node and so forces no
+  second render, which is what made Phase A's RGB jitter appear here and it does not. Against
+  the CUDA path: **35.80% of pixels identical, median difference 1/255, 89.33% within 8/255,
+  99th percentile 49, mean level 150.626 against 150.619**. No whole-pixel shift improves the
+  match, so it is not misalignment; it is the sub-pixel MSAA resolve already recorded above,
+  measured on RGB rather than on the semantic camera, where continuous tone spreads it across
+  far more pixels for the same magnitude.
+- **The proof line has to read the camera as well as the observation**, because the render mode
+  decides which one holds the frame: offscreen the observation *is* the CuPy stack, while under
+  `--render 3D` it is 161 floats and the frame exists only inside a registered camera. Reading
+  the observation alone printed "no image observation to check" in exactly the mode a reader
+  most wants the proof. `drive._cuda_frame_report` falls through to `_first_camera` and
+  `perceive(to_float=False)` with no parent node, which copies the buffer the frame pass has
+  already filled rather than forcing a second render.
 
 **The 3.8 venv has had all three packages installed the whole time and the gate has been shut
 the whole time.** `/home/keith/Desktop/work/wingfin/metadrive/.venv` holds cupy-cuda12x 12.3.0,
 cuda-python 12.1.0 and PyOpenGL 3.1.6, and `_cuda_enable` is **False** there because that CuPy
-fails to import. Nothing says so. That is why `drive.py` checks `_cuda_enable` itself and
-refuses by name, printing `sys.executable`: MetaDrive's own assert fires later and its hint is
-"pip install pypiwin32". The `gpu` group is installed into **this repo's** 3.10 venv beside
-`sim`, so `scripts/drive.sh` needs `METADRIVE_PYTHON` pointed at it.
+fails to import. Nothing says so at import time. **MetaDrive does raise rather than falling
+back** -- but late, minutes into a terrain build, and from one of two places whose hints both
+point elsewhere: offscreen it is `ImageObservation.__init__` (`image_obs.py:57`), which gates on
+**cupy alone** and so names cupy even when what is missing is PyOpenGL or cuda-python; under
+`--render 3D` no image observation is built and it is `BaseCamera.__init__`
+(`base_camera.py:56`), hinting "pip install pypiwin32" on a Linux box. That is why `drive.py`
+checks `_cuda_enable` itself and refuses first, printing `sys.executable`. The `gpu` group is
+installed into **this repo's** 3.10 venv beside `sim`, so `scripts/drive.sh` needs
+`METADRIVE_PYTHON` pointed at it.
+
+### A recording carries the pictures now, and the observation is two shapes (2026-08-24)
+
+`--record --render offscreen` had **never worked**. `ActionRecorder.record` did
+`numpy.asarray(observation, dtype=float32).ravel()`, and offscreen the observation is not an
+array: MetaDrive swaps in `ImageStateObservation`, which returns `{"image", "state"}` -- a
+`(H, W, 3, 3)` camera stack and a **41**-number state with no lidar block (`image_obs.py:40`).
+It died with `TypeError: float() argument must be a string or a real number, not 'dict'`. That
+predates Phase B by a long way, and its cost was not only the crash: the `to_host` Phase B put
+in that method sat on a path nothing could reach, **guarded by an AST test that could not
+fail**. Counting a green test as coverage is the same mistake as counting refusals as faults.
+
+`record` splits the dict now, `save` writes `images` and `image_scale` beside `observations`
+and `actions`, and `--record-no-images` drops the frames for anyone who wants the numbers
+alone. Measured on `junction-1`, 352-step replay: `observations (352, 41)`, `images
+(352, 180, 320, 3, 3) uint8`, **84.4 MB** on disk, against **29 KB** with the frames dropped.
+
+Six things not to re-derive:
+
+- **uint8 is the inverse of what made the float, not a quantisation.** `norm_pixel` makes the
+  stack float32 in [0, 1] (`image_obs.py:75-77`), but the camera renders 8-bit and it is
+  `BaseCamera._format`'s `ret / 255` that created the float -- Phase A's finding, one bus
+  earlier. `round(x * 255)` returns all 256 values exactly, pinned by a test over the whole
+  range. It is a quarter of the size: 518 KB a step against 2.07 MB, ~151 MB raw for a
+  291-step drive rather than ~603.
+- **`image_scale` goes in the file rather than being inferred from the dtype**, because uint8
+  is not proof of a scale: a camera with `norm_pixel` off is uint8 and already unscaled.
+- **A `PointCloudLidar` image source must not be scaled**, and `issubclass(cls, BaseCamera)`
+  will not catch it -- it subclasses `DepthCamera`. `image_obs.py:73-74` gives it
+  `Box(-inf, inf)` whatever `norm_pixel` says, and a real drive runs -18476.9 to +11030.2 m.
+  `drive._images_are_normalised` asks for it **by name**, off the env config, and hands the
+  answer to the recorder, which cannot see an env.
+- **The whole 3-frame stack is kept, and the older two are not redundant.** They look like the
+  previous steps' frames and are not recoverable as such: under `--decision-hz` the frame gate
+  returns the stack *unrolled* on a held step, so rebuilding from a sequence of newest frames
+  would shift frames the real stack never shifted.
+- **Freeing the frames before compression is worth 16 MB of 364, and the version that looked
+  like a halving was worth nothing.** Filling a pre-allocated `numpy.empty` and dropping each
+  frame as it is copied gives **348.1 MB against 348.2** for `numpy.stack` -- the destination
+  is allocated whole before the first frame can go. What does help is dropping the list before
+  `savez_compressed` runs: 348.1 against 364.4 across the whole span, because `savez_compressed`
+  streams in chunks. Two lines, not fifteen. And none of it shows in the process: peak RSS is
+  **2.92 GB with the recording against 2.91 without**, the terrain build being the real peak.
+- **`save` returns a dict, not the old `(observations, actions)` pair.** There is a third array
+  now and a silently-lengthened tuple is how a caller prints the wrong one; both callers
+  (`drive.py`, `examples/drive_with_a_policy.py`) were updated. The **`actions` key may not
+  move** -- `examples/policy_server.py:134` is `numpy.load(path)["actions"]` and is the only
+  reader of these files anywhere.
+
+`tests/unit/test_agent_env.py` is new and is the first thing in this repo to exercise the
+recorder rather than read its source. Both of its load-bearing guards were shown to fail
+against the old `record` before being kept, and its CuPy stand-in **raises** on
+`numpy.asarray` as the real thing does -- without that it is quietly accepted as a 0-d object
+array and the guard passes on a shape mismatch instead of on the fault it is written for.
 
 ### The rate is `--step-hz`, and there are two clocks, not one (2026-08-19)
 

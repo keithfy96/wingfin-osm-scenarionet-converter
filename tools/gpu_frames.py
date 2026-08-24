@@ -15,6 +15,15 @@ once, where it can be named in a comment rather than discovered in a traceback.
 frame is rendered into GPU memory, copied back, base64'd and posted; against the CPU path it
 has done strictly more work. `image_on_cuda` pays in Phase C, where the model is in the same
 process and reads `__cuda_array_interface__` without the frame ever leaving the card.
+
+**There is a fourth `numpy.asarray` on a frame and it is deliberately not converted.**
+`camera_rig.CameraRig.read` builds `{name: numpy.asarray(sensor.perceive(to_float))}`, which
+would raise the moment `image_on_cuda` reached it. It cannot today: only `drive.py` sets the
+key, and the rig's two callers are `sensor_survey.py` and `step_timing.py`, neither of which
+does. Converting it would put a `to_host` on a path no test can reach and no drive can
+exercise. The `ActionRecorder` call site was in exactly that state until the recorder learned
+to split an offscreen observation; it is live and tested now, and this one is not. Named here
+so the next person who wires `--image-on-cuda` into the sweep knows it is one line, and where.
 """
 
 from __future__ import annotations

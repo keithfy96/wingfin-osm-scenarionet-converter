@@ -485,6 +485,85 @@ def _keep_line_ends() -> None:
     scenario_block.resample_polyline = to_the_end
 
 
+def _images_are_normalised(env) -> bool:
+    """True when the observation's image half is float32 in [0, 1] and may be stored as 8-bit.
+
+    `norm_pixel` decides it for a camera (`image_obs.py:75-77`), and the round trip through
+    uint8 is exact because the camera rendered 8-bit in the first place. But a
+    `PointCloudLidar` image source is float32 and **unbounded** whatever `norm_pixel` says
+    (`image_obs.py:73-74`) -- metres, not pixels -- so it is asked about by name rather than by
+    `issubclass(cls, BaseCamera)`, which it would pass (it subclasses `DepthCamera`).
+    """
+    from metadrive.component.sensors.point_cloud_lidar import PointCloudLidar
+
+    if not env.config.get("norm_pixel", True):
+        return False
+    source = env.config.get("vehicle_config", {}).get("image_source")
+    entry = env.config.get("sensors", {}).get(source)
+    return not (entry and entry[0] is PointCloudLidar)
+
+
+def _first_camera(engine):
+    """The first registered `BaseCamera`, as `(name, sensor)`, or `None`.
+
+    `MainCamera` is deliberately not eligible: it is a `BaseSensor` rather than a
+    `BaseCamera` and its `perceive` takes a different signature, so reading it here would
+    be a second code path for one line of output. Imported inside the function because
+    everything in `tools/` has to keep importing in an environment with no MetaDrive.
+    """
+    from metadrive.component.sensors.base_camera import BaseCamera
+
+    sensors = getattr(engine, "sensors", None) or {}
+    for name in sorted(sensors):
+        if isinstance(sensors[name], BaseCamera):
+            return name, sensors[name]
+    return None
+
+
+def _cuda_frame_report(observation, engine) -> str:
+    """One line saying whether a rendered frame really is on the card, read off the frame.
+
+    Never off the flag: a device array carries `__cuda_array_interface__` and no
+    `__array_interface__`, so a switch that did nothing shows up here as `numpy.ndarray`
+    rather than as the thing that was asked for.
+
+    **Two places to look, because the render mode decides which one holds the frame.**
+    Offscreen the observation *is* the 3-frame camera stack and `image_obs.py:55-65` makes
+    it a CuPy array. Under `--render 3D` the observation is 161 floats and the frame exists
+    only inside a registered camera -- so a version of this that reads the observation alone
+    prints "nothing to check" in exactly the mode a reader most wants the proof, which is
+    what it did until 2026-08-24.
+    """
+    from gpu_frames import is_device_array
+
+    frame = observation.get("image") if isinstance(observation, dict) else None
+    source = "observation"
+    if frame is None:
+        found = _first_camera(engine)
+        if found is None:
+            return "frames       no image observation and no camera registered to check"
+        source = f"camera {found[0]}"
+        try:
+            # No parent node: this copies the buffer the frame pass has already filled
+            # rather than forcing a second scene render (`base_camera.py:188`).
+            frame = found[1].perceive(to_float=False)
+        except Exception as error:  # noqa: BLE001 - reported, never fatal to a drive
+            return f"frames       {source} could not be read: {type(error).__name__}: {error}"
+    if is_device_array(frame):
+        pointer = frame.__cuda_array_interface__["data"][0]
+        return "frames       on the GPU, from the {}: {} {} {}, device pointer {}".format(
+            source,
+            type(frame).__module__ + "." + type(frame).__name__,
+            tuple(frame.shape),
+            frame.dtype,
+            hex(pointer),
+        )
+    return (
+        f"frames       --image-on-cuda was asked for and the {source} is "
+        f"{type(frame).__name__} in host memory"
+    )
+
+
 def _ground_around(engine, path, radius_m=25):
     """How high the visible ground stands beside the car, over the whole drive.
 
@@ -672,6 +751,14 @@ def main() -> int:
         "is [0, 0]: that policy sets the car's position directly and never acts.",
     )
     parser.add_argument(
+        "--record-no-images",
+        action="store_true",
+        help="With --record --render offscreen, keep only the 41-number state half and write "
+        "no `images` array. The camera stack is 518 KB a step: measured on a 352-step "
+        "junction-1 drive, 84.4 MB on disk with the frames against 29 KB without. No effect "
+        "under --render none or 3D, where the observation carries no image to drop.",
+    )
+    parser.add_argument(
         "--lights",
         default="tape",
         choices=["tape", "live"],
@@ -689,11 +776,13 @@ def main() -> int:
         "--image-on-cuda",
         action="store_true",
         help="Keep rendered camera frames in GPU memory as CuPy arrays instead of copying "
-        "them to the host. Needs `uv sync --group gpu`; MetaDrive asserts at env "
-        "construction when the three packages behind `_cuda_enable` are not importable, so a "
-        "missing install is loud rather than a silent fall back to the CPU. Worth nothing "
-        "over a socket -- the wire needs host bytes, so the frame is copied back anyway -- "
-        "and worth everything to a model in this same process, which reads the pointer.",
+        "them to the host. Needs --render offscreen and `uv sync --group gpu`; MetaDrive "
+        "asserts at env construction when the three packages behind `_cuda_enable` are not "
+        "importable, so a missing install is loud rather than a silent fall back to the CPU. "
+        "Refused with --render 3D, where MetaDrive's own teardown raises after a correct "
+        "drive. Worth nothing over a socket -- the wire needs host bytes, so the frame is "
+        "copied back anyway -- and worth everything to a model in this same process, which "
+        "reads the pointer.",
     )
     parser.add_argument(
         "--traffic",
@@ -780,18 +869,39 @@ def main() -> int:
     # for it to reach and the flag would be accepted and do nothing at all.
     if arguments.image_on_cuda and arguments.render == "none":
         print(
-            "result       FAILED: --image-on-cuda needs --render 3D or offscreen. The key "
-            "reaches cameras only (engine_core.py:615), and --render none builds none."
+            "result       FAILED: --image-on-cuda needs --render offscreen. The key reaches "
+            "cameras only (engine_core.py:615), and --render none builds none."
         )
         return 1
-    # `frame_gate` refuses this pairing for a reason of its own -- the CUDA frame is filled
-    # from a panda3d draw callback, so holding one hands back a buffer something else is still
-    # writing -- and it raises after the env is up. Said here instead, before minutes of
-    # terrain building, and pointing at the same two ways out.
+    # And 3D is refused for a fault at the *other* end of the run. The drive itself is correct
+    # -- measured on `junction-1`, 352 of 370 steps, arrive_dest=True, completion 0.953 -- but
+    # `env.close()` then raises `cudaErrorInvalidGraphicsContext(219)` out of
+    # `MainCamera.unregister` (`main_camera.py:585`, via `base_engine.py:529`), which hands a
+    # CUDA graphics resource back against a GL context that has already gone. MetaDrive's bug,
+    # and not one this repo patches -- but it makes a successful drive exit non-zero, so the
+    # status stops meaning "the dataset is drivable", which is the whole job of this tool.
+    #
+    # Refused rather than caught because the pairing buys nothing today: the point of holding a
+    # frame on the card is a model reading the pointer in this same process (Phase C), and 3D
+    # is for a person to watch. Should Phase C ever want to watch a CUDA-fed model in a window,
+    # this is the line to revisit -- catching that one error around `close()` is the other way.
+    if arguments.image_on_cuda and arguments.render == "3D":
+        print(
+            "result       FAILED: --image-on-cuda cannot be used with --render 3D. The drive "
+            "is fine, but MainCamera.unregister (main_camera.py:585) raises "
+            "cudaErrorInvalidGraphicsContext(219) during env.close(), so a successful drive "
+            "exits non-zero. Watch with --render 3D alone; keep frames on the card with "
+            "--render offscreen --image-on-cuda."
+        )
+        return 1
     if arguments.image_on_cuda:
-        # MetaDrive's own assert fires later, at env construction, and its hint is
-        # "pip install pypiwin32" -- Windows advice for a Linux box. Answered here instead,
-        # naming the interpreter, because the usual cause is running the *checkout's* 3.8 venv
+        # MetaDrive raises rather than falling back, but from two different places with two
+        # different hints: offscreen it is `ImageObservation.__init__` (`image_obs.py:57`),
+        # which gates on cupy alone and says "pip install cupy-cuda12x"; under `--render 3D`
+        # no image observation is built, so it is `BaseCamera.__init__`
+        # (`base_camera.py:56`), whose hint is "pip install pypiwin32" -- Windows advice for
+        # a Linux box. Both fire minutes into a terrain build. Answered here instead, naming
+        # the interpreter, because the usual cause is running the *checkout's* 3.8 venv
         # rather than this repo's, and the group is installed in this repo's.
         from metadrive.component.sensors.base_camera import _cuda_enable
 
@@ -1118,7 +1228,13 @@ def main() -> int:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from agent_env import ActionRecorder
 
-        recorder = ActionRecorder()
+        # Both read off the env rather than off the flags: whether the image half is a
+        # normalised picture is MetaDrive's `norm_pixel` and the image source's class, and
+        # `_images_are_normalised` is where that is worked out.
+        recorder = ActionRecorder(
+            normalised_images=_images_are_normalised(env),
+            store_images=not arguments.record_no_images,
+        )
 
     # Built after the env, because `SensorPack` checks the sensors it was asked for are really
     # registered rather than sending nothing for them.
@@ -1179,28 +1295,7 @@ def main() -> int:
                 if not arguments.draw_every_step and not arguments.image_on_cuda:
                     gate = install_frame_gate(env)
                 if arguments.image_on_cuda:
-                    # Read off the observation the car was actually handed, never off the
-                    # flag. A device array carries `__cuda_array_interface__` and no
-                    # `__array_interface__`; if the switch had silently done nothing this
-                    # line would say `numpy.ndarray` rather than repeat what was asked for.
-                    from gpu_frames import is_device_array
-
-                    frame = observation.get("image") if isinstance(observation, dict) else None
-                    if frame is None:
-                        print("frames       no image observation to check")
-                    elif is_device_array(frame):
-                        pointer = frame.__cuda_array_interface__["data"][0]
-                        print(
-                            "frames       on the GPU: {} {} {}, device pointer {}".format(
-                                type(frame).__module__ + "." + type(frame).__name__,
-                                tuple(frame.shape), frame.dtype, hex(pointer),
-                            )
-                        )
-                    else:
-                        print(
-                            "frames       --image-on-cuda was asked for and the observation "
-                            f"is {type(frame).__name__} in host memory"
-                        )
+                    print(_cuda_frame_report(observation, env.engine))
 
             if not reported_gpu:
                 reported_gpu = True
@@ -1558,10 +1653,22 @@ def main() -> int:
         if written is None:
             print("recorded     nothing: the drive took no steps")
         else:
-            observations, actions = written
+            observations = written["observations"]
+            images = written["images"]
+            size_kb = os.path.getsize(arguments.record) / 1024
+            size = f"{size_kb / 1024:.1f} MB" if size_kb >= 1024 else f"{size_kb:.0f} KB"
             print(
                 f"recorded     {observations[0]} steps, observations {observations}, "
-                f"actions {actions} -> {arguments.record}"
+                f"actions {written['actions']} -> {arguments.record} ({size})"
+                + (
+                    # Said with the scale beside it, because a uint8 array of pixels is not
+                    # what the car was handed - it was handed float32 in [0, 1], and this is
+                    # the number that gets it back. See `ActionRecorder`.
+                    f"\n             images {images} uint8, divide by "
+                    f"{written['image_scale']:g} for the float the car saw"
+                    if images
+                    else ""
+                )
                 + (
                     "\n             every action is [0, 0]: --agent-policy replay sets the "
                     "car's position directly and never acts, so there is nothing here to "

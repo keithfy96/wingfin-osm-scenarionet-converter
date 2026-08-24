@@ -41,14 +41,22 @@ sim = [
 # in GPU memory as a CuPy array instead of being copied to the host. Opt-in beside `sim`:
 # `uv sync --group sim --group gpu`.
 #
-# **`cuda-python` must stay below 13, and the gate that needs it fails silently.**
-# `base_camera.py:10-18` is one `try: import cupy / from OpenGL.GL import GL_TEXTURE_2D /
-# from cuda import cudart ... except ImportError: _cuda_enable = False`, so any one of the
-# three missing turns the whole path off with no error and `image_on_cuda=True` quietly
-# renders on the CPU. cuda-python **removed** the top-level `cuda.cudart` shim at 13.0 in
-# favour of `cuda.bindings.runtime`; measured here, 13.3.1 raises
-# `ImportError: cannot import name 'cudart' from 'cuda'` and 12.9.7 imports it (with a
-# FutureWarning). An unpinned resolve picks 13.3.1.
+# **`cuda-python` must stay below 13.** `base_camera.py:10-18` is one `try: import cupy /
+# from OpenGL.GL import GL_TEXTURE_2D / from cuda import cudart ... except ImportError:
+# _cuda_enable = False`, so any one of the three missing shuts the gate. It does **not**
+# then fall back to the CPU: `image_on_cuda=True` trips an assert, measured offscreen as
+# `AssertionError: CuPy is not enabled. Fail to set up image_on_cuda. Hint: pip install
+# cupy-cuda11x or pip install cupy-cuda12x`. The hint misleads, because that assert is
+# `ImageObservation.__init__`'s (`image_obs.py:57`) and gates on **cupy alone** -- so it
+# names cupy even when what is missing is PyOpenGL or cuda-python. Under `--render 3D` no
+# image observation is built and it is `BaseCamera.__init__` (`base_camera.py:56`) that
+# fires, hinting "pip install pypiwin32". Loud either way, and `drive.py` reads
+# `_cuda_enable` itself and refuses first, before the terrain build.
+#
+# cuda-python **removed** the top-level `cuda.cudart` shim at 13.0 in favour of
+# `cuda.bindings.runtime`; measured here, 13.3.1 raises `ImportError: cannot import name
+# 'cudart' from 'cuda'` and 12.9.7 imports it (with a FutureWarning). An unpinned resolve
+# picks 13.3.1.
 #
 # **`cupy-cuda12x`, not `cupy-cuda13x`**, though the driver (595.84) offers CUDA 13.2 --
 # the model stack of Phase C is pinned at cu128 and CuPy shares a process and a context
