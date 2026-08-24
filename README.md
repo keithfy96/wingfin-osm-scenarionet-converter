@@ -285,11 +285,37 @@ a recorded car MetaDrive dies on `KeyError: None` deep inside itself, which read
 like a broken dataset and is not one.
 
 **The discrete GPU is used automatically when there is one**, via `__NV_PRIME_RENDER_OFFLOAD`
-— nothing to install, and `image_on_cuda` from MetaDrive's install docs is unrelated
-(it is an RL image pipeline, not a renderer selector). What it buys is road-surface
-detail, because the GL texture ceiling is what caps resolution: measured 16384 px on
-this machine's Intel iGPU against 32768 on its RTX 4050, so `mosque` renders at 8 px/m
-instead of 4. `drive.py` asks the card rather than assuming, and prints which it got.
+— nothing to install, and `image_on_cuda` from MetaDrive's install docs is not a renderer
+selector (it is an RL image pipeline; `--image-on-cuda` below). What the discrete card buys
+is road-surface detail, because the GL texture ceiling is what caps resolution: measured
+16384 px on this machine's Intel iGPU against 32768 on its RTX 4050, so `mosque` renders at
+8 px/m instead of 4. `drive.py` asks the card rather than assuming, and prints which it got.
+
+**`--image-on-cuda` keeps rendered frames in GPU memory** instead of copying them to the
+host, as CuPy arrays. It needs the opt-in `gpu` dependency group and this repo's own
+interpreter:
+
+```bash
+uv sync --group sim --group gpu
+cd scripts && METADRIVE_PYTHON=../.venv/bin/python ./drive.sh junction-1 -- \
+    --render offscreen --agent-policy idm --sensors camera --image-on-cuda
+```
+
+Measured on `junction-1` with one 512×288 camera, three matched pairs of 200 steps:
+`env.step` costs **7.09 / 8.04 / 8.28 ms** on the CPU path and **3.20 / 3.59 / 3.76 ms**
+with the flag — 2.2× every time, all of it the synchronous `getScreenshot()` readback the
+CPU path does every step. The drive itself is unchanged, byte for byte in `drive.py`'s
+output. **It is worth nothing over `--policy-url`**, also measured: the wire needs host
+bytes, so the frame is copied back and both paths send the same 2927.0 KB a step. It pays
+for a model running in this same process, which reads the pointer.
+
+Two things it needs, and both fail in ways that do not name themselves. It needs the
+**discrete card** — CUDA-GL interop registers a GL texture with the CUDA context, so on this
+hybrid machine the PRIME variables above are required and without them env construction dies
+with `cudaErrorUnknown(999)`; `scripts/drive.sh` sets them already. And it needs
+`cuda-python` **below 13**, which the group pins: 13.0 removed the `cuda.cudart` shim
+MetaDrive imports, and without it MetaDrive's gate is off. `drive.py` checks that gate itself
+and refuses by name, printing which interpreter it looked in.
 
 **Lane lines are `--line-width-m`, in metres, default 0.15** — about a real road
 marking. MetaDrive's own thickness is in *pixels*, so its real width moves with the
@@ -887,6 +913,12 @@ The group is pinned to a commit, not to `==0.4.3`. The reference checkout is 32 
 tag and `metadrive.constants.EDITION` reports `MetaDrive v0.4.3` either way, so a version pin
 would let two machines run different simulators while every CSV claimed they were the same.
 
+There is a second opt-in group, `gpu`, holding the three packages MetaDrive's `image_on_cuda`
+path imports — `cupy-cuda12x[ctk]`, `PyOpenGL` and `cuda-python`. It is separate because it is
+about 1.5 GB of CUDA toolkit and only `--image-on-cuda` needs it; `uv sync` installs neither
+group. `cuda-python` is capped **below 13** on purpose: 13.0 removed the `cuda.cudart` shim
+MetaDrive imports, and the cap is what keeps the gate open.
+
 **It renders on the real GPU with no X server, and the trap there is silent.** panda3d ships
 `libp3headlessgl.so` (EGL) and lists it as the fallback after GLX; the image makes it the first
 choice. But libglvnd picks a driver by reading the manifests in
@@ -975,6 +1007,15 @@ keys multiplied out, not a literal 0.1 — so a model integrating anything is in
 whether or not `--step-hz` was passed. `remote` is the same code path as `manual`, so it has no
 step budget and neither rate warning applies to it.
 
+**Read each sensor's `dtype` off the payload rather than assuming one.** `camera` and `semantic`
+arrive as **uint8 0-255**, which is what the GPU produced — a model wanting 0-1 floats does that
+divide itself, fused with the channel order and transpose its weights expect anyway. `depth` and
+`point-cloud` arrive as **float32** and are not pictures: depth is a nonlinear 0-1 buffer
+occupying only 0.705-1.000 of its range on a real drive, and the point cloud is in metres,
+measured -18477 to +11030. Sending either as 8 bits would leave the first with 76 levels for the
+whole scene and destroy the second outright, so they are excluded by name and
+`tests/unit/test_policy_client.py` checks that split against MetaDrive's own source.
+
 In a training loop use the example instead, which needs no window at all:
 
 ```bash
@@ -1001,13 +1042,19 @@ in 13 steps, and to the opposite side from `--steering -1.0`.
 |---|---|---|---|
 | `none` | — | 0.9 KB | **0.88 ms** |
 | `none` | `imu,gps` | 1.4 KB | 0.98 ms |
-| `3D` | `camera,imu,gps` | 901 KB | 15.0 ms |
+| `3D` | `camera,imu,gps` | **226.6 KB** (901.6 before) | 15.0 ms |
 | `offscreen` | — | 3600 KB | 29.4 ms |
-| `offscreen` | everything | 5001 KB | 49.0 ms |
+| `offscreen` | everything | **3652.4 KB** (5002.4 before) | 49.0 ms |
+
+The two camera rows fell when camera frames stopped being sent as floats. Each pair was taken
+either side of that change on the same drive, so the two numbers in a cell are comparable; the
+other three rows have no camera on the wire and did not move. The round trips are the earlier
+figures — the wire got smaller, not faster.
 
 Two things to know from that table. **`--render offscreen` makes the observation itself a stack
 of camera frames**, whether or not you asked for a sensor — that is how MetaDrive keeps a camera
-alive at all — so it costs 3.6 MB a step for an image nobody wanted. `--render none` and
+alive at all — so it costs 3.6 MB a step for an image nobody wanted, and none of that is a
+`--sensors` payload, which is why that row did not move. `--render none` and
 `--render 3D` both leave the observation at 161 floats, which is why the 3D row with a camera on
 is cheaper than the offscreen row with nothing. And **if you ever see ~40 ms a step, that is not
 a slow model**: it is Nagle's algorithm meeting delayed ACK because one end of the socket lost

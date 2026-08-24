@@ -65,6 +65,12 @@ def act(observation, sensors, spec):
     `camera`, `depth`, `semantic`, `point-cloud` as `{"dtype", "shape", "b64"}`, which
     `decode_array` below turns back into an array.
 
+    **Read the dtype rather than assuming one.** `camera` and `semantic` arrive as **uint8
+    0-255**, which is what the GPU produced; a model wanting 0-1 floats does that divide
+    itself, fused with whatever channel order and transpose its weights expect. `depth` and
+    `point-cloud` arrive as float32 and are not pictures - depth is a nonlinear 0-1 buffer
+    and the point cloud is in metres - so neither is 8-bit at any point.
+
     `spec` is what the drive sent once at the start - the layout, the action range, the step
     length, and the dataset's projection.
     """

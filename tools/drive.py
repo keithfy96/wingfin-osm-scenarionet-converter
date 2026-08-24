@@ -686,6 +686,16 @@ def main() -> int:
         help="Seed for --lights live, so a run can be repeated.",
     )
     parser.add_argument(
+        "--image-on-cuda",
+        action="store_true",
+        help="Keep rendered camera frames in GPU memory as CuPy arrays instead of copying "
+        "them to the host. Needs `uv sync --group gpu`; MetaDrive asserts at env "
+        "construction when the three packages behind `_cuda_enable` are not importable, so a "
+        "missing install is loud rather than a silent fall back to the CPU. Worth nothing "
+        "over a socket -- the wire needs host bytes, so the frame is copied back anyway -- "
+        "and worth everything to a model in this same process, which reads the pointer.",
+    )
+    parser.add_argument(
         "--traffic",
         default="none",
         choices=["none", "live"],
@@ -765,6 +775,35 @@ def main() -> int:
             f"Without a render context MetaDrive builds no camera at all."
         )
         return 1
+    # Same rule, one step further along: `image_on_cuda` is handed to each registered camera
+    # at construction (`engine_core.py:615`), so with no camera registered there is nothing
+    # for it to reach and the flag would be accepted and do nothing at all.
+    if arguments.image_on_cuda and arguments.render == "none":
+        print(
+            "result       FAILED: --image-on-cuda needs --render 3D or offscreen. The key "
+            "reaches cameras only (engine_core.py:615), and --render none builds none."
+        )
+        return 1
+    # `frame_gate` refuses this pairing for a reason of its own -- the CUDA frame is filled
+    # from a panda3d draw callback, so holding one hands back a buffer something else is still
+    # writing -- and it raises after the env is up. Said here instead, before minutes of
+    # terrain building, and pointing at the same two ways out.
+    if arguments.image_on_cuda:
+        # MetaDrive's own assert fires later, at env construction, and its hint is
+        # "pip install pypiwin32" -- Windows advice for a Linux box. Answered here instead,
+        # naming the interpreter, because the usual cause is running the *checkout's* 3.8 venv
+        # rather than this repo's, and the group is installed in this repo's.
+        from metadrive.component.sensors.base_camera import _cuda_enable
+
+        if not _cuda_enable:
+            print(
+                "result       FAILED: --image-on-cuda needs cupy, PyOpenGL and cuda-python "
+                "importable, and `metadrive.component.sensors.base_camera._cuda_enable` is "
+                f"False on {sys.executable}. Run `uv sync --group sim --group gpu` and drive "
+                "with that environment's interpreter (METADRIVE_PYTHON for scripts/drive.sh). "
+                "cuda-python must be < 13: 13.0 dropped the `cuda.cudart` shim this imports."
+            )
+            return 1
 
     import numpy
 
@@ -975,6 +1014,18 @@ def main() -> int:
         print(f"result       FAILED: {error}")
         return 2
     decision_seconds = stride / float(effective_hz)
+    # `frame_gate` refuses this pairing on its own terms -- the CUDA frame is filled by a
+    # panda3d draw callback rather than returned by `perceive`, so a *held* frame is a buffer
+    # something else is still writing -- but it raises after the env is up, minutes into a
+    # terrain build. Said here instead, and only when the stride really would hold a frame:
+    # at stride 1 the gate never holds anything, so the two flags do not conflict there.
+    if arguments.image_on_cuda and stride > 1 and not arguments.draw_every_step:
+        print(
+            f"result       FAILED: --image-on-cuda cannot be gated. At {arguments.decision_hz:g} "
+            f"Hz the draw is held for {stride - 1} of every {stride} steps, and a held CUDA "
+            "frame is a buffer still being written. Add --draw-every-step, or drop one flag."
+        )
+        return 1
     if stride > 1:
         print(
             "decision     {:g} Hz: every {} env.step, {:g} s apart. {}".format(
@@ -1043,6 +1094,10 @@ def main() -> int:
             # The one key that selects `ManualControlPolicy`; see the comment on `policy` above.
             "manual_control": arguments.agent_policy == "manual",
             "reactive_traffic": arguments.reactive,
+            # Off unless asked for, so an unflagged run's config is unchanged key-for-key.
+            # It reaches every registered camera through `engine_core.py:615` and, offscreen,
+            # the observation stack itself (`image_obs.py:55-65`).
+            "image_on_cuda": arguments.image_on_cuda,
             "map_region_size": region,
             "height_scale": arguments.height_scale,
             "max_lateral_dist": arguments.max_lateral_dist,
@@ -1118,8 +1173,34 @@ def main() -> int:
             observation, _ = env.reset(seed=index)
             if not gate_settled:
                 gate_settled = True
-                if not arguments.draw_every_step:
+                # Never under `image_on_cuda`: `frame_gate.install` refuses it outright,
+                # and at stride 1 -- the only pairing that reaches here, the refusal above
+                # having taken the rest -- there is nothing for the gate to hold anyway.
+                if not arguments.draw_every_step and not arguments.image_on_cuda:
                     gate = install_frame_gate(env)
+                if arguments.image_on_cuda:
+                    # Read off the observation the car was actually handed, never off the
+                    # flag. A device array carries `__cuda_array_interface__` and no
+                    # `__array_interface__`; if the switch had silently done nothing this
+                    # line would say `numpy.ndarray` rather than repeat what was asked for.
+                    from gpu_frames import is_device_array
+
+                    frame = observation.get("image") if isinstance(observation, dict) else None
+                    if frame is None:
+                        print("frames       no image observation to check")
+                    elif is_device_array(frame):
+                        pointer = frame.__cuda_array_interface__["data"][0]
+                        print(
+                            "frames       on the GPU: {} {} {}, device pointer {}".format(
+                                type(frame).__module__ + "." + type(frame).__name__,
+                                tuple(frame.shape), frame.dtype, hex(pointer),
+                            )
+                        )
+                    else:
+                        print(
+                            "frames       --image-on-cuda was asked for and the observation "
+                            f"is {type(frame).__name__} in host memory"
+                        )
 
             if not reported_gpu:
                 reported_gpu = True

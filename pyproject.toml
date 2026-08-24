@@ -37,6 +37,28 @@ sim = [
   "metadrive-simulator @ git+https://github.com/metadriverse/metadrive.git@85e5dadc",
 ]
 
+# The three packages MetaDrive's `image_on_cuda` path imports, so a rendered frame can stay
+# in GPU memory as a CuPy array instead of being copied to the host. Opt-in beside `sim`:
+# `uv sync --group sim --group gpu`.
+#
+# **`cuda-python` must stay below 13, and the gate that needs it fails silently.**
+# `base_camera.py:10-18` is one `try: import cupy / from OpenGL.GL import GL_TEXTURE_2D /
+# from cuda import cudart ... except ImportError: _cuda_enable = False`, so any one of the
+# three missing turns the whole path off with no error and `image_on_cuda=True` quietly
+# renders on the CPU. cuda-python **removed** the top-level `cuda.cudart` shim at 13.0 in
+# favour of `cuda.bindings.runtime`; measured here, 13.3.1 raises
+# `ImportError: cannot import name 'cudart' from 'cuda'` and 12.9.7 imports it (with a
+# FutureWarning). An unpinned resolve picks 13.3.1.
+#
+# **`cupy-cuda12x`, not `cupy-cuda13x`**, though the driver (595.84) offers CUDA 13.2 --
+# the model stack of Phase C is pinned at cu128 and CuPy shares a process and a context
+# with torch.
+gpu = [
+  "cupy-cuda12x[ctk]>=14,<15",
+  "PyOpenGL>=3.1,<4",
+  "cuda-python>=12,<13",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

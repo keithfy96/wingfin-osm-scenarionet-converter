@@ -49,6 +49,7 @@ import urllib.parse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from geodesy import aeqd_inverse, projection_origin  # noqa: E402
+from gpu_frames import to_host  # noqa: E402
 
 # What `--sensors` accepts. "observation" is not in the list because it is always sent - it is
 # the argument the policy is called with.
@@ -71,6 +72,30 @@ _SENSOR_KEYS = {
     "semantic": "semantic_camera",
     "point-cloud": "point_cloud",
 }
+
+# The sensors whose native output really is an 8-bit picture, and so may cross the wire as
+# one. `perceive(to_float=...)` reaches **two different** `_format` implementations and they
+# do opposite things:
+#
+#   RGBCamera / SemanticCamera -> BaseCamera._format (`base_camera.py:208-214`)
+#       uint8 0-255 out of the GPU. to_float=True is `ret / 255`, which numpy promotes to
+#       **float64**; to_float=False is `astype(uint8, copy=False)`. Either is free, and the
+#       float carries no information the uint8 did not -- (v / 255 * 255).round() returns
+#       every one of the 256 values exactly.
+#
+#   DepthCamera, and PointCloudLidar which subclasses it (`depth_camera.py:184-190`,
+#       `point_cloud_lidar.py:33`)
+#       to_float=False is `(ret * 255).astype(uint8)`, which is a **conversion, not a
+#       format change**. The depth buffer is float32 in 0-1 and nonlinear
+#       (z_eye = 2nf / ((f+n) - (2d-1)(f-n))), and measured on the wire over a real
+#       `junction-1` drive it occupies only **0.705 to 1.000** of that range -- so `* 255`
+#       leaves **76 distinct levels for the whole scene**, worst where the range is longest.
+#       The point cloud is in **metres**, measured **-18476.9 to +11030.2**, which a uint8
+#       cannot hold at all. Neither raises.
+#
+# So these two, and only these two. `tests/unit/test_policy_client.py` pins the split
+# against MetaDrive's own source, because the failure is silent in both directions.
+_UINT8_SENSORS = ("camera", "semantic")
 
 
 class PolicyError(RuntimeError):
@@ -292,8 +317,19 @@ class SensorPack:
                 continue
             import numpy
 
-            frame = engine.get_sensor(key).perceive(to_float=True, new_parent_node=agent.origin)
-            packed[name] = encode_array(numpy.asarray(frame, dtype=numpy.float32))
+            # Both halves move together for an 8-bit sensor: an explicit float32 dtype here
+            # would cast the uint8 straight back up and undo the read above.
+            as_uint8 = name in _UINT8_SENSORS
+            frame = engine.get_sensor(key).perceive(
+                to_float=not as_uint8, new_parent_node=agent.origin
+            )
+            # Under `image_on_cuda` this frame is a CuPy array, and `numpy.asarray` on one
+            # **raises** rather than copying (CuPy refuses the implicit PCIe round trip by
+            # design). The wire needs host bytes, so the copy is made here and named -- which
+            # is also why `--image-on-cuda` buys nothing on a socket. See `tools/gpu_frames`.
+            frame = to_host(frame)
+            frame = numpy.asarray(frame) if as_uint8 else numpy.asarray(frame, numpy.float32)
+            packed[name] = encode_array(frame)
 
         return packed
 
@@ -410,15 +446,19 @@ class RemotePolicy:
     def __call__(self, observation=None):
         import numpy
 
+        # `--render offscreen` makes the observation itself a stack of camera frames, and
+        # under `image_on_cuda` that stack lives on the card (`image_obs.py:55-65`). It is the
+        # largest single thing on the wire -- 2700 KB a step at 320x180 -- and every byte of
+        # it has to be copied back before it can be posted.
         if isinstance(observation, dict):
             encoded = {
-                key: encode_array(numpy.asarray(value, dtype=numpy.float32))
+                key: encode_array(numpy.asarray(to_host(value), dtype=numpy.float32))
                 for key, value in observation.items()
             }
         elif observation is None:
             encoded = None
         else:
-            encoded = encode_array(numpy.asarray(observation, dtype=numpy.float32))
+            encoded = encode_array(numpy.asarray(to_host(observation), dtype=numpy.float32))
 
         payload = {"step": self.step, "observation": encoded}
         if self._pack is not None:

@@ -370,6 +370,12 @@ def main() -> int:
         )
 
         if steps == arguments.sample_at:
+            # `to_float=True` deliberately, and it is **not** what the wire carries. This
+            # surveys the sensor, so every modality is reported on one scale - a camera as
+            # 0-1 beside a depth buffer that is natively 0-1. `policy_client` sends `camera`
+            # and `semantic` as **uint8 0-255** instead, because those two are 8-bit out of
+            # the GPU and `ret / 255` is pure inflation on a wire (Phase A). Do not read a
+            # range printed here as the payload's; `rig.read()` just below is uint8 too.
             for name in [n for n in SURVEY_SENSORS if n in sensors]:
                 try:
                     sensor = env.engine.get_sensor(name)

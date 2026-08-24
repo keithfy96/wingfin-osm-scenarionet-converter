@@ -67,6 +67,7 @@ from drive import (  # noqa: E402
     sim_step_seconds,
     step_config,
 )
+from gpu_frames import to_host  # noqa: E402
 
 # Re-exported rather than re-derived, so `drive.py`, `sensor_survey.py` and anything built on
 # `make_env` share one definition of the two clocks. `step_config` returns MetaDrive config
@@ -245,7 +246,12 @@ class ActionRecorder:
     def record(self, observation, vehicle):
         import numpy
 
-        self.observations.append(numpy.asarray(observation, dtype=numpy.float32).ravel())
+        # An `.npz` is host bytes. Under `image_on_cuda` the offscreen observation is a CuPy
+        # array and `numpy.asarray` on one raises rather than copying, so the copy is made
+        # here and named -- see `tools/gpu_frames`.
+        self.observations.append(
+            numpy.asarray(to_host(observation), dtype=numpy.float32).ravel()
+        )
         self.actions.append(numpy.asarray(vehicle.current_action, dtype=numpy.float32))
 
     def __len__(self):

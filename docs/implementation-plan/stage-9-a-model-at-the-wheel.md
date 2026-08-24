@@ -2,9 +2,9 @@
 
 ## Status
 
-**Planned, not built.** Nothing in this document has been implemented. Every number
-in it is either measured on this machine and marked as such, or arithmetic over a
-measured number and marked as such. Where something is unknown it says so rather
+**Phases 0, A and B are built and measured; C is planned, not built.** Every
+number here is either measured on this machine and marked as such, or arithmetic over
+a measured number and marked as such. Where something is unknown it says so rather
 than estimating.
 
 **What already works, and is the floor this builds on** (2026-08-23, measured):
@@ -49,15 +49,21 @@ Four pieces, in the order they are worth doing:
 | | what | needs a GPU | needs the model | fixes something broken today |
 |---|---|---|---|---|
 | **Phase 0** | a MetaDrive pedal table | no | no | **yes - done, 2026-08-23** |
-| **Phase A** | send frames as uint8 | no | no | no |
-| **Phase B** | keep frames on the GPU | yes | no | no |
+| **Phase A** | send frames as uint8 | no | no | **yes - done, 2026-08-24** |
+| **Phase B** | keep frames on the GPU | yes | no | **yes - done, 2026-08-24** |
 | **Phase C** | the model in-process | yes | yes | no |
 
 Phase 0 is independent of the other three and is **done**: it repaired the half of the
 fit that was wrong, and measuring it showed the remaining speed undershoot belongs to
-the trajectory rather than to the pedals, which is Phase C.
-Phase B is worth nothing without Phase C and is listed separately only because it can
-be proven on its own.
+the trajectory rather than to the pedals, which is Phase C. Phase A is **done** too, and
+the column above understates it: it was listed as fixing nothing, and it turned out that
+`depth` and `point-cloud` share the flag with the two cameras, so the obvious version of
+it would have quantised a depth buffer to 76 levels and destroyed a point cloud in metres.
+Phase B is **done** as well, and the column above was wrong about it twice. It does fix
+something today -- `env.step` costs 2.2x less with the frame left on the card, measured
+over three matched pairs -- and it is *not* worth nothing without Phase C: what is worth
+nothing without Phase C is Phase B **on a socket**, which is a narrower claim and now a
+measured one (2927.0 KB a step either way, byte for byte).
 
 ---
 
@@ -160,6 +166,17 @@ for -0.2 to -1.5, all of it above.
 
 - [x] **Phase 0 - a pedal table measured on MetaDrive** (2026-08-23)
 
+  **This replaces a stage the bridge already had; it does not add one.** The model decides
+  where to go, the bridge decides how hard and which way, and a pedal map decides only how far
+  to press a pedal to get that acceleration *on this car*. `server.py:788-792` does exactly
+  two conversions before replying, side by side - a road-wheel angle into a normalised steer,
+  and `accel_to_carla(self._last_actuators.accel, v_ego)` into a throttle and a brake - and
+  both are properties of the car. **The steering one came out free** because it is geometry:
+  `action[0] x max_steering` *is* the road-wheel angle in degrees (`base_vehicle.py:478`) and
+  the geometric branch emits `-road_wheel_deg / max_steer_angle`, both sides at 40°, so it
+  cancels. Pedal to acceleration is not geometry - it depends on mass, engine force, brake
+  force and drag - which is why only that half needed measuring.
+
   `tools/pedal_sweep.py` measures it, `tools/pedal_map.py` reads and inverts it,
   `calibration/metadrive-pedal-map.json` is the table, and
   `examples/openpilot_server.py --longitudinal table` is the third mode. `pedal` and
@@ -239,115 +256,178 @@ for -0.2 to -1.5, all of it above.
   Also landed: `--log-telemetry` now writes `v_ego_mps` and the `metadrive_action` beside
   the bridge's reply, because the question above cannot be answered from the reply alone.
 
-- [ ] **Phase A - camera frames as uint8 on the wire**
+- [x] **Phase A - camera frames as uint8 on the wire** (2026-08-24)
 
-  `tools/policy_client.py:295-296` is:
+  **Two of the four heavy sensors are not pictures, and that is what this phase turned out
+  to be about.** The plan said "both lines change" over the loop in
+  `tools/policy_client.py`, but that loop reads `camera`, `depth`, `semantic` and
+  `point-cloud` through one `perceive(to_float=...)` call which reaches **two different**
+  `_format` implementations:
 
-  ```python
-  frame = engine.get_sensor(key).perceive(to_float=True, new_parent_node=agent.origin)
-  packed[name] = encode_array(numpy.asarray(frame, dtype=numpy.float32))
-  ```
+  | `--sensors` | class | native | `to_float=False` does |
+  |---|---|---|---|
+  | `camera` | `RGBCamera` -> `BaseCamera` | uint8 0-255 | `astype(uint8, copy=False)` - free |
+  | `semantic` | `SemanticCamera` -> `BaseCamera` | uint8 0-255 | the same - free |
+  | `depth` | `DepthCamera` | **float32**, 0-1, nonlinear | `(ret * 255).astype(uint8)` - quantises |
+  | `point-cloud` | `PointCloudLidar` -> `DepthCamera` | **metres** | the same - destroys it |
 
-  **Both** lines change - `to_float=False`, and drop the `dtype=numpy.float32`, or the
-  cast undoes the first. A picture does not need to be float32 to cross a wire;
-  `perceive(to_float=False)` returns uint8 0-255 and MetaDrive's own docstring says so.
+  `base_camera.py:208-214` against `depth_camera.py:184-190`, with
+  `point_cloud_lidar.py:33` inheriting the second for data that is not an image at all.
+  Measured on the wire over a real drive rather than argued: **depth occupies 0.705-1.000**
+  of its 0-1 range, so `* 255` leaves **76 levels for the whole scene**, worst where the
+  range is longest; the point cloud runs **-18476.9 to +11030.2 m**. Neither raises. So
+  `_UINT8_SENSORS = ("camera", "semantic")` and those two only, with
+  `tests/unit/test_policy_client.py` pinning the split against MetaDrive's own source by
+  walking each class to whichever `_format` it inherits.
 
-  **This removes a conversion rather than adding one, and that is the whole of why it is
-  worth doing.** Nothing renders float32: `image_buffer.py:106` is
-  `np.frombuffer(origin_img.getRamImage().getData(), dtype=np.uint8)`, so a frame is 8-bit
-  when it leaves the GPU, and `_format`'s `ret / 255` (`base_camera.py:215`) is what
-  *creates* the float. **Measured on numpy 2.2.6**, one 512x288x3 frame: 442,368 B as
-  uint8, **3,538,944 B** after `perceive(to_float=True)` - `uint8 / 255` promotes to
-  **float64**, not float32 - and 1,769,472 B after the cast down for the wire. The path
-  today therefore inflates 8x on the CPU and immediately discards half of it. Also
-  measured: `(x / 255 * 255).round().astype(uint8)` returns the original array exactly for
-  all 256 values, so the float32 currently sent is an 8-bit quantity stored in 32 bits and
-  there is no precision in it to lose.
+  **The rest is as planned.** Nothing renders float32 - `image_buffer.py:106` reads uint8 -
+  and `ret / 255` is what creates the float. Measured on numpy 2.2.6, one 512x288x3 frame:
+  442,368 B as uint8, **3,538,944 B** after `to_float=True` (`uint8 / 255` promotes to
+  **float64**), 1,769,472 B after the cast down for the wire; and
+  `(v / 255 * 255).round().astype(uint8)` returns all 256 values exactly, so there was no
+  precision in the float to lose. `encode_array` was already self-describing and
+  `policy_server.decode_array`'s numpy-free fallback already had `"uint8": "B"`, so nothing
+  downstream changed. `new_parent_node=agent.origin` stays - avoiding that second render is
+  the rig's job and belongs in Phase C.
 
-  **The `/255` is not dropped, it moves.** `assets/modifiers/modifiers.py` already does
-  BGR->RGB, the transpose and the divide as one preprocessing step, because that is the
-  contract with the weights - so today it happens twice, once in float64 on the CPU here
-  and again there. Sending uint8 leaves it happening once, on the GPU, fused with the two
-  reorderings the model needs anyway. **uint8, not int8**: 0-255 unsigned, where int8's
-  -128..127 genuinely would lose data. And this is not int8 *quantisation* - weights and
-  activations stay fp32/fp16 under TensorRT, and only the transport dtype of an 8-bit
-  picture changes.
+  **Measured on `junction-1`, every row taken twice** - once with `_UINT8_SENSORS` emptied
+  and once as shipped, same server and same flags - because a payload size compared against
+  a figure from another session is not a measurement of this change. Row 1 is
+  `--render offscreen --step-hz 100 --decision-hz 20`, 3788 steps and completion 0.950 both
+  times; rows 2 and 3 are at 10 Hz under `--backend constant`, 17 steps both times. KB/step
+  is a per-step payload size, so drive length does not enter it.
 
-  Nothing downstream changes: `examples/policy_server.py:91` is already
-  `numpy.frombuffer(raw, dtype=encoded["dtype"])`, which is what `encode_array`'s
-  self-describing payload exists for. **`tools/camera_rig.py:220` already defaults to
-  `to_float=False`** - this brings `policy_client` into line rather than inventing a
-  convention.
+  | `--render` | `--sensors` | before | after |
+  |---|---|---|---|
+  | `offscreen` | `camera,imu,route` | 3602.0 KB/step | **2927.0** |
+  | `offscreen` | everything (7) | 5002.4 KB/step | **3652.4** |
+  | `3D` | `camera,imu,gps` | 901.6 KB/step | **226.6** |
 
-  **Arithmetic, not measurement:** seven cameras are 5.42 MB of raw uint8 (6 × 512 ×
-  288 × 3 plus 1 × 1280 × 720 × 3 = 5,419,008 B). As float32 that is 21.7 MB and after
-  base64 **28.9 MB a step**; as uint8, **7.2 MB**.
+  The offscreen rows fall by far less than 4x, and correctly so: under `--render offscreen`
+  the observation is itself a 3-frame float camera stack - MetaDrive's own, nothing to do
+  with `--sensors` - which is 2700 KB of the 2927. The `3D` row is the clean one, and 226.6
+  against 901.6 is the 4x. `offscreen | -` and the two `none` rows have no camera on the
+  wire, did not move, and were not re-measured.
 
-  `new_parent_node=agent.origin` **stays**. It forces a second scene render
-  (`base_camera.py:188`), which is real cost, but the camera `sensor_config` registers
-  is not otherwise mounted to the car. Avoiding that render is the rig's job -
-  `CameraRig.read` passes no parent node - and belongs in Phase C.
+  **The re-measured befores are not identical to the 2026-08-18 table and the gap is the
+  point**: 901.6 against 901.5 is the same row, but **5002.4 against 5001.2 is `route`**,
+  1.2 KB, which did not exist when that row was first taken. "Everything" is a moving set.
+  Both tables (`README.md`, `CLAUDE.md`) now carry matched pairs rather than a new figure
+  beside an old one.
 
-  **Phase C removes the wire, so this buys nothing there** - a frame goes from camera to
+  **And the pixels were checked, because none of the above could.** The stub ignores the
+  image, so a silently flipped or reordered frame would have given the same KB and the same
+  completion. `RGBCamera.perceive` turns out **not to be repeatable** - three identical
+  back-to-back float reads of a static scene spread by **1/255**, from MSAA and the
+  `taskMgr.step()` inside `perceive` - while `SemanticCamera` is exact. So the check has to
+  hold the render still: capture one frame, apply both `_format` paths to it. Done that way
+  the uint8 path returns **the raw buffer unchanged** and `(float x 255).round() == uint8`
+  exactly, on both cameras. A second probe read the wire during a drive and confirms what
+  arrives: `camera` uint8, `semantic` uint8, `depth` float32, `point-cloud` float32.
+
+  `uv run ruff check` passes, MetaDrive's 3.8 parses both changed files, and the suite is
+  607 passed plus the pre-existing `3 of 396` ego-route gate failure - 594 before, plus 13
+  new tests in `tests/unit/test_policy_client.py`.
+
+  **Two of those 13 exist because the other 11 could not fail.** They cover `encode_array`,
+  `decode_array` and the *contents* of `_UINT8_SENSORS`; none of them touches the loop that
+  reads the sensors, which needs a live engine. So the pre-Phase-A loop passed all eleven.
+  `test_the_sensor_read_takes_its_dtype_from_the_carve_out` and
+  `test_the_float32_cast_is_not_applied_to_the_uint8_branch` walk the AST of
+  `SensorPack.__call__`, following `test_step_timing.py:130`, and both were **shown to fail
+  against the old loop before being kept**. The second one's first version did not: it asked
+  whether the function contained any `if` at all, and `__call__` has several, so it passed
+  against exactly the code it was written to reject. It now requires the dtype-forcing
+  `asarray` to sit *inside* a branch.
+
+  **Phase C removes the wire, so this buys nothing there** - a frame will go from camera to
   model with no encode at all. Phase A's value is entirely the socket path that exists
-  today, which is what `step-timing.sh --rows 3` prices. `to_float=False` still matters in
-  Phase C for a different reason: on the CUDA path `ret` is a CuPy array, and CuPy follows
-  numpy's own promotion, so `ret / 255` is an **fp64** divide on the GPU - which the 4050
-  runs at 1/64 of its fp32 rate. Read, not measured; CuPy is not installed to check.
+  today, which `step-timing.sh --rows 3` prices. `to_float=False` still matters in Phase C
+  for a different reason: on the CUDA path `ret` is a CuPy array, and CuPy follows numpy's
+  own promotion, so `ret / 255` would be an **fp64** divide on the GPU - which the 4050 runs
+  at 1/64 of its fp32 rate. Read, not measured; CuPy is not installed to check.
 
-  **This invalidates two measured tables**, `README.md` ~line 1000 and `CLAUDE.md`
-  ~line 743, both "what it costs per step". **Re-measure, do not edit**; `drive.py`
-  prints KB/step. Note the `--render offscreen` rows also carry MetaDrive's own float
-  observation stack, which is unaffected, so those rows fall by **less** than 4x -
-  reporting them as if they had would be wrong.
+- [x] **Phase B - frames that stay on the GPU** (done, 2026-08-24)
 
-  **Verify** - `uv run pytest` stays at 565 passed plus the pre-existing `3 of 396`
-  gate failure; `ruff` passes; **both** interpreters parse the file, since `tools/`
-  runs under MetaDrive's 3.8 as well as this repo's 3.10. A drive with
-  `--sensors camera` completes, the printed KB/step has dropped, and the model side
-  decodes unchanged. A new `tests/unit/test_policy_client.py` - there is none today -
-  pins that a camera frame round-trips as uint8 0-255 and that `encode_array` still
-  round-trips a float32 observation unchanged.
-
-- [ ] **Phase B - frames that stay on the GPU**
-
-  Smaller than it looks. `engine_core.py:615` is
-  `sensor = cls(*args, engine=self, cuda=self.global_config["image_on_cuda"])`, so
-  **one env-level key reaches every sensor**, and `agent_env.make_env(**overrides)`
-  already passes MetaDrive config keys straight through. And `base_camera.py:59` sets
-  `cuda_dtype = np.uint8`: **the GPU path is already uint8**, so conversion 1's `/255`
-  happens on the GPU where it belongs.
-
-  - Add an opt-in group beside `sim`, so `uv sync` keeps working without a CUDA stack:
-    `gpu = ["cupy-cuda12x", "PyOpenGL", "cuda-python"]`. **`cupy-cuda12x`, not
-    `cupy-cuda13x`**, though the driver (595.84) offers CUDA 13.2 - the model stack is
-    pinned at cu128 and CuPy will share a process and a context with torch.
-  - **None of the three is installed today.** A dependency resolve - which downloads
-    nothing - shows they install cleanly on this repo's Python 3.10:
-    `cupy-cuda12x==14.2.0`, `pyopengl==3.1.10`, `cuda-python==13.3.1`, against the
-    `numpy==2.2.6` already here.
-  - `make_env(..., image_on_cuda=True)` behind a flag, so the CPU path stays default
-    and comparable.
-
-  **Verify** - the gate fails silently, so check it directly:
-  `_cuda_enable` in `base_camera.py:10-18` is one `try/import` over all three packages.
+  `--image-on-cuda` on `drive.py`, an opt-in `gpu` dependency group, and the copy back
+  written out once in `tools/gpu_frames.py`. The mechanism was as small as expected -
+  `engine_core.py:615` is
+  `sensor = cls(*args, engine=self, cuda=self.global_config["image_on_cuda"])`, so **one
+  env-level key reaches every sensor**, `make_env(**overrides)` already passes MetaDrive
+  config keys through, and offscreen the observation stack itself becomes a CuPy array
+  (`image_obs.py:55-65`). What the plan had wrong was everything around it.
 
   ```bash
-  uv run python -c "from metadrive.component.sensors.base_camera import _cuda_enable; print(_cuda_enable)"
+  uv sync --group sim --group gpu
+  cd scripts && METADRIVE_PYTHON=../.venv/bin/python ./drive.sh junction-1 -- \
+      --render offscreen --agent-policy idm --sensors camera --image-on-cuda
   ```
 
-  Then prove a frame is really on the card rather than trusting the flag: a
-  `cupy.ndarray` carrying `__cuda_array_interface__` is the win condition; a
-  `numpy.ndarray` means it silently took the CPU path. And a drive with and without
-  `image_on_cuda` must produce the same trajectory, confirming the switch changed only
-  where the pixels live.
+  **What it is worth.** `junction-1`, one 512x288 `RGBCamera`, offscreen, 200 steps after
+  30 warm-up, one env per process, three matched pairs:
 
-  **Two things expected to bite.** `perceive` returns a doubly-reversed view
-  (`base_camera.py:197`), so negative strides - torch's zero-copy import may need
-  `cupy.ascontiguousarray` first, a cheap GPU-side copy that must be measured rather
-  than assumed away. And this path is **barely exercised upstream**: the only uses in
-  the whole MetaDrive checkout are under `tests/vis_functionality/`. Keep the CPU path
-  selectable.
+  | | `env.step` median | observation |
+  |---|---|---|
+  | CPU path | 7.09 / 8.04 / 8.28 ms | `numpy.ndarray` |
+  | `--image-on-cuda` | **3.20 / 3.59 / 3.76 ms** | `cupy.ndarray` |
+
+  2.2x every time. The saving is the readback - `get_rgb_array_cpu` is
+  `buffer.getDisplayRegion(1).getScreenshot()`, a synchronous GPU->CPU read, and the
+  3-frame stack is then rolled on the host. **On a socket it is worth nothing**, measured:
+  2927.0 KB a step either way, byte for byte, because `encode_array` needs host bytes.
+
+  **The drive is identical**, which is the check that says the switch changed only where the
+  pixels live: `--agent-policy idm` on `junction-1` gives 291 of 370 steps, completion
+  0.774, `out_of_road` at -5.44 m both ways, with `drive.py`'s whole output byte-identical.
+
+  Five things the plan got wrong, each measured before it was rewritten:
+
+  - **`cuda-python==13.3.1`, which is what the plan's own dependency resolve recorded,
+    closes the gate.** `base_camera.py:14` is `from cuda import cudart` and cuda-python
+    removed that shim at 13.0 for `cuda.bindings.runtime`; 13.3.1 raises
+    `ImportError: cannot import name 'cudart' from 'cuda'`. The group pins `<13`.
+  - **`cupy-cuda12x` alone is not enough.** CuPy 14 ships no CUDA headers and there is no
+    system toolkit here, so it imports and dies on the first kernel with *"Failed to find
+    CUDA headers"*. The pin is `cupy-cuda12x[ctk]`. Two smaller routes were tried and both
+    fail: `cupy-cuda12x<14` bundles headers but wants `libnvrtc.so.12`, and the pip
+    `nvidia-cuda-nvrtc-cu12` / `nvidia-cuda-runtime-cu12` wheels are found by neither
+    CuPy 13's `dlopen` nor CuPy 14's `cuda-pathfinder` without `CUDA_PATH`.
+  - **A kernel is unavoidable**, which is why the headers are not optional: `_format` is
+    `astype(uint8, copy=False, order="C")` or `ret / 255`, and on a CuPy array both compile
+    one. `/ 255` also promotes to **float64** on the card, the Phase A trap one bus along.
+  - **The negative strides are already resolved and cost nothing.** `_format`'s `order="C"`
+    handles the doubly-reversed view; measured on a live drive, `c_contiguous True` and
+    strides `(480, 3, 1)`, identical to the CPU path's. No `ascontiguousarray`.
+  - **CUDA-GL interop needs the GL context on the same GPU as the CUDA context**, which the
+    plan did not mention at all. Without `__NV_PRIME_RENDER_OFFLOAD=1
+    __GLX_VENDOR_LIBRARY_NAME=nvidia` the GL context is the Intel iGPU and
+    `cudaGraphicsGLRegisterImage` fails with `cudaErrorUnknown(999)` at env construction.
+
+  Three more that only appear once it runs:
+
+  - **The CUDA frame is the same picture and not the same bytes.** Semantic camera, same
+    seed and actions: 92.65% of pixels identical, the same four semantic colours and no
+    fifth, and 64% of the differing pixels on a colour boundary against a 9.4% base rate.
+    A sub-pixel resolve difference between the bound render texture and
+    `getScreenshot()` - not a stale frame (no CPU frame at any offset matches) and not a
+    channel order (no permutation or flip matches). So the drive is the check, not the
+    pixels.
+  - **`frame_gate` refuses `image_on_cuda` and `drive.py` installs it on every offscreen
+    run**, so the first version of the flag died in a traceback on a plain drive with no
+    `--decision-hz`. The gate is now skipped under CUDA and refused by name only where the
+    stride would really hold a frame.
+  - **`numpy.asarray` on a CuPy array raises rather than copying.** Three places in
+    `tools/` write bytes - the sensor frames and the observation in `policy_client`, and
+    the `.npz` in `agent_env.ActionRecorder` - and each needs a deliberate copy.
+    `tools/gpu_frames.to_host` is that copy; `tests/unit/test_gpu_frames.py` pins all three
+    call sites by AST and both version caps by reading `pyproject.toml`, and all six guards
+    were shown to fail against the pre-Phase-B code before being kept.
+
+  And **the reference checkout's 3.8 venv has had all three packages installed the whole
+  time with `_cuda_enable` False the whole time** (its cupy 12.3.0 fails to import), which
+  is why `drive.py` checks `_cuda_enable` itself and refuses by name printing
+  `sys.executable`: MetaDrive's own assert fires later and its hint is "pip install
+  pypiwin32".
 
 - [ ] **Phase C - the model in the same process**
 
@@ -392,13 +472,21 @@ for -0.2 to -1.5, all of it above.
   `[x, y, yaw, yaw_rate, v_x, v_y, a_x, a_y]` (`WAYPOINT_OUTPUT_WIDTH = 2` against
   `MODELV2_OUTPUT_WIDTH = 8`). We send the 3-wide form. Whether this checkpoint
   produces 8-wide output is part of Phase C.1.
-- **Phase B is worth nothing on a socket.** `image_on_cuda` returns a CuPy array and
-  `encode_array` calls `.tobytes()`, which drags it straight back to main memory. It
-  pays only in Phase C.
+- **Phase B is worth nothing on a socket, and that is now measured.** `image_on_cuda`
+  returns a CuPy array and `encode_array` needs host bytes, so the frame is copied back
+  and the run has done strictly more work than the CPU path. Measured on `junction-1`
+  through `--agent-policy remote`: **2927.0 KB a step either way**, byte for byte. It
+  pays on the socket only in Phase C. It pays in the *simulator* today -- see Phase B.
 - **The fork checkout arrives with every symlink missing.** Ten of them, mode 120000 in
   the index; scons dies on `Missing SConscript 'rednose/SConscript'`, which reads as a
   broken Dockerfile. `git -C "$FORK" status --porcelain | awk '$1=="D"'` before any
   build. Repaired once already on 2026-08-23.
-- **Nothing here has been implemented or measured.** The measured figures quoted are
-  from the bridge bring-up on 2026-08-23 and belong to the *current* state, not to this
-  plan's outcome.
+- **Phase C has not been implemented or measured.** Its figures are either read from
+  source or arithmetic, and are marked as such; the measured ones quoted elsewhere
+  belong to Phases 0, A and B, which are built.
+- **`--image-on-cuda` needs the discrete card, not merely a card.** CUDA-GL interop
+  registers a GL texture with the CUDA context, so both have to be on the same GPU. On
+  this hybrid machine that means `__NV_PRIME_RENDER_OFFLOAD=1
+  __GLX_VENDOR_LIBRARY_NAME=nvidia`, which `scripts/_common.sh:exec_with_gpu` already
+  sets; without them it is `cudaErrorUnknown(999)` at env construction, and nothing in
+  that message says "wrong card".

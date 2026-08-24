@@ -7,6 +7,21 @@
 Stage 9, Phase 0. `tools/openpilot_policy.py --longitudinal table` is the only consumer;
 `tools/pedal_sweep.py` is the only producer.
 
+**This is not a controller, and the distinction is worth stating because the flag it sits
+behind is spelled `--longitudinal`.** A model decides where to go, the openpilot bridge
+decides how hard and which way - `accel_cmd` in m/s^2 and a steering angle in degrees - and
+this decides only *how far to press a pedal to get that acceleration on this particular car*.
+There is no target here, no error term, no memory and no feedback: `PedalMap` is a pure
+`(accel, speed) -> pedal` and `pedal_for(accel_for(p)) == p` exactly.
+
+**The bridge's own egress already contains one of these.** `server.py:788-792` does exactly
+two conversions before replying, side by side - a road-wheel angle into a normalised steer,
+and `accel_to_carla(self._last_actuators.accel, v_ego)` into a throttle and a brake - and both
+are properties of the car rather than of the control law. So this module replaces
+`accel_map.py` rather than adding a stage after it. The steering half needed no replacement
+because that conversion is geometry and cancelled to nothing; see the module docstring of
+`openpilot_policy`.
+
 **Why a table rather than a formula.** The openpilot bridge plans in m/s^2 and hands back
 CARLA pedals from `accel_map.py` - two 8x11 tables from a "Town10HD calibration sweep on
 Tesla M3 @ 20 Hz sync". Its zero crossing is the **CARLA Tesla's own zero-throttle
