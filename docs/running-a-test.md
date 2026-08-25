@@ -412,6 +412,17 @@ uv sync --group sim --group gpu --group model      # all three, or it removes th
 cd scripts && ./av3-probe.sh junction-1 -- --step-hz 100 --decision-hz 20
 ```
 
+**Or in the container**, which is how this reaches a machine that is not this laptop. Set
+`MODEL_DIR` in `.env` to a directory holding both the `.ep` and the `model_dev.yml` first; the
+image already has all three dependency groups, so there is no `uv sync` step:
+
+```bash
+docker compose run --rm sim scripts/av3-probe.sh junction-1 -- --step-hz 100 --decision-hz 20
+```
+
+It must reach the same verdict as the host — that is what says the container changed the
+environment and not the answer. `docs/container.md` §3b has the rest.
+
 **The load prints a traceback and it is not a failure.** `torch_tensorrt.load` tries three
 ways of opening the checkpoint and logs the first two failing before the third works: the
 `.pt2` loader (*"must be a buffer or a file ending in .pt2"*), then `torch.jit.load`

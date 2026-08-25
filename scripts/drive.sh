@@ -57,7 +57,7 @@ PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --) shift; PASSTHROUGH=("$@"); break ;;
-        -h|--help) sed -n '2,38p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
+        -h|--help) sed -n '2,50p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
         -*) die "unknown option: $1
   This script takes only a workspace. To pass $1 to drive.py, put it after --:
     ./scripts/drive.sh ${POSITIONAL:-<workspace>} -- $1" ;;

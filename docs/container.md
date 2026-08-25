@@ -30,6 +30,10 @@ Exits non-zero if any step fails. Takes about 5 min 40 s on this laptop after th
 One test is deselected by name and the run says so: the map-geometry issue in
 `test_ego_route`, which fails on the real map and has nothing to do with the container.
 
+**It does not exercise the AV3 model**, deliberately — its job is to prove the simulator and the
+GPU, and a forward pass costs about a second each. Run `av3-probe.sh` (§3b) after it for that;
+that is the check which says the model works in here.
+
 Add the real cameras, or shorten it:
 
 ```bash
@@ -89,6 +93,49 @@ docker compose run --rm sim bash    # the one command that does drop you inside;
 is a scenario index, not a row, and it has no `--camera-rig`. `sensor-survey.sh` records what the
 sensors see.
 
+## 3b. The AV3 model
+
+**Same container.** `sim` carries the model stack (`torch`, `tensorrt`, `cupy`) beside MetaDrive —
+`tools/av3_probe.py` builds an environment and runs a forward pass in one process, so there was
+nothing for a second image to separate. `container-check.sh` is unchanged and does not touch it.
+
+Set `MODEL_DIR` in `.env` first, to a directory holding **both** model files:
+
+```bash
+MODEL_DIR=/home/keith/Desktop/work/wingfin/metadrive-complete/models
+```
+
+```bash
+docker compose run --rm sim scripts/av3-probe.sh junction-1 -- --step-hz 100 --decision-hz 20
+```
+
+Three things that are different in here, and one that is not:
+
+- **The two files are mounted, not built in.** `compose.yaml` mounts `MODEL_DIR` read-only at
+  `/models` and sets `MODEL_CHECKPOINT` and `MODEL_CONFIG` to paths inside it, so neither needs to
+  be passed. `docker/model/README.md` has the detail; the short version is that
+  **`model_dev.yml` is required and is not defaulted**, so a directory holding only the `.ep`
+  fails at load with nothing in the message naming the missing file.
+- **`METADRIVE_PYTHON` is already right.** On the host the model path needs
+  `METADRIVE_PYTHON=../.venv/bin/python` in front of `drive.sh`, because that script defaults to
+  the 3.8 checkout venv and torch 2.8 has no 3.8 wheel. The image sets it to `/opt/venv/bin/python`
+  already, so **do not pass it in here.**
+- **The openpilot bridge is a second, separate container** — wing-sim's, ubuntu 20.04 / python
+  3.8, which is why it cannot be this one. `network_mode: host` is what lets this container reach
+  it on `127.0.0.1:5558`, and `examples/openpilot_server.py` can sit on either side of the
+  boundary for the same reason.
+- **Not different: the answer.** `av3-probe.sh` must end `result  every checked conversion agrees`
+  and exit 0 in here exactly as it does on the host. That is the check that says the container
+  changed the environment and not the result.
+
+**`--image-on-cuda` in the container is untested.** It needs the GL and the CUDA context on the
+same card; on the host that is the PRIME offload, and in here EGL picks from the image's ICD
+manifest instead. Plausible, unverified — measure before relying on it.
+
+**Do not carry a forward-pass timing across machines.** The 947–1002 ms of Phase C.1 was measured
+on this laptop's RTX 4050 at a 35 W cap, compute-bound with the clock at a third of its rating.
+Re-measuring somewhere else is the point of the container, not something it lets you skip.
+
 ## 4. Onto the rig
 
 Either build it there:
@@ -105,21 +152,39 @@ or carry the built image, which needs no network on the far end:
 docker save wingfin-sim | gzip | ssh <rig> 'gunzip | docker load'
 ```
 
-The image is 2.88 GB and 1.24 GiB compressed, so that transfer is measured in minutes, not
-seconds. Building on the rig is usually quicker if it has network.
-
 Either way the rig also needs this repo (for `tools/`, `scripts/` and the workspace) and the
-camera-rig spec.
+camera-rig spec — and, for the model, the two files `MODEL_DIR` points at. Those are **not** in
+the image and **not** in the repo, so they are the one thing neither `docker compose build` nor a
+`git clone` brings:
+
+```bash
+# on the rig, wherever MODEL_DIR will point
+scp <this-machine>:/…/metadrive-complete/models/step_440000_trt_direct_full.ep .   # 1.26 GB
+scp <this-machine>:/…/metadrive-complete/models/model_dev.yml .                    # 4 KB
+```
+
+On this machine they sit at `metadrive-complete/models/`, beside the repo worktree, so the pair
+travels together. **Copy both** — the 4 KB one is required and its absence is not diagnosed.
+
+**Building on the rig is usually the better half of that choice**, and more so now than it was:
+the image carries the model stack, so it is large, and `docker save | ssh` moves every byte
+while a build pulls the same wheels from PyPI in parallel. Carry the image when the rig has no
+network; build when it has.
 
 ## `.env`
 
 ```bash
 WORKSPACE=mosque
 RIG_DIR=/some/where                             # only for a rig spec kept outside the repo
+MODEL_DIR=/some/where/models                    # the AV3 .ep and model_dev.yml, both
 STEP_TIMING_LABEL=laptop                        # names the machine in the CSV
 ```
 
 `METADRIVE_PYTHON` must stay commented — it would override the container's interpreter.
+
+`MODEL_CHECKPOINT` and `MODEL_CONFIG` are **not** set for a container run: `compose.yaml` points
+them inside `MODEL_DIR` already. Setting either in `.env` overrides that, which is what a second
+checkpoint is for.
 
 ## Three things to know
 
@@ -145,3 +210,5 @@ either way — the printed line is a label, those columns are the measurement.
 | `no such file: rigs/cams.txt` | the spec is in the repo; check it is not a `/rig/...` path from an older note |
 | `could not select device driver` | `nvidia-ctk runtime configure --runtime=docker`, restart docker |
 | the sweep dies on a missing interpreter | `METADRIVE_PYTHON` is uncommented in `.env` |
+| the model fails at load, no file named | `model_dev.yml` is missing from `MODEL_DIR` — both files are needed, not just the `.ep` |
+| `no checkpoint at /models/...` | `MODEL_DIR` is unset, so the empty `docker/model/` fallback got mounted |

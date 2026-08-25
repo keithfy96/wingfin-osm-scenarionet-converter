@@ -4,6 +4,10 @@
 #   cd scripts && ./step-timing-docker.sh mosque -- --rows 2,6
 #   docker compose run --rm sim uv run pytest -q
 #   docker compose run --rm sim bash
+#
+# And the AV3 model, which lives in the same container -- set MODEL_DIR in .env first:
+#
+#   docker compose run --rm sim scripts/av3-probe.sh junction-1 -- --step-hz 100 --decision-hz 20
 services:
   sim:
     build:
@@ -32,6 +36,13 @@ services:
       # fallback is docker/rig/, which exists so an unset RIG_DIR cannot make docker create a
       # root-owned directory in $HOME.
       - "${RIG_DIR:-./docker/rig}:/rig:ro"
+      # The AV3 checkpoint and the model_dev.yml beside it. Not baked into the image: the .ep is
+      # 1.26 GB, it belongs to the openpilot fork rather than to this repo, and a layer holding it
+      # travels wherever the image does. Set MODEL_DIR in .env to the directory holding BOTH files
+      # -- the yml is not optional, `av3_model.load_config` requires every field in it and defaults
+      # none, so a directory with only the .ep in it fails at load with nothing pointing at the
+      # cause. Same fallback reasoning as RIG_DIR.
+      - "${MODEL_DIR:-./docker/model}:/models:ro"
       # The host's clock. Without this the image has no /etc/localtime and no zoneinfo, so glibc
       # falls back to UTC -- and a step-timing CSV, whose whole index is the stamp in its name,
       # comes out 8 hours adrift of a run made outside the container on the same machine. Docker
@@ -44,6 +55,15 @@ services:
       # Names the machine in every row of a step-timing CSV and in the file name. The hostname is
       # a random id in a container, so this matters more here than anywhere else.
       STEP_TIMING_LABEL: "${STEP_TIMING_LABEL:-container}"
+
+      # Where the two model files are, in the container's own paths -- so `av3-probe.sh` and
+      # `drive.py --model-checkpoint` need no arguments in here that they do not need outside.
+      # Both default into the mount above; setting either in .env overrides it, which is what a
+      # second checkpoint is for. The host defaults are absolute paths into the fork checkout
+      # (`model_probe.DEFAULT_CHECKPOINT`, `av3_model.DEFAULT_CONFIG`) and do not exist in here,
+      # so these are what make the model runnable in the container at all.
+      MODEL_CHECKPOINT: "${MODEL_CHECKPOINT:-/models/step_440000_trt_direct_full.ep}"
+      MODEL_CONFIG: "${MODEL_CONFIG:-/models/model_dev.yml}"
 
     stdin_open: true
     tty: true

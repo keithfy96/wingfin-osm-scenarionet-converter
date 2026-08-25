@@ -21,6 +21,8 @@
 #
 # Read from .env, all optional:
 #   MODEL_CHECKPOINT  the .ep to load. The fork checkout's copy otherwise.
+#   MODEL_CONFIG      the model_dev.yml beside it. The fork checkout's copy otherwise. Needed
+#                     wherever that checkout is not -- compose.yaml sets both for the container.
 #   WORKSPACE         which workspace to drive.
 #   STEP_HZ           which of its datasets, unless --step-hz is passed after --.
 #   GPU               auto | nvidia | integrated.
@@ -33,7 +35,7 @@ PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --) shift; PASSTHROUGH=("$@"); break ;;
-        -h|--help) sed -n '2,25p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
+        -h|--help) sed -n '2,28p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
         -*) die "unknown option: $1
   This script takes only a workspace. To pass $1 to av3_probe.py, put it after --:
     ./scripts/av3-probe.sh ${POSITIONAL:-<workspace>} -- $1" ;;
@@ -57,6 +59,7 @@ note "workspace  $WS"
 note "dataset    ${DATASET#"$WS/"}"
 note "gpu        $GPU_NOTE"
 note "checkpoint ${MODEL_CHECKPOINT:-from the fork checkout}"
+note "model cfg  ${MODEL_CONFIG:-from the fork checkout}"
 printf '\n'
 
 exec_with_gpu uv run --group sim --group gpu --group model python "${ARGS[@]}"

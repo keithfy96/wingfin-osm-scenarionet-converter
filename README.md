@@ -930,7 +930,16 @@ Every row of a step-timing CSV carries the host, CPU, GPU, GL ceiling and the py
 MetaDrive versions, so two machines' files concatenate into one spreadsheet. That only means
 anything if both machines are provably running the same simulator, and reproducing a venv by hand
 on each box is not provable. `uv.lock` plus a pinned MetaDrive commit is — which is what the image
-is for. The rig needs Docker, the NVIDIA container toolkit and this repo; nothing else.
+is for. The rig needs Docker, the NVIDIA container toolkit and this repo; nothing else — plus, for
+the AV3 model, the two model files, which are mounted rather than built in (see 3b of
+`docs/container.md`).
+
+**The image carries the model stack too**, so the same argument reaches one machine further on: an
+AV3 forward pass is ~1 s on this laptop's power-capped RTX 4050, which is the whole reason to run
+it somewhere else, and a figure from somewhere else is only worth having if the stack behind it is
+pinned rather than reassembled. That is what takes the image from 2.88 GB to about 13 — `gpu` and
+`model` are 10.5 GB of wheels — and it was chosen over a second, leaner image deliberately, on the
+grounds that it is built once and then used.
 
 **There is one interpreter in the container, not two.** MetaDrive has always run here on its own
 3.8 venv (numpy 1.24) beside this repo's 3.10 (numpy 2.2), which is why `drive.sh`,
@@ -1316,6 +1325,17 @@ Six things worth knowing:
 - **It needs this repo's interpreter.** `av3-probe.sh` uses it already; `drive.sh` needs
   `METADRIVE_PYTHON=../.venv/bin/python`, because torch has no Python 3.8 wheel and MetaDrive
   does not need one.
+- **And it runs in the container**, which is how it reaches a machine that is not this laptop —
+  the same `sim` image as the sweep, because a forward pass and the environment it reads share a
+  process. Set `MODEL_DIR` in `.env` to a directory holding **both** the `.ep` and the
+  `model_dev.yml`, and `compose.yaml` mounts it at `/models`:
+
+  ```bash
+  docker compose run --rm sim scripts/av3-probe.sh junction-1 -- --step-hz 100 --decision-hz 20
+  ```
+
+  `METADRIVE_PYTHON` is already correct in there and must **not** be passed. `docs/container.md`
+  has the rest, including why the openpilot bridge stays a separate container.
 
 **`docs/running-a-test.md` is the ladder for checking all of it**, cheapest first — 1 s of
 tests, then the rig, then the conversions with no GPU pass, then the model predicting beside a

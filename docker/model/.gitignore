@@ -1,0 +1,5 @@
+# A checkpoint dropped in here is a per-machine file, like .env. Only the note is tracked.
+# The .ep is 1.26 GB and belongs to the openpilot fork, so it must never reach a commit.
+*
+!.gitignore
+!README.md

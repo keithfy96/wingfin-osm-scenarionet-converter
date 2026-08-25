@@ -1,10 +1,16 @@
-# One environment for the whole repo, including MetaDrive.
+# One environment for the whole repo: the converter, MetaDrive, and the AV3 model.
 #
 # The point of this image is the step-timing sweep: every row of its CSV carries the host, CPU,
 # GPU, GL ceiling and library versions so two machines' files concatenate into one spreadsheet,
 # and that comparison only means something if both machines are provably running the same
 # simulator. Reproducing a 3.4 GB venv and a git checkout by hand on each box is not provably
 # anything; `uv.lock` plus a pinned MetaDrive commit is.
+#
+# It carries the Stage 9 model stack for the same reason one step further on: an AV3 forward pass
+# is ~1 s on this laptop's power-capped RTX 4050, which is the whole argument for running it
+# somewhere else -- and a figure from another machine is only worth having if the stack that
+# produced it is pinned rather than reassembled by hand. The model files themselves are NOT in
+# here; `compose.yaml` mounts them at /models, the way it mounts a camera-rig spec at /rig.
 #
 # Two things about it are worth knowing before changing anything:
 #
@@ -78,8 +84,27 @@ WORKDIR /work
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 
+# All three groups, in one environment, because the AV3 model has to run where MetaDrive runs:
+# `tools/av3_probe.py` builds an env and a forward pass in the same process, so a second image
+# would only move the problem. It is why the image is ~13 GB rather than 2.88 -- measured in the
+# host venv, `gpu` and `model` are 10.5 GB of it: tensorrt_libs 4.4 G, nvidia 4.1 G, torch 1.7 G,
+# cupy 236 M. A sweep that never touches the model carries them; that was the trade taken
+# deliberately, against a second image, because this is built once and then used.
+#
+# Two things that would otherwise be looked for and are already here. **CUDA needs nothing
+# added**: NVIDIA_DRIVER_CAPABILITIES below already carries `compute`, and torch/TensorRT/CuPy
+# bring their own libraries as pip wheels rather than wanting a system toolkit. And **--frozen is
+# satisfied without touching the lock** -- all three groups are already resolved in uv.lock
+# (`uv lock --check` passes), because the host has been running them since Phase C.
+# `uv cache clean` is in the same RUN and is not tidiness -- it is 16 GB. UV_LINK_MODE=copy above
+# means uv copies each wheel out of its download cache into the venv rather than hardlinking, so
+# both exist; committed together this layer measured **28.7 GB against a 13 GB venv**. Same layer
+# or it saves nothing, and `uv cache clean` rather than `rm -rf` a guessed path, because uv knows
+# where its own cache is. It was there before the model groups too -- `sim` alone is small enough
+# that half a gigabyte of it went unnoticed in a 2.88 GB image.
 RUN uv venv --python 3.10 /opt/venv \
-    && uv sync --frozen --group sim \
+    && uv sync --frozen --group sim --group gpu --group model \
+    && uv cache clean \
     && chmod -R a+rX /opt/python /opt/venv
 
 # The 168 MB asset pack is not in MetaDrive's git tree (`git ls-files metadrive/assets` is empty);
