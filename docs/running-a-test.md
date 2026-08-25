@@ -18,13 +18,17 @@ and the *"The model is at the wheel now"* section of `CLAUDE.md`.
 The rungs are not equally cheap to *set up*, and the expensive prerequisite is at the top. Check
 this before starting on a machine that has not run this before — a rig, or a fresh clone.
 
-| tier | needs, beyond this repo and `uv sync` |
+| tier | needs, beyond this repo |
 |---|---|
-| **0** | nothing |
-| **1** | nothing — 1b wants a converted dataset, and the repo has one |
-| **2–3** | an NVIDIA GPU, `uv sync --group sim --group gpu --group model`, and the two model files (the `.ep` and `model_dev.yml`) |
-| **4** | all of tier 3's, **plus the openpilot bridge image, running** — a second container, which `scripts/bridge.sh build` makes out of this repo alone |
+| **0–1** | `uv sync`. 1b wants a converted dataset, and the repo has one |
+| **2–3** | an NVIDIA GPU, the two model files (the `.ep` and `model_dev.yml`), and either `uv sync --group sim --group gpu --group model` on the host **or** the `sim` image |
+| **4** | tier 3's, **plus the openpilot bridge image, running** — a second container, which `scripts/bridge.sh build` makes out of this repo alone |
 | **5** | tier 2's. Deliberately no bridge: that is what it is for |
+
+**On a rig, nothing needs `uv` on the host.** Tiers 2–5 all run inside the `sim` container, which
+carries it — `./sim.sh <command>`, and `docs/container.md` §3b for the model probe. The `uv sync`
+lines above are for a development machine driving from the host. Setting up a rig is
+`docker compose build`, `./bridge.sh build`, and two keys in `.env` (`docs/container.md`).
 
 **The bridge is the one that catches people out**, because `docker compose build` does not build
 or pull it and no error mentions it until a drive is a minute in — at which point it says
@@ -442,7 +446,8 @@ cd scripts && ./av3-probe.sh junction-1 -- --step-hz 100 --decision-hz 20
 image already has all three dependency groups, so there is no `uv sync` step:
 
 ```bash
-docker compose run --rm sim scripts/av3-probe.sh junction-1 -- --step-hz 100 --decision-hz 20
+cd scripts
+./sim.sh scripts/av3-probe.sh junction-1 -- --step-hz 100 --decision-hz 20
 ```
 
 It must reach the same verdict as the host — that is what says the container changed the
@@ -483,29 +488,6 @@ Ends with `result  every checked conversion agrees` and exits 0.
 vendored at a pinned commit rather than fetched, so no part of this needs access to the private
 zapetaai org. `scripts/bridge.sh` builds, starts and checks it.
 
-Check before anything else:
-
-```bash
-cd scripts
-./bridge.sh status
-```
-
-It answers all three questions at once — is the image built, is the container up, and is anything
-actually listening on 5558 — and tells you the next command for whichever state you are in:
-
-| what it says | what to do |
-|---|---|
-| `Up …` and `something is listening` | ready. Skip to the commands below, and **do not** run `start` — the name is taken by a working container |
-| `NOT BUILT` | `./bridge.sh build`, or load a copy — both below |
-| container `none` | `./bridge.sh start` |
-| `Exited …` | `./bridge.sh logs` for why, then `./bridge.sh stop` and `start` |
-| `Up …` but `nothing is listening` | the container is alive and the server inside it is not. `./bridge.sh logs` |
-
-That last row is the one a bare `docker ps` cannot tell you, and it is the difference between a
-`Connection refused` you can fix in a second and one you spend a drive diagnosing.
-
-A `socket.timeout` traceback at the end of `./bridge.sh logs` is **not** a crash — it is the last
-drive disconnecting. The server catches it and goes back to listening, which is why it is still up.
 
 ### If there is no image: build one
 
@@ -536,25 +518,6 @@ without `-l`, a zip, git with `core.symlinks=false` — makes scons die on
 `Missing SConscript 'rednose/SConscript'`, which reads like a broken Dockerfile and is not. Get
 the repo here by `git clone` and it cannot happen.
 
-**Or carry a built image**, which is still right for a machine with no network:
-
-```bash
-# on a machine that has the image
-cd scripts && ./bridge.sh save /tmp/bridge-image.tar.gz
-scp /tmp/bridge-image.tar.gz <machine>:
-
-# on the machine that does not
-gunzip < bridge-image.tar.gz | docker load
-```
-
-Or in one pipe, if the two can see each other:
-
-```bash
-docker save wing-sim-openpilot:prod | gzip | ssh <machine> 'gunzip | docker load'
-```
-
-That moves 5.5 GB against a clone that already carries the 309 MB, so **build unless the machine
-has no network** — half an hour of CPU is usually cheaper than 5.5 GB over a link.
 
 ### What is actually running: three processes
 
@@ -572,50 +535,60 @@ has no network** — half an hour of CPU is usually cheaper than 5.5 GB over a l
 - **The drive** renders six cameras, asks the model for twenty waypoints, sends them, applies the
   pedals — once every 0.05 s.
 
-`network_mode: host` is why each can be in a container or not and still find the others on
-`127.0.0.1`.
+**All three are containers, and `network_mode: host` is why they still find each other on
+`127.0.0.1`.** Nothing here runs on the host, and nothing needs installing there — not even `uv`.
 
-### The commands — on the host
+### The commands
+
+Two terminals, both in `scripts/`.
 
 ```bash
-uv run python examples/openpilot_server.py --backend bridge --longitudinal table --port 8642
+cd scripts
+./sim.sh python3 examples/openpilot_server.py --backend bridge --longitudinal table --port 8642
 ```
 
 ```bash
-cd scripts && METADRIVE_PYTHON=../.venv/bin/python ./drive.sh junction-1 -- \
+cd scripts
+./sim.sh scripts/drive.sh junction-1 -- \
     --agent-policy remote --policy-url http://127.0.0.1:8642 \
     --sensors imu,route --step-hz 100 --decision-hz 20 --render offscreen
 ```
 
-`METADRIVE_PYTHON` matters — `drive.sh` defaults to the 3.8 checkout venv, and torch 2.8 has
-no 3.8 wheel (nor needs one, MetaDrive itself running on 3.10). Set `MODEL_CHECKPOINT` in `.env`,
-or pass `--model-checkpoint <the .ep>`; either implies `--camera-rig rigs/av3.txt`, the rig the
-weights were trained on.
+**`sim.sh` is not decoration — it is the only thing that runs the container as you.**
+`compose.yaml` takes the uid from `DOCKER_UID`, a shell does not export that, and a bare
+`docker compose run` therefore runs as uid 1000 whoever you are. On a machine where you are not
+1000 that means reports written into the workspace with the wrong owner, and `import
+torch_tensorrt` dying on `KeyError: 'getpwuid(): uid not found'` the moment a checkpoint loads.
+`./sim.sh id` should print your own name.
 
-### The commands — in the container
+Three things it settles that a host run would not:
 
-```bash
-docker compose run --rm sim uv run python examples/openpilot_server.py \
-    --backend bridge --longitudinal table --port 8642
-```
-
-```bash
-docker compose run --rm sim scripts/drive.sh junction-1 -- \
-    --agent-policy remote --policy-url http://127.0.0.1:8642 \
-    --sensors imu,route --step-hz 100 --decision-hz 20 --render offscreen
-```
-
-Three differences, each a thing that otherwise fails or misleads:
-
-- **no `METADRIVE_PYTHON=`** — the image sets it to `/opt/venv/bin/python` already, and the host's
-  `../.venv/bin/python` is a path that does not exist in there;
-- **no `--model-checkpoint`** — `compose.yaml` sets `MODEL_CHECKPOINT` to the mounted `/models`
-  path, and `drive.py` reads it. Set `MODEL_DIR` in `.env` first (§3b of `docs/container.md`);
+- **the interpreter** — `python3` in there *is* `/opt/venv/bin/python3` (3.10.21), and
+  `METADRIVE_PYTHON` is already pointed at it, so neither `uv run` nor a `METADRIVE_PYTHON=`
+  prefix belongs on these lines;
+- **the checkpoint** — `compose.yaml` sets `MODEL_CHECKPOINT` to the mounted `/models` path and
+  `drive.py` reads it, so there is no `--model-checkpoint` to pass. Set `MODEL_DIR` in `.env`
+  first (§3b of `docs/container.md`). It implies `--camera-rig rigs/av3.txt`, the rig the weights
+  were trained on;
 - **`--render offscreen`, never `3D`** — there is no display.
 
-**A drive with no checkpoint is not the model driving.** Leave it out with `MODEL_CHECKPOINT`
-unset and the waypoints come from the recorded route at constant speed — the `route_gt` path,
-which is a controller test by construction and the thing Phase 0 measured. The run looks the same.
+**A drive with no checkpoint is not the model driving.** `./sim.sh --no-model` leaves it out, and
+the waypoints then come from the recorded route at constant speed — the `route_gt` path, which is
+a controller test by construction and the thing Phase 0 measured. The run looks the same.
+
+**On that path, `--longitudinal table` does not finish `junction-1`, and that is expected.**
+Measured through the container, both `--no-model`:
+
+| `--longitudinal` | result |
+|---|---|
+| `table` | 7751 steps, `arrive_dest=False`, completion **0.810**, `out_of_road` at lateral −4.00 m |
+| `accel` | 8668 steps, `arrive_dest=True`, completion **0.950** |
+
+Same 0.815 that the *What to expect* table below records for `route_gt` + `table`, so it is the
+pedal map and not your setup: those tables are a CARLA Town10HD calibration whose zero crossing is
+the CARLA Tesla's −1.582 m/s² drag, against MetaDrive's −0.364, so most requests to slow gently
+come back as throttle. **Use `--longitudinal accel` if you want the no-model drive to arrive**;
+`table` is what to use with the model, which is what the numbers below were taken on.
 
 ### When it says `Connection refused`
 
@@ -638,7 +611,7 @@ second cause and this separates them:
 python3 -c "import socket;s=socket.socket();s.setsockopt(1,2,1);s.bind(('127.0.0.1',5558));s.listen();print('listening');s.accept()"
 
 # terminal B
-docker compose run --rm sim python -c "import socket;s=socket.socket();s.settimeout(2);print(s.connect_ex(('127.0.0.1',5558)))"
+cd scripts && ./sim.sh python3 -c "import socket;s=socket.socket();s.settimeout(2);print(s.connect_ex(('127.0.0.1',5558)))"
 ```
 
 `0` → host networking is fine and the bridge is simply absent. `111` → the namespaces are
@@ -683,29 +656,28 @@ openpilot, nothing to install** — so it exercises the whole chain in seconds a
 whether a tier-4 failure is your setup or a missing bridge. That is the question a
 `Connection refused` on its own cannot answer.
 
+Two terminals, both in `scripts/`, and neither needs anything installed on the host:
+
 ```bash
-uv run python examples/openpilot_server.py --backend stub --port 8643
+cd scripts
+./sim.sh python3 examples/openpilot_server.py --backend stub --port 8643
 ```
 
 ```bash
-docker compose run --rm sim uv run python examples/openpilot_server.py --backend stub --port 8643
-```
-
-Then the same `drive.sh` line **without** the model, pointed at port 8643. Expect
-**3788 steps, `arrive_dest=True`, completion 0.950** — unchanged from before any of this
-landed, so a regression in the wire stays distinguishable from a regression in the model.
-Measured in the container: the same three figures and `result  OK`, in **41 s** wall-clock.
-
-**In the container you have to say so**, because `compose.yaml` sets `MODEL_CHECKPOINT` and
-`drive.py` reads it — so the drive would load the model and take a quarter of an hour instead of
-a minute. An empty value in the shell will not do it (`${VAR:-default}` treats empty as unset);
-pass it on the run:
-
-```bash
-docker compose run --rm -e MODEL_CHECKPOINT= sim scripts/drive.sh junction-1 -- \
+cd scripts
+./sim.sh --no-model scripts/drive.sh junction-1 -- \
     --agent-policy remote --policy-url http://127.0.0.1:8643 \
     --sensors imu,route --step-hz 100 --decision-hz 20 --render offscreen
 ```
+
+Expect **3788 steps, `arrive_dest=True`, completion 0.950** — unchanged from before any of this
+landed, so a regression in the wire stays distinguishable from a regression in the model.
+Measured in the container at **41 s** wall-clock, `result  OK`.
+
+**`--no-model` is not optional here.** `compose.yaml` sets `MODEL_CHECKPOINT` and `drive.py` reads
+it, so without it the drive loads the model and takes a quarter of an hour instead of a minute.
+Emptying the variable in your own shell will not do it — `${VAR:-default}` treats empty as unset —
+so it has to be passed on the run, which is all the flag does.
 
 **`--longitudinal table` is refused here**, by name: the stub answers in pedals and carries no
 `accel_cmd`, so there is nothing for a pedal map to convert. Leave the flag off.

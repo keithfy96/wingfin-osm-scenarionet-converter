@@ -1597,6 +1597,13 @@ reproduces the host's figures to within the noise (0.34x / 2.55x / 1.47x against
 
 ### openpilot drives through the same socket, and the route is a sensor now (2026-08-22)
 
+**Every `uv run python examples/openpilot_server.py` below is the host form** — a development
+machine with the venv synced, which is what these measurements were taken on. It is no longer what
+the docs tell a reader to run: `docs/running-a-test.md` tiers 4 and 5 are container-only now, via
+`./sim.sh python3 examples/openpilot_server.py ...`, because the rig has no `uv` and should not
+need one. The commands are otherwise identical, and the numbers carry across (verified: tier 5
+through the container gives the same 3788 / 0.950 / `result OK`).
+
 `wing-sim/openpilot/bridge/zapeta/server.py` is a **controller, not a driver**: per tick it takes
 a predicted path plus `v_ego` / `yaw_rate` / `steering_angle_deg` and returns `steer` / `throttle`
 / `brake`. It never sees an image — the thing that turns cameras into waypoints is a separate

@@ -4,10 +4,19 @@ One image holding the whole environment: Python 3.10, the converter, and MetaDri
 two machines' step-timing CSVs are comparable — same interpreter, same locked packages, same
 MetaDrive commit — leaving the machine columns as the only difference.
 
-**Run all of this from your own terminal, at the repo root.** Nothing here is typed inside the
-container — each command starts one, does its job, and exits. The root rather than `scripts/`,
-which is where the other stage scripts are normally run from, because the `docker compose` lines
-below need to find `compose.yaml`; the scripts themselves work from either.
+**Run all of this from your own terminal.** Nothing here is typed inside the container — each
+command starts one, does its job, and exits.
+
+**`scripts/sim.sh` is the way in**, and the one to use rather than `docker compose run` typed out:
+`compose.yaml` runs the container as `${DOCKER_UID:-1000}`, a shell does not export that, and a
+bare `docker compose run` is therefore uid 1000 whoever you are. `sim.sh` reads it from `id -u`.
+`./sim.sh id` should print your own name; if it does not, everything the container writes into the
+mounted workspace will have the wrong owner and the model will fail to import. The `docker compose
+build` and `docker compose config` lines below are fine as they are — they start nothing.
+
+The stage scripts are normally run from inside `scripts/`, and `sim.sh` and the `-docker.sh`
+wrappers work from either: they `cd` to the repo root themselves, which is where `compose.yaml`
+is.
 
 ## 1. Test everything
 
@@ -84,9 +93,10 @@ stop partway still leaves the rows it got through.
 ## 3. The other tools
 
 ```bash
-docker compose run --rm sim scripts/drive.sh mosque -- --render offscreen
-docker compose run --rm sim scripts/sensor-survey.sh mosque -- --camera-rig rigs/cams.txt
-docker compose run --rm sim bash    # the one command that does drop you inside; exit to leave
+cd scripts
+./sim.sh scripts/drive.sh mosque -- --render offscreen
+./sim.sh scripts/sensor-survey.sh mosque -- --camera-rig rigs/cams.txt
+./sim.sh bash    # the one command that does drop you inside; exit to leave
 ```
 
 `drive.sh` drives **one** scenario end to end and reports on it — the `scenario 0` in its output
@@ -106,7 +116,8 @@ MODEL_DIR=/home/keith/Desktop/work/wingfin/metadrive-complete/models
 ```
 
 ```bash
-docker compose run --rm sim scripts/av3-probe.sh junction-1 -- --step-hz 100 --decision-hz 20
+cd scripts
+./sim.sh scripts/av3-probe.sh junction-1 -- --step-hz 100 --decision-hz 20
 ```
 
 Three things that are different in here, and one that is not:
@@ -214,22 +225,37 @@ network; build when it has.
 
 ## `.env`
 
+**On a fresh machine there are two keys to set, and one of them is optional.** Copy
+`.env.example` to `.env` (it is gitignored) and edit:
+
 ```bash
-WORKSPACE=mosque
-RIG_DIR=/some/where                             # only for a rig spec kept outside the repo
-MODEL_DIR=/some/where/models                    # the AV3 .ep and model_dev.yml, both
-STEP_TIMING_LABEL=laptop                        # names the machine in the CSV
+WORKSPACE=mosque                                # the scripts also take it as an argument
+MODEL_DIR=/abs/path/to/models                   # the AV3 .ep and model_dev.yml, BOTH
+STEP_TIMING_LABEL=rig                           # optional; names the machine in the CSV
 ```
 
-`BRIDGE_PORT`, `BRIDGE_IMAGE` and `BRIDGE_NAME` are `scripts/bridge.sh`'s, and all three default
-to what every doc and error message names — set one only to run a second bridge beside a working
-one.
+**`MODEL_DIR` is the only one that is not optional**, and only for what actually loads the model —
+§3b's probe, and a tier-4 drive with the checkpoint. `compose.yaml` mounts it read-only at
+`/models` and points `MODEL_CHECKPOINT` and `MODEL_CONFIG` inside it. **Both files**:
+`model_dev.yml` is required and not defaulted, so a directory holding only the `.ep` fails at load
+with nothing in the message naming what is missing. Tier 5 of `docs/running-a-test.md`
+(`--backend stub`, `./sim.sh --no-model`) needs none of it.
 
-`METADRIVE_PYTHON` must stay commented — it would override the container's interpreter.
+Four that do **not** need setting, and one that must not be:
 
-`MODEL_CHECKPOINT` and `MODEL_CONFIG` are **not** set for a container run: `compose.yaml` points
-them inside `MODEL_DIR` already. Setting either in `.env` overrides that, which is what a second
-checkpoint is for.
+- **`METADRIVE_PYTHON` must stay commented.** `_common.sh` sources this file with `set -a`, so an
+  uncommented host path would override the container's own interpreter and the run dies on a
+  missing venv.
+- `MODEL_CHECKPOINT` and `MODEL_CONFIG` — `compose.yaml` points them inside `MODEL_DIR` already.
+  Setting either here overrides that, which is what a second checkpoint is for.
+- `RIG_DIR` — only for a camera-rig spec kept **outside** the repo. `rigs/av3.txt` and
+  `rigs/cams.txt` are in the repo and the repo is mounted at `/work`, so `--camera-rig
+  rigs/av3.txt` is the same string inside the container and out.
+- `DOCKER_UID` / `DOCKER_GID` — deliberately not here. `sim.sh` reads them from `id -u` / `id -g`
+  so they cannot go stale against the account actually running.
+- `BRIDGE_PORT`, `BRIDGE_IMAGE`, `BRIDGE_NAME` are `scripts/bridge.sh`'s, and all three default to
+  what every doc and error message names — set one only to run a second bridge beside a working
+  one.
 
 ## Three things to know
 
@@ -251,14 +277,15 @@ either way — the printed line is a label, those columns are the measurement.
 | | |
 |---|---|
 | `gl_renderer` is `llvmpipe` | rebuild — the NVIDIA EGL manifest is missing |
-| CSVs owned by root | use `step-timing-docker.sh`, not a bare `docker compose run` |
+| CSVs owned by root, or by a user that is not you | you ran `docker compose run` directly. `compose.yaml` takes the uid from `DOCKER_UID` and a shell does not export it, so it falls back to 1000. `scripts/sim.sh` (or `step-timing-docker.sh`) is what passes yours through — `./sim.sh id` should print your own name |
+| `KeyError: 'getpwuid(): uid not found'` when the model loads | the same fault, one step further on: the container is running as a uid with no entry in the mounted `/etc/passwd`, and `torch_tensorrt` reads the user's *name* at import. Run it through `./sim.sh` |
 | `no such file: rigs/cams.txt` | the spec is in the repo; check it is not a `/rig/...` path from an older note |
 | `could not select device driver` | `nvidia-ctk runtime configure --runtime=docker`, restart docker |
 | the sweep dies on a missing interpreter | `METADRIVE_PYTHON` is uncommented in `.env` |
 | the model fails at load, no file named | `model_dev.yml` is missing from `MODEL_DIR` — both files are needed, not just the `.ep` |
 | `no checkpoint at /models/...` | `MODEL_DIR` is unset, so the empty `docker/model/` fallback got mounted |
 | `KeyError: 'getpwuid(): uid not found'` | `/etc/passwd` is not mounted. The container runs as your uid and the image has no entry for it; `torch_tensorrt` reads the user's *name* at import. `compose.yaml` mounts it read-only |
-| a drive loads the model when you did not ask | `MODEL_CHECKPOINT` is set for you in here. `docker compose run --rm -e MODEL_CHECKPOINT= sim …` to leave it out |
+| a drive loads the model when you did not ask | `MODEL_CHECKPOINT` is set for you in here. `./sim.sh --no-model …` leaves it out; emptying the variable in your own shell will not, because `${VAR:-default}` treats empty as unset |
 | `ConnectionRefusedError` on 5558 | the bridge. `cd scripts && ./bridge.sh status` — it says whether the image exists, whether the container is up, and whether anything is listening |
 | `docker compose build` sends a huge context | `docker/openpilot/deps/` is in `.dockerignore` — 309 MB of vendored openpilot that the `sim` image has no use for. If it reappears, that line was lost |
 | `Missing SConscript 'rednose/SConscript'` during `bridge.sh build` | the repo reached this machine by something that flattened symlinks. `git clone` it instead; `bridge.sh build` checks all ten before starting |

@@ -1283,19 +1283,29 @@ raw speed it was built from, the navigation block beside `policy_client`'s own `
 two independent projections of the same route, one mirrored — and the predicted waypoints
 against where the recorded car really went.
 
-Then drive it, in two terminals:
+Then drive it, in two terminals, both through the container:
 
 ```bash
-uv run python examples/openpilot_server.py --backend bridge --longitudinal table --port 8642
+cd scripts
+./sim.sh python3 examples/openpilot_server.py --backend bridge --longitudinal table --port 8642
 
-cd scripts && METADRIVE_PYTHON=../.venv/bin/python ./drive.sh junction-1 -- \
+./sim.sh scripts/drive.sh junction-1 -- \
     --agent-policy remote --policy-url http://127.0.0.1:8642 \
-    --model-checkpoint /path/to/step_440000_trt_direct_full.ep \
     --sensors imu,route --step-hz 100 --decision-hz 20 --render offscreen
 ```
 
-`--model-checkpoint` implies `--camera-rig rigs/av3.txt`, which is the rig the weights were
-trained on. `--waypoints derive` puts the bridge back on the cubic-fit path every measurement
+`sim.sh` is the wrapper that runs the container as **you** — `compose.yaml` takes the uid from
+`DOCKER_UID` and a shell does not export it, so a bare `docker compose run` is uid 1000 whoever
+you are. It also settles the interpreter (the image's `python3` is the venv) and the checkpoint
+(`MODEL_CHECKPOINT` comes from `MODEL_DIR` in `.env`), which is why neither `uv run`, nor
+`METADRIVE_PYTHON=`, nor `--model-checkpoint` appears above.
+
+The host form was `uv run python examples/openpilot_server.py …` beside
+`METADRIVE_PYTHON=../.venv/bin/python ./drive.sh …`; it still works on a development machine with
+the venv synced, and is what the measurements below were taken on. It is not what to use on a rig.
+
+`--model-checkpoint` — or `MODEL_DIR` in `.env` — implies `--camera-rig rigs/av3.txt`, which is
+the rig the weights were trained on. `--waypoints derive` puts the bridge back on the cubic-fit path every measurement
 before this was taken on, so those stay reproducible.
 
 Six things worth knowing:
@@ -1336,7 +1346,7 @@ Six things worth knowing:
   `model_dev.yml`, and `compose.yaml` mounts it at `/models`:
 
   ```bash
-  docker compose run --rm sim scripts/av3-probe.sh junction-1 -- --step-hz 100 --decision-hz 20
+  cd scripts && ./sim.sh scripts/av3-probe.sh junction-1 -- --step-hz 100 --decision-hz 20
   ```
 
   `METADRIVE_PYTHON` is already correct in there and must **not** be passed. `docs/container.md`
