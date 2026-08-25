@@ -464,10 +464,12 @@ def main() -> int:
     try:
         import torch
     except ImportError as error:
+        sys.path.insert(0, str(REPO / "tools"))  # main() has not done this; the probe's does
+        import env_hint
+
         print(
-            f"result       FAILED: {error}. The model stack is an opt-in dependency group: "
-            "`uv sync --group model`, and run through `uv run --group model` or "
-            "scripts/model-probe.sh."
+            f"result       FAILED: {error}. The model stack is an opt-in dependency group.\n"
+            + env_hint.install_hint(("model",))
         )
         return 1
 
@@ -487,7 +489,13 @@ def main() -> int:
         import tensorrt
         import torch_tensorrt
     except ImportError as error:
-        print(f"result       FAILED: {error}. `uv sync --group model` installs all three.")
+        sys.path.insert(0, str(REPO / "tools"))  # main() has not done this; the probe's does
+        import env_hint
+
+        print(
+            f"result       FAILED: {error}. torch, tensorrt and torch_tensorrt come as one "
+            "group.\n" + env_hint.install_hint(("model",))
+        )
         return 1
     _line("torch-trt", torch_tensorrt.__version__)
     _line("tensorrt", tensorrt.__version__)

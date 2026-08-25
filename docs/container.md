@@ -82,6 +82,34 @@ anything to drive. Full reference: `docs/step-timing-rows.md`.
 `rigs/`, the workspaces — is live through the `.:/work` bind mount, and the editable install
 points at `/work/src`. Only a dependency change needs `docker compose build`.
 
+**But a pull can be a dependency change, and nothing tells you.** If `git pull` touched
+`pyproject.toml`, `uv.lock` or `docker/Dockerfile`, the image is now behind the code and
+**compose will not notice**: `docker compose run` reuses whatever holds the `wingfin-sim` tag and
+never builds. Neither will a rebuild you ran *before* the pull — it rebuilds the old recipe out of
+BuildKit's cache in seconds and looks exactly like a successful build.
+
+That is not theoretical. A rig spent a morning on
+
+```
+result       FAILED: --model-checkpoint needs torch, which is not installed in /opt/venv/bin/python
+```
+
+against an image built before `--group gpu --group model` was added to `docker/Dockerfile`.
+`./sim.sh` now says so in the first second instead — it reads the `wingfin.groups` label off the
+image and compares it with the `uv sync` line — but the habit is what matters: **after a pull that
+changes the lock or the Dockerfile, `docker compose build`.**
+
+To ask the image directly, on any machine:
+
+```bash
+docker compose run --rm sim python3 -c "import torch, tensorrt; print(torch.__version__)"
+```
+
+**Not the image size.** `docker images` measures different things on different machines: the
+classic overlay2 store prints one `SIZE` column (13.2 GB here), the containerd snapshotter prints
+`CONTENT SIZE` (compressed blobs) and `DISK USAGE` (those plus unpacked snapshots). A number from
+one machine proves nothing about the other's image, so read what is installed instead.
+
 CSVs land in `workspaces/<ws>/reports/` on the host, owned by you, named
 `step-timing-<label>-<stamp>.csv` — `<label>` is `STEP_TIMING_LABEL` or the hostname, and
 `<stamp>` is when the run started, in **your** local time. The sweep prints the full path on
@@ -109,7 +137,7 @@ sensors see.
 `tools/av3_probe.py` builds an environment and runs a forward pass in one process, so there was
 nothing for a second image to separate. `container-check.sh` is unchanged and does not touch it.
 
-Set `MODEL_DIR` in `.env` first, to a directory holding **both** model files:
+Set `MODEL_DIR` in `.env` first, to the directory holding the `.ep`:
 
 ```bash
 MODEL_DIR=/home/keith/Desktop/work/wingfin/metadrive-complete/models
@@ -122,11 +150,12 @@ cd scripts
 
 Three things that are different in here, and one that is not:
 
-- **The two files are mounted, not built in.** `compose.yaml` mounts `MODEL_DIR` read-only at
-  `/models` and sets `MODEL_CHECKPOINT` and `MODEL_CONFIG` to paths inside it, so neither needs to
-  be passed. `docker/model/README.md` has the detail; the short version is that
-  **`model_dev.yml` is required and is not defaulted**, so a directory holding only the `.ep`
-  fails at load with nothing in the message naming the missing file.
+- **The checkpoint is mounted, not built in.** `compose.yaml` mounts `MODEL_DIR` read-only at
+  `/models` and sets `MODEL_CHECKPOINT` inside it, so it needs no argument.
+  `docker/model/README.md` has the detail. **The `model_dev.yml` beside it does not come from
+  there**: it is tracked at `config/model_dev.yml` and reached through the repo's own `/work`
+  mount, which is what `MODEL_CONFIG` defaults to. So `MODEL_DIR` holds one file, and the yml
+  travels with `git`.
 - **`METADRIVE_PYTHON` is already right.** On the host the model path needs
   `METADRIVE_PYTHON=../.venv/bin/python` in front of `drive.sh`, because that script defaults to
   the 3.8 checkout venv and torch 2.8 has no 3.8 wheel. The image sets it to `/opt/venv/bin/python`
@@ -178,7 +207,7 @@ docker save wingfin-sim | gzip | ssh <rig> 'gunzip | docker load'
 |---|---|
 | the `sim` image | `docker compose build` there, or `docker save \| ssh` |
 | this repo | `git` — `tools/`, `scripts/`, `rigs/`, the workspace |
-| the two model files | **copied**, by hand |
+| the AV3 checkpoint | **copied**, by hand — 1.2 GB, the one thing `git` cannot carry |
 | the **openpilot bridge image** | `scripts/bridge.sh build` there, or a saved copy |
 
 The bridge is the one that gets missed, because `docker compose build` does not build or pull it
@@ -207,16 +236,18 @@ has no network. Tier 4 of `docs/running-a-test.md` has the states and what each 
 is the right first thing to run on a new rig, and it is what separates "the container is wrong"
 from "openpilot is not here".
 
-And the model files:
+And the checkpoint — **one file, not two**:
 
 ```bash
 # on the rig, wherever MODEL_DIR will point
 scp <this-machine>:/…/metadrive-complete/models/step_440000_trt_direct_full.ep .   # 1.26 GB
-scp <this-machine>:/…/metadrive-complete/models/model_dev.yml .                    # 4 KB
 ```
 
-On this machine they sit at `metadrive-complete/models/`, beside the repo worktree, so the pair
-travels together. **Copy both** — the 4 KB one is required and its absence is not diagnosed.
+On this machine it sits at `metadrive-complete/models/`, beside the repo worktree.
+`model_dev.yml` used to have to be copied beside it and no longer does — it is tracked at
+`config/model_dev.yml`. That is worth knowing because of how it used to fail: the yml is 4 KB
+next to a 1.2 GB checkpoint, "copy the model over" naturally means the `.ep`, and a directory
+missing the yml fails at load with nothing in the message naming it.
 
 **Building on the rig is usually the better half of that choice**, and more so now than it was:
 the image carries the model stack, so it is large, and `docker save | ssh` moves every byte
@@ -230,16 +261,16 @@ network; build when it has.
 
 ```bash
 WORKSPACE=mosque                                # the scripts also take it as an argument
-MODEL_DIR=/abs/path/to/models                   # the AV3 .ep and model_dev.yml, BOTH
+MODEL_DIR=/abs/path/to/models                   # the directory holding the AV3 .ep
 STEP_TIMING_LABEL=rig                           # optional; names the machine in the CSV
 ```
 
 **`MODEL_DIR` is the only one that is not optional**, and only for what actually loads the model —
 §3b's probe, and a tier-4 drive with the checkpoint. `compose.yaml` mounts it read-only at
-`/models` and points `MODEL_CHECKPOINT` and `MODEL_CONFIG` inside it. **Both files**:
-`model_dev.yml` is required and not defaulted, so a directory holding only the `.ep` fails at load
-with nothing in the message naming what is missing. Tier 5 of `docs/running-a-test.md`
-(`--backend stub`, `./sim.sh --no-model`) needs none of it.
+`/models` and points `MODEL_CHECKPOINT` inside it. **The `.ep` alone**: `model_dev.yml` is tracked
+at `config/model_dev.yml` and `MODEL_CONFIG` defaults there through the `/work` mount, so it is
+not something this directory has to hold. Tier 5 of `docs/running-a-test.md` (`--backend stub`,
+`./sim.sh --no-model`) needs none of it.
 
 Four that do **not** need setting, and one that must not be:
 
@@ -282,7 +313,7 @@ either way — the printed line is a label, those columns are the measurement.
 | `no such file: rigs/cams.txt` | the spec is in the repo; check it is not a `/rig/...` path from an older note |
 | `could not select device driver` | `nvidia-ctk runtime configure --runtime=docker`, restart docker |
 | the sweep dies on a missing interpreter | `METADRIVE_PYTHON` is uncommented in `.env` |
-| the model fails at load, no file named | `model_dev.yml` is missing from `MODEL_DIR` — both files are needed, not just the `.ep` |
+| the model fails at load, no file named | the `model_dev.yml` it wants is missing. It is tracked at `config/model_dev.yml` and read through `/work`, so this means `MODEL_CONFIG` is set in `.env` and points somewhere else — unset it |
 | `no checkpoint at /models/...` | `MODEL_DIR` is unset, so the empty `docker/model/` fallback got mounted |
 | `KeyError: 'getpwuid(): uid not found'` | `/etc/passwd` is not mounted. The container runs as your uid and the image has no entry for it; `torch_tensorrt` reads the user's *name* at import. `compose.yaml` mounts it read-only |
 | a drive loads the model when you did not ask | `MODEL_CHECKPOINT` is set for you in here. `./sim.sh --no-model …` leaves it out; emptying the variable in your own shell will not, because `${VAR:-default}` treats empty as unset |

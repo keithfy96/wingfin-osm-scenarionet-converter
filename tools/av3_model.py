@@ -85,19 +85,30 @@ MODELV2_OUTPUT_WIDTH = 8
 # `routes/route.py:ROUTE_FEATURE_DIM`.
 ROUTE_FEATURE_DIM = 7
 
-# Where the fork keeps the settings the weights were trained with. The same checkout
-# `model_probe.DEFAULT_CHECKPOINT` reads the `.ep` out of.
+# The settings the weights were trained with, tracked in this repo at `config/model_dev.yml`.
 #
-# `MODEL_CONFIG` overrides it, mirroring the `MODEL_CHECKPOINT` that `model_probe.py:413` already
-# reads for the `.ep` - one convention for the pair rather than one each. It is what makes the
-# model runnable anywhere the fork checkout is not, and the container is the case that forced it:
-# `compose.yaml` mounts the two files at /models and sets both keys, and an absolute path into
-# this machine's home directory cannot be reached from in there. Read at import, so the two
-# callers that already say `arguments.model_config or av3_model.DEFAULT_CONFIG`
-# (`av3_probe.py:204`, `drive.py:1341`) pick it up with no change of their own.
+# It used to default to the fork checkout's copy, at an absolute path into one laptop's home
+# directory - and that is a default that is correct on exactly one machine. It was also the only
+# copy in existence: the file came out of the fork's `assets.zip` and was in no git repository at
+# all until `2e686a2`, which is why vendoring the fork missed it (the vendored tree is
+# `wingfin-openpilot-temp/openpilot/`; the config sits in the sibling `assets/`). A rig was handed
+# the 1.2 GB `.ep` and not the 4.3 KB yml, and failed at load with nothing naming the cause.
+#
+# Derived from `__file__` rather than named, the way `drive.py:893` derives `rigs/av3.txt`, so it
+# follows a worktree or a bind mount instead of pinning one checkout. `/work/config/model_dev.yml`
+# in the container resolves to this same file through the repo mount.
+#
+# `MODEL_CONFIG` still overrides it, mirroring the `MODEL_CHECKPOINT` that `model_probe.py:413`
+# reads for the `.ep` - one convention for the pair rather than one each. That override is not
+# decoration: the yml names its own `checkpoint:` and `route_path:`, so it is paired to one set of
+# weights. This is the default pair, not the only one. Read at import, so the two callers that
+# already say `arguments.model_config or av3_model.DEFAULT_CONFIG` (`av3_probe.py:204`,
+# `drive.py:1341`) pick it up with no change of their own.
 DEFAULT_CONFIG = os.environ.get(
     "MODEL_CONFIG",
-    "/home/keith/Desktop/work/wingfin/wingfin-openpilot-temp/assets/configurations/model_dev.yml",
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "model_dev.yml"
+    ),
 )
 
 # Read out of `model_dev.yml` and required to be present. Nothing here is defaulted: a

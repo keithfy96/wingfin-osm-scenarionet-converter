@@ -776,7 +776,7 @@ def main() -> int:
         "--image-on-cuda",
         action="store_true",
         help="Keep rendered camera frames in GPU memory as CuPy arrays instead of copying "
-        "them to the host. Needs --render offscreen and `uv sync --group gpu`; MetaDrive "
+        "them to the host. Needs --render offscreen and the `gpu` dependency group; MetaDrive "
         "asserts at env construction when the three packages behind `_cuda_enable` are not "
         "importable, so a missing install is loud rather than a silent fall back to the CPU. "
         "Refused with --render 3D, where MetaDrive's own teardown raises after a correct "
@@ -908,11 +908,12 @@ def main() -> int:
         try:
             import torch  # noqa: F401
         except ImportError:
+            import env_hint
+
             print(
                 "result       FAILED: --model-checkpoint needs torch, which is not installed "
-                f"in {sys.executable}. Run:\n"
-                "  uv sync --group sim --group gpu --group model\n"
-                "and point METADRIVE_PYTHON at this repo's .venv."
+                f"in {sys.executable}.\n"
+                + env_hint.install_hint(("sim", "gpu", "model"))
             )
             return 1
         if not os.path.exists(arguments.model_checkpoint):
@@ -979,12 +980,14 @@ def main() -> int:
         from metadrive.component.sensors.base_camera import _cuda_enable
 
         if not _cuda_enable:
+            import env_hint
+
             print(
                 "result       FAILED: --image-on-cuda needs cupy, PyOpenGL and cuda-python "
                 "importable, and `metadrive.component.sensors.base_camera._cuda_enable` is "
-                f"False on {sys.executable}. Run `uv sync --group sim --group gpu` and drive "
-                "with that environment's interpreter (METADRIVE_PYTHON for scripts/drive.sh). "
-                "cuda-python must be < 13: 13.0 dropped the `cuda.cudart` shim this imports."
+                f"False on {sys.executable}.\n"
+                + env_hint.install_hint(("sim", "gpu"))
+                + "\ncuda-python must be < 13: 13.0 dropped the `cuda.cudart` shim this imports."
             )
             return 1
 

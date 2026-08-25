@@ -65,4 +65,44 @@ export DOCKER_UID DOCKER_GID
 # when there IS one: `./sim.sh bash` needs the terminal. So it follows stdin rather than a flag.
 [[ -t 0 ]] || RUN_FLAGS+=(-T)
 
+# Does the image on this machine carry what docker/Dockerfile says it should?
+#
+# Nothing else asks. `docker compose run` reuses whatever holds the `wingfin-sim` tag and never
+# rebuilds; a `docker compose build` run before the `git pull` that changed the Dockerfile rebuilds
+# the OLD recipe out of BuildKit's cache in seconds. Both look exactly like success, and the first
+# thing that notices is a refusal four minutes into a terrain build -- which is how a rig lost a
+# morning to `--model-checkpoint needs torch` against an image built before `--group gpu --group
+# model` was added to the sync line.
+#
+# The Dockerfile's LABEL is the copy that can be read back without starting a container. Not
+# `docker history`, which is unreliable under the containerd image store, and above all not image
+# size: the classic overlay2 store prints one SIZE, containerd prints CONTENT SIZE and DISK USAGE,
+# and those are different measurements. `docker image inspect` reads labels the same way on both.
+#
+# A note and never a die: a sweep, or any --no-model drive, runs perfectly well on the older image.
+# An image with no label at all is stale by construction -- it predates the label, which is the same
+# build that predates the groups. No image yet says nothing, because compose is about to build one.
+# What this does NOT catch, and cannot: a version bump inside a group whose name did not change.
+check_image_groups() {
+    local want have missing=()
+    # The uv sync line only -- awk drops comment lines, which now discuss --group themselves.
+    want=$(awk '/^[^#]*uv sync/' docker/Dockerfile | grep -o -- '--group [a-z]*' | awk '{print $2}')
+    [[ -n "$want" ]] || return 0
+    [[ -n "$(docker image inspect wingfin-sim --format '{{.Id}}' 2>/dev/null)" ]] || return 0
+    have=$(docker image inspect wingfin-sim \
+        --format '{{index .Config.Labels "wingfin.groups"}}' 2>/dev/null)
+
+    local group
+    for group in $want; do
+        [[ " $have " == *" $group "* ]] || missing+=("$group")
+    done
+    [[ ${#missing[@]} -gt 0 ]] || return 0
+
+    note "the wingfin-sim image is missing the ${missing[*]} dependency $(
+        [[ ${#missing[@]} -eq 1 ]] && echo group || echo groups). Rebuild it:"
+    note "  docker compose build"
+    note "until then anything needing those packages refuses -- they are not in the image."
+}
+check_image_groups
+
 exec docker compose run --rm ${RUN_FLAGS[@]+"${RUN_FLAGS[@]}"} sim "$@"

@@ -193,10 +193,11 @@ def main() -> int:
         try:
             import torch  # noqa: F401
         except ImportError:
+            import env_hint
+
             print(
                 "result       FAILED: torch is not installed in this interpreter "
-                f"({sys.executable}). Run:\n"
-                "  uv sync --group sim --group gpu --group model"
+                f"({sys.executable}).\n" + env_hint.install_hint(("sim", "gpu", "model"))
             )
             return 2
 

@@ -21,7 +21,7 @@ this before starting on a machine that has not run this before — a rig, or a f
 | tier | needs, beyond this repo |
 |---|---|
 | **0–1** | `uv sync`. 1b wants a converted dataset, and the repo has one |
-| **2–3** | an NVIDIA GPU, the two model files (the `.ep` and `model_dev.yml`), and either `uv sync --group sim --group gpu --group model` on the host **or** the `sim` image |
+| **2–3** | an NVIDIA GPU, the AV3 `.ep` (1.2 GB, copied by hand; the `model_dev.yml` beside it is tracked at `config/model_dev.yml` and comes with `git`), and either `uv sync --group sim --group gpu --group model` on the host **or** a `sim` image built with those groups — ask it, with `docker compose run --rm sim python3 -c "import torch"`, never by its size |
 | **4** | tier 3's, **plus the openpilot bridge image, running** — a second container, which `scripts/bridge.sh build` makes out of this repo alone |
 | **5** | tier 2's. Deliberately no bridge: that is what it is for |
 
@@ -442,7 +442,7 @@ cd scripts && ./av3-probe.sh junction-1 -- --step-hz 100 --decision-hz 20
 ```
 
 **Or in the container**, which is how this reaches a machine that is not this laptop. Set
-`MODEL_DIR` in `.env` to a directory holding both the `.ep` and the `model_dev.yml` first; the
+`MODEL_DIR` in `.env` to the directory holding the `.ep` first; the
 image already has all three dependency groups, so there is no `uv sync` step:
 
 ```bash
@@ -568,8 +568,9 @@ Three things it settles that a host run would not:
   prefix belongs on these lines;
 - **the checkpoint** — `compose.yaml` sets `MODEL_CHECKPOINT` to the mounted `/models` path and
   `drive.py` reads it, so there is no `--model-checkpoint` to pass. Set `MODEL_DIR` in `.env`
-  first (§3b of `docs/container.md`). It implies `--camera-rig rigs/av3.txt`, the rig the weights
-  were trained on;
+  to the directory holding the `.ep` first (§3b of `docs/container.md`) — one file, since
+  `model_dev.yml` is tracked at `config/model_dev.yml` and comes with `git`. It implies
+  `--camera-rig rigs/av3.txt`, the rig the weights were trained on;
 - **`--render offscreen`, never `3D`** — there is no display.
 
 **A drive with no checkpoint is not the model driving.** `./sim.sh --no-model` leaves it out, and

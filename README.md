@@ -931,7 +931,7 @@ MetaDrive versions, so two machines' files concatenate into one spreadsheet. Tha
 anything if both machines are provably running the same simulator, and reproducing a venv by hand
 on each box is not provable. `uv.lock` plus a pinned MetaDrive commit is — which is what the image
 is for. The rig needs Docker, the NVIDIA container toolkit and this repo; nothing else — plus, for
-the AV3 model, the two model files, which are mounted rather than built in (see 3b of
+the AV3 model, the AV3 checkpoint, which is mounted rather than built in (see 3b of
 `docs/container.md`).
 
 **The image carries the model stack too**, so the same argument reaches one machine further on: an
@@ -1342,8 +1342,9 @@ Six things worth knowing:
   does not need one.
 - **And it runs in the container**, which is how it reaches a machine that is not this laptop —
   the same `sim` image as the sweep, because a forward pass and the environment it reads share a
-  process. Set `MODEL_DIR` in `.env` to a directory holding **both** the `.ep` and the
-  `model_dev.yml`, and `compose.yaml` mounts it at `/models`:
+  process. Set `MODEL_DIR` in `.env` to the directory holding the `.ep` — one file, since
+  `model_dev.yml` is tracked at `config/model_dev.yml` — and `compose.yaml` mounts it at
+  `/models`:
 
   ```bash
   cd scripts && ./sim.sh scripts/av3-probe.sh junction-1 -- --step-hz 100 --decision-hz 20

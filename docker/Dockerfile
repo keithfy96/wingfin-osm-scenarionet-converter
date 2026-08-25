@@ -9,8 +9,10 @@
 # It carries the Stage 9 model stack for the same reason one step further on: an AV3 forward pass
 # is ~1 s on this laptop's power-capped RTX 4050, which is the whole argument for running it
 # somewhere else -- and a figure from another machine is only worth having if the stack that
-# produced it is pinned rather than reassembled by hand. The model files themselves are NOT in
-# here; `compose.yaml` mounts them at /models, the way it mounts a camera-rig spec at /rig.
+# produced it is pinned rather than reassembled by hand. The checkpoint itself is NOT in here --
+# 1.2 GB, and `compose.yaml` mounts it at /models the way it mounts a camera-rig spec at /rig.
+# The `model_dev.yml` beside it is tracked, at `config/model_dev.yml`, and reached through the
+# repo's own /work mount, so a rig is handed one file rather than two.
 #
 # Two things about it are worth knowing before changing anything:
 #
@@ -146,3 +148,21 @@ ENV HOME=/tmp \
     METADRIVE_PYTHON=/opt/venv/bin/python
 
 CMD ["bash"]
+
+# The three groups from the `uv sync` line above, where a caller can read them back without
+# starting a container. **Last in the file on purpose**: a LABEL invalidates the build cache for
+# everything after it, and editing this line should never cost a re-download of the asset pack
+# or a re-sync of a 13 GB venv. Nothing may be added below it.
+# `scripts/sim.sh` compares this against the --group flags above and says so when the running
+# image is missing one, because nothing else does: `docker compose run` reuses whatever holds the
+# `wingfin-sim` tag and never rebuilds, and a `docker compose build` run before the `git pull`
+# rebuilds the *old* recipe out of BuildKit's cache in seconds. Both look like success. A rig
+# spent a morning on `--model-checkpoint needs torch` for exactly that reason, against an image
+# built before `--group gpu --group model` was added to the line above.
+#
+# A label and not `docker history`, and above all not image size: this laptop is on the classic
+# overlay2 store and prints one SIZE, while the rig is on the containerd snapshotter and prints
+# CONTENT SIZE and DISK USAGE, which are different measurements and not comparable to it. Labels
+# read the same on both, through `docker image inspect`, in milliseconds. **Keep in step with the
+# line above.**
+LABEL wingfin.groups="sim gpu model"
