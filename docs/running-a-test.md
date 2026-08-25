@@ -13,6 +13,31 @@ running before the expensive ones.
 Background and measurements: `docs/implementation-plan/stage-9-a-model-at-the-wheel.md`,
 and the *"The model is at the wheel now"* section of `CLAUDE.md`.
 
+## What each tier needs
+
+The rungs are not equally cheap to *set up*, and the expensive prerequisite is at the top. Check
+this before starting on a machine that has not run this before — a rig, or a fresh clone.
+
+| tier | needs, beyond this repo and `uv sync` |
+|---|---|
+| **0** | nothing |
+| **1** | nothing — 1b wants a converted dataset, and the repo has one |
+| **2–3** | an NVIDIA GPU, `uv sync --group sim --group gpu --group model`, and the two model files (the `.ep` and `model_dev.yml`) |
+| **4** | all of tier 3's, **plus the openpilot bridge image, running** — a second container, which `scripts/bridge.sh build` makes out of this repo alone |
+| **5** | tier 2's. Deliberately no bridge: that is what it is for |
+
+**The bridge is the one that catches people out**, because `docker compose build` does not build
+or pull it and no error mentions it until a drive is a minute in — at which point it says
+`ConnectionRefusedError` from a component you were never told you needed.
+
+It no longer needs anything you do not have. The openpilot fork is **vendored** at
+`docker/openpilot/deps/openpilot`, 309 MB of tracked files, so `git clone` + `./bridge.sh build`
+is the whole prerequisite: no fork to fetch, no SSH keys, no submodules, no LFS.
+
+If you are setting up a new machine, **run tier 5 first** anyway: it exercises the whole chain,
+needs no bridge, and takes seconds — so it separates "my container is wrong" from "the bridge is
+not up" before you spend half an hour on a build.
+
 ---
 
 ## 0. The translation tests (~1 s)
@@ -451,20 +476,106 @@ Ends with `result  every checked conversion agrees` and exits 0.
 
 ## 4. It drives (~15 min a route)
 
-Three terminals. The bridge container first, if it is not already running:
+### First: is the bridge there?
+
+**This tier needs a second container, and everything to build it is in this repo.**
+`docker/openpilot/` holds the Dockerfile, the bridge server, and the openpilot fork itself —
+vendored at a pinned commit rather than fetched, so no part of this needs access to the private
+zapetaai org. `scripts/bridge.sh` builds, starts and checks it.
+
+Check before anything else:
 
 ```bash
-docker build -t wing-sim-openpilot:prod \
-  -f /home/keith/Desktop/work/wingfin/wing-sim/docker/Dockerfile.openpilot \
-  /home/keith/Desktop/work/wingfin/wingfin-openpilot-temp/openpilot
-docker run -d --name openpilot-bridge --network host \
-  -e SIMULATION=1 -e NOBOARD=1 -e SKIP_FW_QUERY=1 -e "FINGERPRINT=TESLA MODEL 3" \
-  -e OPENPILOT_TRAJECTORY_TYPE=0 -e BRIDGE_PORT=5558 \
-  -e PYTHONPATH=/opt/bridge:/opt/openpilot:/opt/project/common \
-  -w /opt/project wing-sim-openpilot:prod python3 -m zapeta.server
+cd scripts
+./bridge.sh status
 ```
 
-Then the translating server, and the drive:
+It answers all three questions at once — is the image built, is the container up, and is anything
+actually listening on 5558 — and tells you the next command for whichever state you are in:
+
+| what it says | what to do |
+|---|---|
+| `Up …` and `something is listening` | ready. Skip to the commands below, and **do not** run `start` — the name is taken by a working container |
+| `NOT BUILT` | `./bridge.sh build`, or load a copy — both below |
+| container `none` | `./bridge.sh start` |
+| `Exited …` | `./bridge.sh logs` for why, then `./bridge.sh stop` and `start` |
+| `Up …` but `nothing is listening` | the container is alive and the server inside it is not. `./bridge.sh logs` |
+
+That last row is the one a bare `docker ps` cannot tell you, and it is the difference between a
+`Connection refused` you can fix in a second and one you spend a drive diagnosing.
+
+A `socket.timeout` traceback at the end of `./bridge.sh logs` is **not** a crash — it is the last
+drive disconnecting. The server catches it and goes back to listening, which is why it is still up.
+
+### If there is no image: build one
+
+```bash
+cd scripts
+./bridge.sh build
+./bridge.sh start
+```
+
+That is the whole thing on a machine that has never had it. **Budget half an hour** — the apt +
+pyenv + poetry base dominates and is the part not timed here; the scons compile of cereal, boardd
+and the two MPC libraries follows it, and the acados solver prebuild took under 5 s. The image is
+**5.5 GB**. A later build that touches only `docker/openpilot/bridge/` takes seconds, because the
+Dockerfile copies that in last on purpose.
+
+`build` prints what it is building from before it starts — the vendored tree's size and commit,
+and a check that all ten of the fork's symlinks are present:
+
+```
+== fork checkout
+  vendored   309M at c767ace88
+  symlinks   all 10 present
+```
+
+**That symlink check is not decoration.** `rednose`, `laika`, `tinygrad`, `selfdrive/hardware` and
+six paths under `third_party` are mode 120000 in git. A transport that flattens them — an rsync
+without `-l`, a zip, git with `core.symlinks=false` — makes scons die on
+`Missing SConscript 'rednose/SConscript'`, which reads like a broken Dockerfile and is not. Get
+the repo here by `git clone` and it cannot happen.
+
+**Or carry a built image**, which is still right for a machine with no network:
+
+```bash
+# on a machine that has the image
+cd scripts && ./bridge.sh save /tmp/bridge-image.tar.gz
+scp /tmp/bridge-image.tar.gz <machine>:
+
+# on the machine that does not
+gunzip < bridge-image.tar.gz | docker load
+```
+
+Or in one pipe, if the two can see each other:
+
+```bash
+docker save wing-sim-openpilot:prod | gzip | ssh <machine> 'gunzip | docker load'
+```
+
+That moves 5.5 GB against a clone that already carries the 309 MB, so **build unless the machine
+has no network** — half an hour of CPU is usually cheaper than 5.5 GB over a link.
+
+### What is actually running: three processes
+
+```
+  the drive                 the translator             the controller
+  MetaDrive + AV3 model  →  openpilot_server.py     →  bridge container
+  (this repo)               :8642, HTTP in front       :5558, raw TCP
+```
+
+- **The controller** is openpilot itself — Ubuntu 20.04 / Python 3.8. Give it a path plus your
+  speed and steering angle, it returns steer/throttle/brake. It can never share the `sim`
+  container because torch has no 3.8 wheel.
+- **The translator** converts between the two protocols and mirrors every sideways quantity in
+  both directions. Only the first hop is HTTP; the bridge hop is a raw socket.
+- **The drive** renders six cameras, asks the model for twenty waypoints, sends them, applies the
+  pedals — once every 0.05 s.
+
+`network_mode: host` is why each can be in a container or not and still find the others on
+`127.0.0.1`.
+
+### The commands — on the host
 
 ```bash
 uv run python examples/openpilot_server.py --backend bridge --longitudinal table --port 8642
@@ -473,13 +584,75 @@ uv run python examples/openpilot_server.py --backend bridge --longitudinal table
 ```bash
 cd scripts && METADRIVE_PYTHON=../.venv/bin/python ./drive.sh junction-1 -- \
     --agent-policy remote --policy-url http://127.0.0.1:8642 \
-    --model-checkpoint /home/keith/Desktop/work/wingfin/wingfin-openpilot-temp/assets/models/step_440000_trt_direct_full.ep \
     --sensors imu,route --step-hz 100 --decision-hz 20 --render offscreen
 ```
 
 `METADRIVE_PYTHON` matters — `drive.sh` defaults to the 3.8 checkout venv, and torch 2.8 has
-no 3.8 wheel (nor needs one, MetaDrive itself running on 3.10). `--model-checkpoint` implies
-`--camera-rig rigs/av3.txt`, which is the rig the weights were trained on.
+no 3.8 wheel (nor needs one, MetaDrive itself running on 3.10). Set `MODEL_CHECKPOINT` in `.env`,
+or pass `--model-checkpoint <the .ep>`; either implies `--camera-rig rigs/av3.txt`, the rig the
+weights were trained on.
+
+### The commands — in the container
+
+```bash
+docker compose run --rm sim uv run python examples/openpilot_server.py \
+    --backend bridge --longitudinal table --port 8642
+```
+
+```bash
+docker compose run --rm sim scripts/drive.sh junction-1 -- \
+    --agent-policy remote --policy-url http://127.0.0.1:8642 \
+    --sensors imu,route --step-hz 100 --decision-hz 20 --render offscreen
+```
+
+Three differences, each a thing that otherwise fails or misleads:
+
+- **no `METADRIVE_PYTHON=`** — the image sets it to `/opt/venv/bin/python` already, and the host's
+  `../.venv/bin/python` is a path that does not exist in there;
+- **no `--model-checkpoint`** — `compose.yaml` sets `MODEL_CHECKPOINT` to the mounted `/models`
+  path, and `drive.py` reads it. Set `MODEL_DIR` in `.env` first (§3b of `docs/container.md`);
+- **`--render offscreen`, never `3D`** — there is no display.
+
+**A drive with no checkpoint is not the model driving.** Leave it out with `MODEL_CHECKPOINT`
+unset and the waypoints come from the recorded route at constant speed — the `route_gt` path,
+which is a controller test by construction and the thing Phase 0 measured. The run looks the same.
+
+### When it says `Connection refused`
+
+```
+policy returned HTTP 500 for /episode:
+  {"error": "cannot reach the bridge at 127.0.0.1:5558 - ConnectionRefusedError"}
+```
+
+Refused means the path worked and **nothing is listening**. Two causes produce it identically:
+the bridge is not running, or `network_mode: host` is not in effect so the container's
+`127.0.0.1` is its own loopback.
+
+**`cd scripts && ./bridge.sh status` first** — it settles the common case in a second, because it
+reports the container state and whether anything is listening on 5558 as two separate lines. If it
+says the bridge is up *and* something is listening, and a drive still gets refused, then it is the
+second cause and this separates them:
+
+```bash
+# terminal A, on the machine itself
+python3 -c "import socket;s=socket.socket();s.setsockopt(1,2,1);s.bind(('127.0.0.1',5558));s.listen();print('listening');s.accept()"
+
+# terminal B
+docker compose run --rm sim python -c "import socket;s=socket.socket();s.settimeout(2);print(s.connect_ex(('127.0.0.1',5558)))"
+```
+
+`0` → host networking is fine and the bridge is simply absent. `111` → the namespaces are
+separate, which is a different problem with a different fix.
+
+The server also says so at startup now, on the line under `backend` — so you find out in a second
+rather than after a terrain build. It is a **warning**, not a refusal: starting the server before
+the bridge is a legitimate order to do it in.
+
+**And `--bridge HOST:PORT` can point at a bridge on another machine**, which `network_mode: host`
+makes work. A stopgap with a real cost — the round trip is 3.5–3.8 ms on loopback and a LAN hop
+adds to every decision — not the arrangement.
+
+### What to expect
 
 **Read the speed, not the sign of `accel_cmd`.** What Phase 0 diagnosed was a car crawling
 at 4.19 m/s under a 36 km/h cruise, because `route_gt`'s constant-speed path carried no
@@ -504,13 +677,38 @@ drive and never a wrong one.
 
 ## 5. The control — that the wire did not regress (~1 min)
 
+**On a machine that has never run this, do tier 5 before tier 4.** `--backend stub` is a real
+socket speaking the real protocol with a pure-pursuit controller behind it — **no bridge, no
+openpilot, nothing to install** — so it exercises the whole chain in seconds and tells you
+whether a tier-4 failure is your setup or a missing bridge. That is the question a
+`Connection refused` on its own cannot answer.
+
 ```bash
 uv run python examples/openpilot_server.py --backend stub --port 8643
 ```
 
-Then the same `drive.sh` line **without** `--model-checkpoint`, pointed at port 8643. Expect
+```bash
+docker compose run --rm sim uv run python examples/openpilot_server.py --backend stub --port 8643
+```
+
+Then the same `drive.sh` line **without** the model, pointed at port 8643. Expect
 **3788 steps, `arrive_dest=True`, completion 0.950** — unchanged from before any of this
 landed, so a regression in the wire stays distinguishable from a regression in the model.
+Measured in the container: the same three figures and `result  OK`, in **41 s** wall-clock.
+
+**In the container you have to say so**, because `compose.yaml` sets `MODEL_CHECKPOINT` and
+`drive.py` reads it — so the drive would load the model and take a quarter of an hour instead of
+a minute. An empty value in the shell will not do it (`${VAR:-default}` treats empty as unset);
+pass it on the run:
+
+```bash
+docker compose run --rm -e MODEL_CHECKPOINT= sim scripts/drive.sh junction-1 -- \
+    --agent-policy remote --policy-url http://127.0.0.1:8643 \
+    --sensors imu,route --step-hz 100 --decision-hz 20 --render offscreen
+```
+
+**`--longitudinal table` is refused here**, by name: the stub answers in pedals and carries no
+`accel_cmd`, so there is nothing for a pedal map to convert. Leave the flag off.
 
 `--waypoints derive` puts the bridge back on the pre-C.2 path (`waypoints_from_route`), so
 every measurement taken before the model existed stays reproducible. Against `--backend
@@ -536,8 +734,11 @@ flag failing: `StubBridge.control` is pure pursuit over `msg["waypoints"]` and n
   through the scripts rather than a bare `uv run python tools/...`.
 - **A traceback while the model loads is not a failure** — see tier 3. Look for
   `loaded  20 waypoints x 8`; if it is there, the load worked.
-- **Tier 4 hangs at connect** — the bridge container. `docker ps` should show
-  `openpilot-bridge`, and something should be listening on 5558.
+- **Tier 4 says `Connection refused` on 5558** — the bridge. `cd scripts && ./bridge.sh status`
+  answers it in one line: not built, not running, or up-with-a-dead-server. On a machine that has
+  never had the image, it does not exist. Run tier 5 to confirm everything else is fine.
+- **Tier 4's `start` says the container name is in use** — the bridge is already running from an
+  earlier session, which `./bridge.sh status` says plainly. Skip both commands.
 
 ---
 

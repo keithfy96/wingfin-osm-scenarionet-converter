@@ -1,9 +1,13 @@
 # The build context is the repo root, and only pyproject.toml, uv.lock, README.md and src/ are
 # COPYed. Everything else is bind-mounted at run time, so sending it to the daemon is pure cost --
-# .venv alone is larger than the image.
+# .venv alone is 13 GB of it.
 .git
 .venv
 node_modules
+# The openpilot fork checkout, ~920 MB, fetched by docker/openpilot/pull.sh. It is the build
+# context of the *bridge* image and has no business in this one's -- without this line every
+# `docker compose build` ships it to the daemon for nothing.
+docker/openpilot/deps
 workspaces
 graphify-out
 web/node_modules

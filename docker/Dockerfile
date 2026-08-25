@@ -86,16 +86,17 @@ COPY src ./src
 
 # All three groups, in one environment, because the AV3 model has to run where MetaDrive runs:
 # `tools/av3_probe.py` builds an env and a forward pass in the same process, so a second image
-# would only move the problem. It is why the image is ~13 GB rather than 2.88 -- measured in the
-# host venv, `gpu` and `model` are 10.5 GB of it: tensorrt_libs 4.4 G, nvidia 4.1 G, torch 1.7 G,
-# cupy 236 M. A sweep that never touches the model carries them; that was the trade taken
-# deliberately, against a second image, because this is built once and then used.
+# would only move the problem. It is why the image is **13.2 GB** rather than 2.88 -- measured
+# in the host venv, `gpu` and `model` are 10.5 GB of it: tensorrt_libs 4.4 G, nvidia 4.1 G,
+# torch 1.7 G, cupy 236 M. A sweep that never touches the model carries them; that was the trade
+# taken deliberately, against a second image, because this is built once and then used.
 #
 # Two things that would otherwise be looked for and are already here. **CUDA needs nothing
 # added**: NVIDIA_DRIVER_CAPABILITIES below already carries `compute`, and torch/TensorRT/CuPy
 # bring their own libraries as pip wheels rather than wanting a system toolkit. And **--frozen is
 # satisfied without touching the lock** -- all three groups are already resolved in uv.lock
 # (`uv lock --check` passes), because the host has been running them since Phase C.
+#
 # `uv cache clean` is in the same RUN and is not tidiness -- it is 16 GB. UV_LINK_MODE=copy above
 # means uv copies each wheel out of its download cache into the venv rather than hardlinking, so
 # both exist; committed together this layer measured **28.7 GB against a 13 GB venv**. Same layer

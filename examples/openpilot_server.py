@@ -35,6 +35,7 @@ import argparse
 import json
 import os
 import signal
+import socket
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -49,6 +50,37 @@ from openpilot_policy import (  # noqa: E402
     StubBridge,
 )
 from pedal_map import DEFAULT_PEDAL_MAP  # noqa: E402
+
+
+def _bridge_reachable(host, port, timeout=2.0):
+    """One line saying whether anything is listening, for the `backend` block to print.
+
+    **A warning and never a failure.** `OpenpilotDriver` opens its real connection in
+    `start_episode`, deliberately - the bridge scopes per-episode state to a connection
+    (`openpilot_policy.BridgeConnection`) - so with no bridge running this server starts
+    happily, answers `/spec`, and only refuses at `/episode`. Measured on a rig: that is a
+    minute of terrain build before a reader learns something knowable in a millisecond, and
+    the message arrives from `drive.py` rather than from the process that owns the socket.
+
+    It must not exit, because starting this before the bridge is a legitimate order to do it
+    in, and turning that into a hard error would be worse than the problem it reports.
+
+    Connect and close, nothing sent: the bridge's session thread reads EOF and logs one
+    `socket.timeout`, which is the same benign line its log already carries after every
+    finished drive.
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(timeout)
+    try:
+        probe.connect((host, port))
+    except OSError as error:
+        return (
+            f"WARNING  nothing is listening there yet ({type(error).__name__}). Start the "
+            "bridge, or run --backend stub, which needs none."
+        )
+    finally:
+        probe.close()
+    return "reachable    something is listening; the real connection opens per episode"
 
 
 def build_handler(driver, telemetry):
@@ -212,6 +244,7 @@ def main() -> int:
             parser.error("--bridge wants HOST:PORT")
         bridge_port = int(port_text)
         print(f"backend      openpilot bridge at {bridge_host}:{bridge_port}", flush=True)
+        print("             " + _bridge_reachable(bridge_host, bridge_port), flush=True)
 
     try:
         driver = OpenpilotDriver(

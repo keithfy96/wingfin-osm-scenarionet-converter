@@ -48,6 +48,12 @@
 #                     0.05). It does NOT pick the dataset -- STEP_HZ still does. Under
 #                     --render 3D the draw is never gated: the window is the point of it.
 #                     -- --draw-every-step puts the draw back on the world tick offscreen.
+#   MODEL_CHECKPOINT  the AV3 .ep to drive with, which drive.py reads as the default for
+#                     --model-checkpoint. Set, a drive loads the model and takes about a
+#                     second a decision; unset, the waypoints come from the recorded route at
+#                     constant speed, which is a controller test rather than a model one.
+#                     compose.yaml sets it in the container, so -e MODEL_CHECKPOINT= is how a
+#                     container run opts out.
 
 # shellcheck source=scripts/_common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
@@ -57,7 +63,7 @@ PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --) shift; PASSTHROUGH=("$@"); break ;;
-        -h|--help) sed -n '2,50p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
+        -h|--help) sed -n '2,56p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
         -*) die "unknown option: $1
   This script takes only a workspace. To pass $1 to drive.py, put it after --:
     ./scripts/drive.sh ${POSITIONAL:-<workspace>} -- $1" ;;

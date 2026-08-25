@@ -937,7 +937,7 @@ the AV3 model, the two model files, which are mounted rather than built in (see 
 **The image carries the model stack too**, so the same argument reaches one machine further on: an
 AV3 forward pass is ~1 s on this laptop's power-capped RTX 4050, which is the whole reason to run
 it somewhere else, and a figure from somewhere else is only worth having if the stack behind it is
-pinned rather than reassembled. That is what takes the image from 2.88 GB to about 13 — `gpu` and
+pinned rather than reassembled. That is what takes the image from 2.88 GB to **13.2** — `gpu` and
 `model` are 10.5 GB of wheels — and it was chosen over a second, leaner image deliberately, on the
 grounds that it is built once and then used.
 
@@ -1160,9 +1160,14 @@ Four things worth knowing before tuning anything:
 - **Its pedal map is CARLA calibration**, measured on Town10HD with a Tesla M3, and
   `--longitudinal table` is the re-measurement. See below. Steering is unaffected — that path
   is geometric, which is what `carla_steer_curvature_gain: 0` selects.
-- **The openpilot fork itself is private.** `wing-sim/openpilot/pull.sh` clones
-  `zapetaai/openpilot` with private submodules, so `--backend bridge` needs access that the
-  stub does not.
+- **The bridge container is in this repo**, fork and all, and `scripts/bridge.sh` builds, starts
+  and checks it. `docker/openpilot/` holds the Dockerfile, the 1649 lines of bridge server, and
+  `deps/openpilot/` — 309 MB of `zapetaai/openpilot` at `c767ace8`, **vendored** rather than
+  cloned, because cloning it needs SSH access to a private org that nobody can grant a rig
+  remotely. `deps/openpilot/VENDORED.md` records the commit and every submodule SHA.
+- **So `--backend bridge` needs nothing the stub does not**, beyond about half an hour of build.
+  `git clone`, `./bridge.sh build`, `./bridge.sh start`. Tier 4 of `docs/running-a-test.md` has
+  the states and what each means.
 
 #### Measure the pedals on MetaDrive's own car
 

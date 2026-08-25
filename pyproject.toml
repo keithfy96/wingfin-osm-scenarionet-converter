@@ -129,5 +129,15 @@ testpaths = ["tests"]
 line-length = 100
 target-version = "py310"
 
+# The bridge image's build context: the zapeta bridge server and the vendored openpilot fork.
+# All of it is Python **3.8** -- it runs inside the ubuntu 20.04 bridge image, never in this venv
+# -- so `target-version` above does not describe it, and ruff's own advice is actively wrong for
+# it: UP041 would rewrite `except socket.timeout` to `except TimeoutError`, which is that alias
+# only from 3.10. `deps/openpilot/` is 309 MB of another project's source besides, and linting it
+# reports 6864 findings against code this repo does not own and must not reformat -- the tree is
+# a byte-for-byte copy of the commit the AV3 checkpoint was compiled against, and that property
+# is the only thing making it verifiable. Excluded whole, deliberately.
+extend-exclude = ["docker/openpilot"]
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

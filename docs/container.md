@@ -120,10 +120,19 @@ Three things that are different in here, and one that is not:
   `METADRIVE_PYTHON=../.venv/bin/python` in front of `drive.sh`, because that script defaults to
   the 3.8 checkout venv and torch 2.8 has no 3.8 wheel. The image sets it to `/opt/venv/bin/python`
   already, so **do not pass it in here.**
-- **The openpilot bridge is a second, separate container** — wing-sim's, ubuntu 20.04 / python
-  3.8, which is why it cannot be this one. `network_mode: host` is what lets this container reach
-  it on `127.0.0.1:5558`, and `examples/openpilot_server.py` can sit on either side of the
-  boundary for the same reason.
+- **The openpilot bridge is a second, separate container** — ubuntu 20.04 / python 3.8, which is
+  why it cannot be this one. `network_mode: host` is what lets this container reach it on
+  `127.0.0.1:5558`, and `examples/openpilot_server.py` can sit on either side of the boundary for
+  the same reason. It is built by `scripts/bridge.sh` out of `docker/openpilot/`, **not** by
+  `docker compose build` — see tier 4 of `docs/running-a-test.md`, and note that
+  `--bridge HOST:PORT` can point at one on another machine as a stopgap. That directory carries
+  the openpilot fork itself, so building it needs only this repo.
+- **`/etc/passwd` is mounted, and the model needs it.** The container runs as your uid so that
+  files it writes are not root's, and the image has no `/etc/passwd` entry for that uid —
+  `torch_tensorrt` reads the user's *name* at module scope (`dynamo/_defaults.py:64`), only to
+  name a temp log directory, so `import torch_tensorrt` dies with `KeyError: 'getpwuid(): uid not
+  found: 1000'`. `HOME=/tmp` in the image solves the home-directory half of that; this is the
+  name half.
 - **Not different: the answer.** `av3-probe.sh` must end `result  every checked conversion agrees`
   and exit 0 in here exactly as it does on the host. That is the check that says the container
   changed the environment and not the result.
@@ -152,10 +161,42 @@ or carry the built image, which needs no network on the far end:
 docker save wingfin-sim | gzip | ssh <rig> 'gunzip | docker load'
 ```
 
-Either way the rig also needs this repo (for `tools/`, `scripts/` and the workspace) and the
-camera-rig spec — and, for the model, the two files `MODEL_DIR` points at. Those are **not** in
-the image and **not** in the repo, so they are the one thing neither `docker compose build` nor a
-`git clone` brings:
+**A rig needs four things, and two of them come from neither the image nor `git`:**
+
+| | where it comes from |
+|---|---|
+| the `sim` image | `docker compose build` there, or `docker save \| ssh` |
+| this repo | `git` — `tools/`, `scripts/`, `rigs/`, the workspace |
+| the two model files | **copied**, by hand |
+| the **openpilot bridge image** | `scripts/bridge.sh build` there, or a saved copy |
+
+The bridge is the one that gets missed, because `docker compose build` does not build or pull it
+and no error mentions it until a drive is a minute in. It needs nothing from outside the repo now
+— `docker/openpilot/` holds the Dockerfile, the bridge sources **and the openpilot fork itself**,
+vendored at a pinned commit:
+
+```bash
+cd scripts
+./bridge.sh status      # not built / not running / up
+./bridge.sh build       # budget half an hour, and it needs only this repo
+./bridge.sh start
+```
+
+**Or carry a built image**, for a rig with no network:
+
+```bash
+cd scripts && ./bridge.sh save /tmp/bridge-image.tar.gz   # or the one-pipe form:
+docker save wing-sim-openpilot:prod | gzip | ssh <rig> 'gunzip | docker load'
+```
+
+5.5 GB over the wire against a clone that already carries the 309 MB — so build unless the rig
+has no network. Tier 4 of `docs/running-a-test.md` has the states and what each one means.
+
+**Or skip it for now.** `--backend stub` needs no bridge at all and drives the whole chain — it
+is the right first thing to run on a new rig, and it is what separates "the container is wrong"
+from "openpilot is not here".
+
+And the model files:
 
 ```bash
 # on the rig, wherever MODEL_DIR will point
@@ -179,6 +220,10 @@ RIG_DIR=/some/where                             # only for a rig spec kept outsi
 MODEL_DIR=/some/where/models                    # the AV3 .ep and model_dev.yml, both
 STEP_TIMING_LABEL=laptop                        # names the machine in the CSV
 ```
+
+`BRIDGE_PORT`, `BRIDGE_IMAGE` and `BRIDGE_NAME` are `scripts/bridge.sh`'s, and all three default
+to what every doc and error message names — set one only to run a second bridge beside a working
+one.
 
 `METADRIVE_PYTHON` must stay commented — it would override the container's interpreter.
 
@@ -212,3 +257,8 @@ either way — the printed line is a label, those columns are the measurement.
 | the sweep dies on a missing interpreter | `METADRIVE_PYTHON` is uncommented in `.env` |
 | the model fails at load, no file named | `model_dev.yml` is missing from `MODEL_DIR` — both files are needed, not just the `.ep` |
 | `no checkpoint at /models/...` | `MODEL_DIR` is unset, so the empty `docker/model/` fallback got mounted |
+| `KeyError: 'getpwuid(): uid not found'` | `/etc/passwd` is not mounted. The container runs as your uid and the image has no entry for it; `torch_tensorrt` reads the user's *name* at import. `compose.yaml` mounts it read-only |
+| a drive loads the model when you did not ask | `MODEL_CHECKPOINT` is set for you in here. `docker compose run --rm -e MODEL_CHECKPOINT= sim …` to leave it out |
+| `ConnectionRefusedError` on 5558 | the bridge. `cd scripts && ./bridge.sh status` — it says whether the image exists, whether the container is up, and whether anything is listening |
+| `docker compose build` sends a huge context | `docker/openpilot/deps/` is in `.dockerignore` — 309 MB of vendored openpilot that the `sim` image has no use for. If it reappears, that line was lost |
+| `Missing SConscript 'rednose/SConscript'` during `bridge.sh build` | the repo reached this machine by something that flattened symlinks. `git clone` it instead; `bridge.sh build` checks all ten before starting |

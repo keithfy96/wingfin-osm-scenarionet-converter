@@ -838,10 +838,15 @@ def main() -> int:
     )
     parser.add_argument(
         "--model-checkpoint",
-        default=None,
+        # `MODEL_CHECKPOINT` for `model_probe.py:413`'s reason, and because this was the one
+        # tool that did not honour it: `compose.yaml` sets it to the mounted /models path, so
+        # in the container every other entry point found the checkpoint by itself and this one
+        # alone had to be handed a literal path that only exists inside a container.
+        default=os.environ.get("MODEL_CHECKPOINT"),
         help="An AV3 .ep checkpoint to run at every decision, supplying the trajectory the "
         "hosted controller consults. Implies --camera-rig rigs/av3.txt and "
-        "--agent-policy remote. About a second a forward pass on this card.",
+        "--agent-policy remote. About a second a forward pass on this card. "
+        "MODEL_CHECKPOINT is the default.",
     )
     parser.add_argument(
         "--model-config",

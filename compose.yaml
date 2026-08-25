@@ -50,6 +50,15 @@ services:
       # TZ is unset. A TZ variable would not do: resolving "Asia/Singapore" needs
       # /usr/share/zoneinfo, which the image does not carry.
       - /etc/localtime:/etc/localtime:ro
+      # The host's user list, read-only, because the container runs as the host's uid and the
+      # image has no /etc/passwd entry for it -- so `pwd.getpwuid(os.getuid())` raises. That is
+      # not hypothetical: torch_tensorrt calls it at **module scope**
+      # (`dynamo/_defaults.py:64`), purely to name a temp debug-log directory, so
+      # `import torch_tensorrt` dies with `KeyError: 'getpwuid(): uid not found: 1000'` and the
+      # model cannot load at all. Measured in this container before this line existed.
+      # HOME=/tmp in the image covers the *home directory* half of the same problem; this is the
+      # *name* half, which nothing else supplies. Read-only, and only the name field is read.
+      - /etc/passwd:/etc/passwd:ro
 
     environment:
       # Names the machine in every row of a step-timing CSV and in the file name. The hostname is

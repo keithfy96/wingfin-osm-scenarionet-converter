@@ -1657,15 +1657,36 @@ which is wing-sim's own `openpilot/` tree filled in: `bridge/zapeta/` plus the f
 `c767ace8` with its seven submodules. `--backend bridge` had been written against
 `server.py` and never run; it works, and what it measured is worth not re-deriving.
 
+**That build is now in this repo, fork and all** (2026-08-25) — `docker/openpilot/` carries the
+Dockerfile byte-identical below its header, the 1649 lines of `bridge/`, and **`deps/openpilot/`:
+309 MB of the fork itself, vendored** with its `.git` and seven submodule gitdir pointers removed,
+because git will not track a directory containing one. `deps/openpilot/VENDORED.md` records the
+commit and every submodule SHA. `scripts/bridge.sh` drives the build.
+
+**Vendoring it needed `git add -f`, and that is the trap.** The fork ships 75 of its own
+`.gitignore` files which exclude the prebuilt binaries the build links against —
+`third_party/acados/x86_64/lib/{libacados,libblasfeo,libhpipm}.so` among them, which the lateral
+and longitudinal MPC load. A plain `git add` skips them silently and the tree looks complete. The
+two `.gitattributes` with `filter=lfs` also had to be commented out, or the 82 MB of
+`selfdrive/modeld/models/*.onnx` would be pushed at an LFS server this repo does not have.
+
+**Verified by building it**: `bridge.sh build` from the vendored tree produced a working image,
+the acados prebuild linked `-lacados -lhpipm -lblasfeo` against the vendored `third_party/acados`,
+and a full `junction-1` drive through it gave **8656 steps, `arrive_dest=True`, completion 0.950,
+`result OK`** at 3.527 ms a call. The image is **5.5 GB**, not 6.17 — stripping the fork's 612 MB
+`.git` took it out of the layer the Dockerfile `COPY`s.
+
+The two hand-typed docker commands below are what `bridge.sh` runs, kept here because they are
+what the measurements were made with:
+
 ```bash
-docker build -t wing-sim-openpilot:prod \
-  -f /home/keith/Desktop/work/wingfin/wing-sim/docker/Dockerfile.openpilot \
-  /home/keith/Desktop/work/wingfin/wingfin-openpilot-temp/openpilot
-docker run -d --name openpilot-bridge --network host \
-  -e SIMULATION=1 -e NOBOARD=1 -e SKIP_FW_QUERY=1 -e "FINGERPRINT=TESLA MODEL 3" \
-  -e OPENPILOT_TRAJECTORY_TYPE=0 -e BRIDGE_PORT=5558 \
-  -e PYTHONPATH=/opt/bridge:/opt/openpilot:/opt/project/common \
-  -w /opt/project wing-sim-openpilot:prod python3 -m zapeta.server
+cd scripts && ./bridge.sh build && ./bridge.sh start    # what the two lines below now are
+# docker build -t wing-sim-openpilot:prod -f docker/openpilot/Dockerfile docker/openpilot
+# docker run -d --name openpilot-bridge --network host \
+#   -e SIMULATION=1 -e NOBOARD=1 -e SKIP_FW_QUERY=1 -e "FINGERPRINT=TESLA MODEL 3" \
+#   -e OPENPILOT_TRAJECTORY_TYPE=0 -e BRIDGE_PORT=5558 \
+#   -e PYTHONPATH=/opt/bridge:/opt/openpilot:/opt/project/common \
+#   -w /opt/project wing-sim-openpilot:prod python3 -m zapeta.server
 uv run python examples/openpilot_server.py --backend bridge --longitudinal accel --port 8642
 # then, from inside scripts/
 ./drive.sh junction-1 -- --agent-policy remote --policy-url http://127.0.0.1:8642 \
@@ -1676,7 +1697,9 @@ uv run python examples/openpilot_server.py --backend bridge --longitudinal accel
 inside the fork showed ten deletions — `rednose`, `laika`, `tinygrad`, `selfdrive/hardware` and
 six `third_party` entries, all mode 120000 in the index — and the build died on
 `Missing SConscript 'rednose/SConscript'`, which reads as a broken Dockerfile rather than a
-transport that dropped symlinks. `git checkout --` on those paths alone is the repair; the
+transport that dropped symlinks. **`docker/openpilot/pull.sh` now repairs this itself** on every
+run, re-deriving the ten from `ls-files -s` rather than naming them, so it should not recur.
+`git checkout --` on those paths alone is the repair; the
 `M` entries beside them are the LFS model files `pull.sh` deliberately does not pull, and must
 be left. Docker copies symlinks as symlinks, so nothing else was needed.
 
