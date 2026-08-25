@@ -61,36 +61,349 @@ too sharply at a corner on two very short lanes. It was failing before any of th
 `CLAUDE.md` records it under *"`ego_route` still turns over the gate on two 2 m clamped
 lanes"*.
 
-## 1. The mount is measured, not guessed (~20 s)
+## 1. Do the cameras point where the rig file says? (~30 s)
+
+**First: 6 cameras or 7?** Both — there are two rig files, describing different cars.
+
+- **`rigs/av3.txt` — 6 cameras.** The rig the AV3 model was trained on. This is the one the
+  model uses.
+- **`rigs/cams.txt` — 7 cameras.** The older one, used for the speed benchmarks. The model never
+  sees it.
+
+### a. What the rig file says
 
 ```bash
-uv run python tools/camera_rig.py rigs/av3.txt --check-frame
+uv run python tools/camera_rig.py rigs/av3.txt
 ```
 
-Prints where each of the six cameras sits and **where it aims in words** — front_middle
-straight ahead, front_right 54° right, rear_right 117° right, and so on — so a swapped pair
-is readable rather than a number to be trusted. Every name should agree with its aim; that
-they do is a property of `rigs/av3.txt` being generated from wing-sim's own spec, where the
-`y` and `yaw` columns cross-check each other.
+Reads the file and says it back in English, one line per camera:
 
-`--check-frame` probes MetaDrive's own `NodePath` for `+y`, `+x`, heading and pitch. That
-is how the pitch sign was settled rather than assumed — and it has to be read against the
-**car's own attitude**, because a car under throttle sits nose-up on its suspension (read
-against the world the same probe returns 9.89° for a 10° mount).
+```
+front_right  512x384  fov 70  mount x+0.47 y+0.18 z+1.39  H -53.7 P-10.0  aims 54 deg to the right, i.e. front-right
+```
 
-## 2. The conversions, without loading the model (~40 s, no GPU pass)
+Taken apart:
+
+```
+front_right  512x384  fov 70  mount x+0.47 y+0.18 z+1.39  H -53.7 P-10.0  aims 54 deg to the right
+  |            |        |       |                           |               |
+  |            |        |       |                           |               `- in words
+  |            |        |       |                           `- which way it faces
+  |            |        |       `- where it is bolted to the car
+  |            |        `- how wide an angle it sees
+  |            `- picture size in pixels
+  `- the camera's name
+```
+
+**`mount x y z` — where the camera is bolted to the car**, in metres:
+
+| | means | sign |
+|---|---|---|
+| `x` | **sideways** | `+` right, `−` left |
+| `y` | **forwards / back** | `+` forward, `−` behind |
+| `z` | **height above the road** | always `+` |
+
+So `x+0.47 y+0.18 z+1.39` is 47 cm to the right, 18 cm forward, 1.39 m up.
+
+**`H` and `P` — which way it is aimed**, in degrees:
+
+- **`H` is Heading — turned left or right.** `0` is straight ahead. **Positive turns left,
+  negative turns right.** So `-53.7` is turned 53.7° to the right.
+- **`P` is Pitch — tilted up or down.** `0` is level. **Positive tilts up, negative tilts
+  down.** So `-10.0` is looking 10° down at the road.
+
+**`fov 70`** is how wide an angle it sees — 70° across. The two centre cameras are narrower
+(42° and 45°); the four corners are 70°.
+
+**Two things that make the line hard to compare against the sentence, and both are real:**
+
+**1. `H` and the sentence use opposite conventions.** `H -53.7` is negative while the sentence
+says *"to the right"*. Not a contradiction: `H` is MetaDrive's number, where **+ is left**, and
+the sentence is written in CARLA's convention, where **+ is right**. Same fact stated twice
+through different systems — deliberately, because the two are worked out independently, so if
+the conversion between them broke they would disagree and you would see it.
+
+**2. `x` and `y` here are not the `x` and `y` in the rig file.** `rigs/av3.txt` uses CARLA's
+naming (x forward, y right); the printed line uses MetaDrive's (x right, y forward). Same
+camera, same spot, swapped labels:
+
+```
+in rigs/av3.txt:   x: 0.1844   y: 0.468      <- x is forward, y is right
+printed:           x+0.47      y+0.18        <- x is right,   y is forward
+```
+
+**All six, drawn:**
+
+```
+                              FRONT
+                                A
+        front_left         front_middle         front_right
+         H +53.7             H +0.0              H -53.7
+        (54 deg left)        (ahead)            (54 deg right)
+       x-0.47 y+0.18      x+0.00 y+0.22        x+0.47 y+0.18
+              \                  |                    /
+                \                |                  /
+   LEFT <-----------------  T H E   C A R  -----------------> RIGHT
+    (x-)        /                |                  \         (x+)
+              /                  |                    \
+        rear_left           rear_middle           rear_right
+         H +116.9             H -180.0             H -116.9
+       (117 deg left)        (behind)            (117 deg right)
+      x-0.41 y-1.30        x+0.00 y-1.41        x+0.41 y-1.30
+                                V
+                               BACK
+```
+
+Read across: every left-hand camera has **negative x** (left side of the car) and **positive
+H** (turned left); every right-hand one is the reverse. That mirror symmetry is the quickest
+way to eyeball that nothing is swapped, and it is invisible in a list. The four corners are all
+tilted `P -10.0`, the two centres `P -5.0`, and the rear three sit slightly higher — `z 1.46`
+against `1.39`.
+
+**The part to read is the end of the line.** A camera called `front_right` should aim
+front-right. Go down the six lines and check each name against its sentence. You are looking for
+one where the two disagree.
+
+That is not hypothetical — run the same command on the other rig file and you will find one:
+
+```
+cam_back_left    H -125.0   aims 125 deg to the right, i.e. rear-right
+cam_back_right   H +125.0   aims 125 deg to the left,  i.e. rear-left
+```
+
+A camera named `back_left` pointing rear-**right**. `rigs/cams.txt` disagrees with itself, which
+is why `rigs/av3.txt` was generated from the model's own spec rather than mapped onto it.
+
+### b. Does the simulator agree about which way "right" is?
 
 ```bash
-cd scripts && ./av3-probe.sh junction-1 -- --no-model
+uv run --group sim python tools/camera_rig.py --check-frame workspaces/junction-1/scenarionet-10hz
 ```
 
-Checks conversions 2, 4 and 5 in seconds. The lines to read are the two `ok` verdicts: the
-ego-state pair against raw speed, and the navigation block against `policy_client`'s own
-`route` sensor **over the whole 20-point window**.
+The flag goes **first**, and it takes a **dataset** — this command does not read the rig file.
 
-Those are two independent projections of the same `PointLane` by different code, one of
-them mirrored — so **a metre of disagreement there is a sign error, not rounding**.
-Measured 0.0000 m over 320 points on `junction-1` and 460 on `mosque`.
+**What is that dataset?** The converted map MetaDrive drives —
+`workspaces/junction-1/scenarionet-10hz/` is three files, 792 KB: the junction-1 map with the
+route called `test`, plus two small index files. It comes out of Stage 6 (`convert`), and
+`-10hz` is the rate it was baked at.
+
+**Why does a directions check need a map at all?** You cannot ask MetaDrive which way is forward
+without starting MetaDrive, and MetaDrive will not start without a map to load. You need a car
+sitting on a road before there is a car whose "forward" you can measure. Any dataset works — the
+answer is the same on every map; this one is just the smallest lying around.
+
+**What it is checking.** That when our code says *"put the camera on the right"*, MetaDrive puts
+it on the right. That is the whole job.
+
+**Why that needs checking.** The rig file describes cameras in words — *"on the right of the
+car, pointing 54° right, tilted 10° down"*. MetaDrive does not take words, it takes numbers, and
+someone had to write the code that turns one into the other. If that code has left and right
+backwards, every camera ends up on the wrong side of the car and **nothing goes wrong**: you get
+six sharp pictures of the wrong things, and the model quietly drives badly.
+
+**What it prints.** Six lines — each one a thing it tried, and what happened.
+
+```
+ok   local +y is 1 m forward   ahead +1.000 m, right -0.000 m
+```
+I pushed a point 1 metre forward. It moved 1 metre forward and zero to the side. Correct.
+
+```
+ok   local +x is 1 m right     ahead +0.000 m, right +1.000 m
+```
+I pushed it 1 metre right. It moved 1 metre right and zero forward. Correct.
+
+```
+ok   H=+55 turns left          +55.00 deg from the car's heading
+```
+I turned it 55° left. It is now 55° left of the car. Correct.
+
+```
+ok   P=+10 tilts up            +10.00 deg from the car's own attitude (which is -0.11 deg)
+```
+I tilted it 10° up. It is now 10° above the car's own line. Correct.
+
+Two more do the same in the opposite direction — turn right, tilt down.
+
+**How you know it is right.** Compare what it asked for against what it got. Both are printed on
+the same line.
+
+- Asked for **1 m forward**, got **1.000 forward, 0.000 sideways**. Match.
+- `ahead -1.000` would mean "forward" is going backwards.
+- The `1.000` appearing under `right` instead of `ahead` would mean forward and sideways are
+  swapped.
+- Asked to turn **left**, got `+55.00`. A `-55.00` would mean it turned right.
+
+You do not have to trust the word `ok` — the numbers are beside the request.
+
+**Expect six `ok` lines and nothing else.** That means every camera in the rig file will land
+where the file says.
+
+**Why "the car's own attitude" on the last two.** The car sits slightly nose-down on its springs
+— −0.11° above. Measured against the ground instead, a 10° tilt reads 9.89°, which looks like a
+bug and is not one.
+
+**What it cannot tell you:** whether the front camera is really showing road ahead. It checks
+directions, never pictures. Four of the six cameras are tilted, so they rest entirely on the last
+two lines — if "tilt up" were backwards they would point at the sky, and this is what says so.
+
+## 2. The inputs the model will be handed (~40 s, no GPU pass)
+
+```bash
+cd scripts && ./av3-probe.sh junction-1 -- --no-model --step-hz 100 --decision-hz 20
+```
+
+**The two rate flags are not optional.** Without them the script picks the 10 Hz dataset, and
+`rigs/av3.txt` says its cameras must be read at 20 Hz — so the rig refuses to load rather than
+quietly handing the model frames at half the rate it expects. Nothing here resamples.
+
+**What it does.** Replays a recorded drive on junction-1 and, at 39 moments spread across it,
+builds exactly the inputs the model would be handed — the six pictures, the car's speed, the
+road ahead — and checks each one against a source that already knows the answer. `--no-model`
+means the checkpoint is never loaded, so **nothing is predicted and nothing steers**. This tier
+checks the wiring, not the driver.
+
+**Why that is worth a tier of its own.** None of these inputs raises when it is wrong. Hand the
+model the six cameras in the wrong order, or the road mirrored left-for-right, and it loads,
+runs, and returns twenty perfectly plausible waypoints — and then drives into oncoming traffic.
+So they are checked here first, on a car whose real path is already recorded.
+
+### What it prints, block by block
+
+**`camera map`** — which of your rig's cameras fills each of the model's six input slots.
+
+```
+camera map   model slot        rig camera        aims
+             [0] front_middle  front_middle      straight ahead
+             [1] front_right   front_right       54 deg to the right, i.e. front-right
+```
+
+Left column is the slot the weights expect, middle is the camera being put in it, right is where
+that camera actually points. **Read across each row and check all three agree.** Six rows, no
+`-- MISSING --`, and no "in the rig and read by nothing" note underneath.
+
+**`history`** — `5 frames 0.5 s apart (stride 10, ring 41 deep, 108.8 MB of uint8)`. The model
+does not see one picture, it sees five spaced half a second apart; that is how it perceives
+motion. The arithmetic is all on the line: decisions come 0.05 s apart, so a 0.5 s gap is every
+**10th** one (`stride 10`), and holding 5 frames 10 apart needs `(5−1)×10+1 = 41` slots. **And no
+`note:` line** — one appears when the spacing does not divide evenly, which is a case that never
+stops a run and is flagged nowhere else.
+
+**`drove 3516 of 3695 steps, 39 decision(s) sampled`** — the recorded car reached its destination
+at step 3516 of a 3695-step budget. 95%, which is the normal ending for this route, not a fault.
+39 rather than 40 because the 40th sample was scheduled for step 3600, past the end.
+
+**`frames`** — mean and spread of pixel brightness per camera, read a few decisions in. **The
+only automatic test is that the spread is above 1.0.** A camera whose buffer never fills renders
+a flat grey frame and the model happily returns waypoints from it. That all six differ from each
+other is itself the evidence they are six views rather than six copies.
+
+**`ego state`** — the speed pair the model is fed, beside MetaDrive's own reading.
+
+```
+step   speed m/s   v_fwd norm   v_lat norm   v_fwd m/s   v_lat m/s
+0         13.889       1.7168       0.0000      13.889       0.000
+```
+
+The model is not fed metres per second. It is fed the speed divided by a fixed number out of
+`model_dev.yml` (`ego_velocity_scale: [8.09, 0.27]`) — so **1.7168 × 8.09 = 13.889**, which is
+column 2. And 13.889 m/s is **exactly 50 km/h**, junction-1's posted limit, which the recorded
+drive holds along the straight.
+
+**All six printed rows being identical is not a stuck reading** — they are the first six of the
+39, steps 0 to 460 out of 3516, which is the straight opening of the route at a constant speed.
+The verdict line under them is computed over all 39.
+
+**`navigation`** — the block worth understanding, and the one that needs the most unpacking.
+
+**The problem it solves.** Two different things need to be told where the road goes: the
+openpilot bridge (tier 4), which is told by `policy_client`'s `route` sensor, and the AV3 model,
+which is told by its own navigation block. Two separate pieces of code, written at different
+times, describing the same road. This puts them side by side.
+
+**What "where the road goes" means here.** Not a description in words — **20 dots laid along the
+road ahead, 2 metres apart**, at 0 m, 2 m, 4 m … 38 m. Each dot is two numbers: how far ahead,
+and how far to the side. Dot 0 is where the car is; dot 19 is the last, 38 m out.
+
+**Where the two disagree.** They measure "to the side" in **opposite directions** — the route
+sensor counts **left** as positive, the model's block counts **right** as positive. Same dot,
+same road, opposite words for it. Somebody had to write the code that flips one into the other,
+and **if that flip is backwards nothing complains**: the model is told the road bends right when
+it bends left, and drives accordingly.
+
+```
+    the road bends left                       dot 19, 38 m ahead
+                                             *
+                                         . '
+                                     . '        and 3 m to the LEFT
+                                 . '
+                             . '
+                         . '
+                     . '
+                 . '
+             . '
+         . '
+     . '
+  [CAR] dot 0
+
+  route sensor says    left  = +3.0     (left is its positive direction)
+  model block  says    right = -3.0     (right is its positive direction)
+
+  flip the model's:    -(-3.0) = +3.0   -> same number. That is the whole check.
+```
+
+**The table.**
+
+```
+step   point   ahead sensor / model      left sensor / -model
+0      19        38.000 /   38.000       -0.000 /   -0.000
+```
+
+Each column holds **two numbers separated by a slash — what the sensor said / what the model
+said.** The `-` in `-model` means the model's has already been flipped for you. So that row
+reads: *at step 0, dot 19 — sensor says 38.000 m ahead, model says 38.000 m ahead; sensor says
+0.000 m left, model flipped says 0.000 m left.* The same number twice, in both columns. 38 m
+because dot 19 is 19 × 2 m out; zero sideways because the car is on a straight at that moment.
+
+The line above the table, `the sensor is (ahead, LEFT) m; the model's is (fwd, RIGHT)/H`, says
+that in shorthand — plus `/H`, because the model is not fed metres at all. It is fed **fractions
+of the 40 m window** (0.95 rather than 38 m), and the tool multiplies back by 40 so the two can
+be compared.
+
+**Why zero, and not "close to zero".** These are not two measurements of the world that could
+differ by a bit. They are **two calculations from the same stored road**. Get the flip right and
+they are identical to the last decimal; get it backwards and the sideways number comes out
+**doubled** — 3 m becomes −3 m, a 6 m gap. There is no middle ground, so zero means right and
+anything you can see means a sign is backwards.
+
+**Why every printed row is zeros, and the line that saves the check.** On a straight road this
+test proves nothing: sideways is 0, and flipping the sign of zero gives zero, so it passes
+whether the flip is right or wrong. Every row printed in a `junction-1` run is from the straight
+opening (steps 0–645) — the boring ones. The verdict is computed over all 780 dots, bends
+included. Which is what this line is for:
+
+```
+24 of 39 sampled decisions have the far end of the route more than 0.8 m to one side
+```
+
+**24 of the 39 sampled moments were on a genuine bend**, where the far dot really was off to one
+side and a backwards flip would show up as metres. That is what earns the zero. If it ever read
+`0 of 39`, the `ok` above it would be worth nothing.
+
+
+### How you verify it
+
+Five things, all on screen:
+
+1. six camera rows where slot, camera and aim agree;
+2. the history arithmetic — 10 and 41 — and no `note:` line;
+3. every camera's spread above 1.0;
+4. **both `ok` lines, both reading 0.0000**;
+5. the turning count above zero, `result  every checked conversion agrees`, and exit 0.
+
+**What it does not check.** No model is loaded, so nothing here says the model predicts anything
+sensible — that is tier 3. And nobody looks at the pictures: this confirms the cameras point
+correctly and render *something*, never that the front camera is showing road.
 
 ## 3. The model predicts, while nothing steers (~4 min)
 
@@ -199,9 +512,12 @@ flag failing: `StubBridge.control` is pure pursuit over `msg["waypoints"]` and n
 ## If a tier fails
 
 - **Tier 0 or 1** — a conversion or the rig. The failing assertion names which.
-- **Tier 2** disagrees in metres — a sign, almost certainly conversion 5's mirror. `y`,
-  `sin θ`, `yaw`, `yaw_rate`, `v_y` and curvature negate **together**; `x`, `cos θ`, `v_x`
-  and `a_x` do not. Half of it right is the failure that steers into oncoming traffic.
+- **Tier 2's `navigation` block disagrees in metres** — that is the left-right mirror, not
+  rounding. Everything sideways flips **together**: `y`, `sin θ`, `yaw`, `yaw_rate`, `v_y` and
+  curvature. Everything forward does not: `x`, `cos θ`, `v_x`, `a_x`. Half of it right is the
+  failure that steers into oncoming traffic.
+- **Tier 2's `ego state` disagrees** — the speed scale. The two numbers the model is fed are
+  the speed divided by `ego_velocity_scale` in `model_dev.yml`; check they multiply back.
 - **Tier 3 refuses to load** — check `uv sync --group sim --group gpu --group model` named
   all three groups. `uv sync --group model` alone *removes* `sim` and `gpu`.
 - **`cudaErrorUnknown(999)` at env construction** — the GL context and CUDA landed on
@@ -211,3 +527,13 @@ flag failing: `StubBridge.control` is pure pursuit over `msg["waypoints"]` and n
   `loaded  20 waypoints x 8`; if it is there, the load worked.
 - **Tier 4 hangs at connect** — the bridge container. `docker ps` should show
   `openpilot-bridge`, and something should be listening on 5558.
+
+---
+
+## What is still not checked
+
+**Nobody has looked at the pictures.** Every check above is numeric. Tier 1 proves the simulator
+agrees which way is which, and tier 3 proves the six cameras differ from one another — but no
+command in this repo writes the camera frames to disk, so *"is the front camera really showing
+the road ahead"* has never been confirmed by eye. A `--save-frames` option on `av3-probe` would
+settle it in one run.
