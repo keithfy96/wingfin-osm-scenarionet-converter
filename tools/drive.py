@@ -399,7 +399,7 @@ def _max_texture_dimension() -> int | None:
 def _set_semantic_detail(pixels_per_meter: int) -> None:
     """Pin the semantic texture's resolution.
 
-    One of this script's two monkeypatches - the other is `_set_line_width` - and for the same
+    One of this script's four monkeypatches - `_set_line_width` is the next - and for the same
     reason: `Terrain` reads this through `TerrainProperty.get_semantic_map_pixel_per_meter()`,
     whose body is `22 if map_region_size != 4096 else 11`, and there is no config key anywhere
     that reaches it, so a map big enough to need a 2048 m square cannot be textured without
@@ -464,9 +464,10 @@ def _keep_line_ends() -> None:
     `_junction_kerb_boundaries` leaves bare on purpose and nothing else - the same figure as if
     the resampling were removed altogether.
 
-    The third and last monkeypatch. Both importers took the name rather than the module, so the
-    two bindings are rebound separately and nothing else in MetaDrive imports it: `scenario_map`
-    is the raster, `scenario_block` the collision ghosts, which must agree with what is drawn.
+    The third monkeypatch, and the last of the three about paint. Both importers took the name
+    rather than the module, so the two bindings are rebound separately and nothing else in
+    MetaDrive imports it: `scenario_map` is the raster, `scenario_block` the collision ghosts,
+    which must agree with what is drawn.
     """
     import numpy as np
     from metadrive.component.map import scenario_map
@@ -483,6 +484,44 @@ def _keep_line_ends() -> None:
 
     scenario_map.resample_polyline = to_the_end
     scenario_block.resample_polyline = to_the_end
+
+
+def _record_every_step() -> None:
+    """Stop MetaDrive recording nothing at all when `decision_repeat` is 1.
+
+    `RecordManager` fills one `FrameInfo` per physics tick and appends the batch once per
+    `env.step`. Which tick did the filling is tracked in `current_frame_count`, and
+    `after_step` guards the append on it being **truthy** (`record_manager.py:110`). That
+    counter is only ever advanced by `RecordManager.step()`, and the engine calls that from
+    inside its physics loop under `if ... and i < step_num - 1` (`base_engine.py:443`) --
+    which is never true when `step_num` is 1. So at `decision_repeat == 1` the counter stays 0,
+    the guard stays false, and the episode ends holding nothing but the reset frame.
+
+    That is not a corner: `step_config` returns `(0.01, 1)` at **100 Hz**, the rate the openpilot
+    bridge is driven at and the rate every interesting drive on the rig runs at. Measured on a
+    `--step-hz 100` junction-1 drive before this existed: 3516 steps in, **1 frame** out.
+
+    The guard is the whole bug -- `current_frames` is the thing being appended, so asking
+    whether it exists is both the correct question and the one the code below already answers
+    for every other rate. `after_step` then calls `step()` itself, which fills tick 0 with the
+    post-physics state, and MetaDrive's own assertion that the batch is `decision_repeat` long
+    holds at 1 exactly as it does at 5.
+
+    The fourth monkeypatch, and installed only under `--export-drive`: a run that is not
+    exporting has `record_episode` off and never reaches any of this.
+    """
+    from metadrive.manager.record_manager import RecordManager
+
+    def after_step(self, *args, **kwargs):
+        if self.engine.record_episode and self.current_frames is not None:
+            self.step()
+            assert len(self.current_frames) == self.engine.global_config["decision_repeat"], (
+                "Number of Frame Mismatch!"
+            )
+            self.episode_info["frame"].append(self.current_frames)
+        return {}
+
+    RecordManager.after_step = after_step
 
 
 def _images_are_normalised(env) -> bool:
@@ -759,6 +798,21 @@ def main() -> int:
         "under --render none or 3D, where the observation carries no image to drop.",
     )
     parser.add_argument(
+        "--export-drive",
+        default=None,
+        help="Write the drive that just happened to this directory, as a ScenarioNet dataset "
+        "this same tool can drive. It is how a headless machine hands a drive to a machine "
+        "with a screen: run it on the rig under --render offscreen, copy the directory back, "
+        "and open it here with scripts/watch-drive.sh. It records object states rather than "
+        "pixels, so nothing extra is drawn and no --render mode is ruled out. Note the two "
+        "neighbours: --record writes (observation, action) pairs for imitation learning, and "
+        "--agent-policy replay *reads* a dataset - point it at what this wrote and the ego "
+        "retraces the drive. Its clock is mislabelled and MetaDrive is where that lives: "
+        "`convert_recorded_scenario_exported` refuses any log interval but 0.1 s and stamps "
+        "the timestep array 0.1*i whatever the drive ran at, so a 100 Hz drive's timestamps "
+        "read 10x slow. Positions, speeds and pedals are the real ones; only the clock lies.",
+    )
+    parser.add_argument(
         "--lights",
         default="tape",
         choices=["tape", "live"],
@@ -991,6 +1045,37 @@ def main() -> int:
             )
             return 1
 
+    # Checked here, before the terrain build, for the reason the checkpoint above is: a drive
+    # is minutes, and a directory that cannot be written is knowable in microseconds. Non-empty
+    # is refused rather than merged because `save_dataset` writes a summary naming only what
+    # this run exported, so a second drive into the same directory leaves `sd_*.pkl` files that
+    # `dataset_summary.pkl` does not list - a dataset that reads as smaller than it is.
+    if arguments.export_drive:
+        if os.path.isdir(arguments.export_drive) and os.listdir(arguments.export_drive):
+            print(
+                f"result       FAILED: --export-drive {arguments.export_drive} exists and is "
+                "not empty. Name a new directory; a drive is not merged into an existing one."
+            )
+            return 1
+        if os.path.exists(arguments.export_drive) and not os.path.isdir(arguments.export_drive):
+            print(
+                f"result       FAILED: --export-drive {arguments.export_drive} is a file, not "
+                "a directory. It writes a dataset directory, not one file."
+            )
+            return 1
+        # Made now, not at the end: creating it is the only honest test that it *can* be
+        # created, and finding out otherwise after a drive is the whole thing this block
+        # exists to avoid. `workspaces/<ws>/drives/` will not exist the first time, and
+        # having the caller mkdir -p before a flag will work is a step with no purpose.
+        try:
+            os.makedirs(arguments.export_drive, exist_ok=True)
+        except OSError as error:
+            print(
+                f"result       FAILED: --export-drive cannot create "
+                f"{arguments.export_drive}: {error}"
+            )
+            return 1
+
     import numpy
 
     print(f"interpreter  python {sys.version.split()[0]} / numpy {numpy.__version__}")
@@ -1194,6 +1279,13 @@ def main() -> int:
     # was not passed - so `--decision-hz 5` alone is a legal 2x stride rather than an error
     # about a flag the caller did not use.
     effective_hz = arguments.step_hz if arguments.step_hz is not None else DEFAULT_STEP_HZ
+    # Folded in only when asked for, the same way `rate` is: `record_episode` defaults to False
+    # in `BASE_DEFAULT_CONFIG` (`base_env.py:265`), so an unflagged run's config stays unchanged
+    # key-for-key rather than merely equal by value.
+    recording = {}
+    if arguments.export_drive:
+        recording = {"record_episode": True}
+        _record_every_step()
     try:
         stride = decision_stride(effective_hz, arguments.decision_hz)
     except ValueError as error:
@@ -1302,6 +1394,7 @@ def main() -> int:
             "agent_policy": policy,
             **rate,
             **offscreen,
+            **recording,
             # The one key that selects `ManualControlPolicy`; see the comment on `policy` above.
             "manual_control": arguments.agent_policy == "manual",
             "reactive_traffic": arguments.reactive,
@@ -1324,6 +1417,11 @@ def main() -> int:
 
     # Built here rather than imported at the top so that a run without --record does not depend
     # on `agent_env` at all, and so the only cost of the flag existing is this branch.
+    # One entry per scenario driven, filled at the end of each episode. It has to be
+    # collected *inside* the loop rather than dumped once at the end: `RecordManager`
+    # starts a fresh `episode_info` on every `before_reset` (`record_manager.py:50`), so
+    # after a two-scenario run the engine holds only the second one.
+    exported = []
     recorder = None
     if arguments.record:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1497,7 +1595,14 @@ def main() -> int:
             # A hosted model is in exactly the same position, and for the same reason: it is
             # not following the tape, so the tape's length is not a bound on how long its drive
             # legitimately takes.
-            mismatch = abs(sim_dt - data_dt) > 1e-9
+            # Relative, not absolute, and 1 ppm rather than 1e-9. `data_dt` is read off the
+            # recorded timestamps, and MetaDrive writes those as **float32** in a scenario it
+            # exported itself (`metadrive/scenario/utils.py:154`), so a 10 Hz drive comes back
+            # as 0.10000000149 -- 1.5e-9 out, and refused by an absolute 1e-9 with a message
+            # reading "10 Hz against 10 Hz". Measured on a --export-drive of junction-1. The
+            # differences this exists to catch are 10x apart, so 1 ppm gives up nothing: at
+            # 0.1 s that is 1e-7, five orders below the smallest real mismatch.
+            mismatch = abs(sim_dt - data_dt) > 1e-6 * max(sim_dt, data_dt)
             if mismatch:
                 refusal = _refuse_mismatch(
                     scenario,
@@ -1777,6 +1882,19 @@ def main() -> int:
                     f"             ground within 25 m of the drive reaches {highest:+.1f} m; "
                     f"{share:.0%} of it stands above the road"
                 )
+
+            # Converted here, while the engine is alive, rather than after the `finally` that
+            # closes it: `dump_episode` reads the record manager off the engine. The conversion
+            # is generic where `replay_episode` is not -- it reads `map_data["map_features"]`
+            # only (`metadrive/scenario/utils.py:131`), which every map has, while
+            # `ReplayManager.reset` reads `map_config` and `block_sequence` and spawns a
+            # `PGMap`, neither of which a ScenarioNet map carries. That is why this writes a
+            # dataset instead of a replay file.
+            if arguments.export_drive:
+                from metadrive.scenario.utils import convert_recorded_scenario_exported
+
+                episode = env.engine.dump_episode()
+                exported.append(convert_recorded_scenario_exported(episode))
     finally:
         if model is not None:
             model.close()
@@ -1850,6 +1968,50 @@ def main() -> int:
                     else ""
                 )
             )
+
+    if exported:
+        # MetaDrive's `extract_dataset_summary_and_mapping` builds the summary and the mapping
+        # and runs `SD.sanity_check` on each scenario (`utils.py:456`), so a drive that
+        # converted into something undrivable is refused here rather than found later in a 3D
+        # window. Its sibling `save_dataset` is not used, and the reason is the whole point of
+        # the flag: it writes with a plain `pickle.dump`, and this process is the container's
+        # numpy 2.2 while the machine that will *watch* the drive opens it on MetaDrive's own
+        # 3.8 and numpy 1.24. A numpy-2 pickle fails to open there with
+        # `ModuleNotFoundError: No module named 'numpy._core'`. `portable_pickle` is the
+        # answer this repo already gives for its converted datasets.
+        import portable_pickle
+        from metadrive.scenario.scenario_description import ScenarioDescription
+        from metadrive.scenario.utils import (
+            dict_recursive_remove_array_and_set,
+            extract_dataset_summary_and_mapping,
+        )
+
+        summary, mapping, scenarios = extract_dataset_summary_and_mapping(
+            exported, "wingfin", "drive"
+        )
+        size_kb = 0
+        for name, scenario in scenarios.items():
+            size_kb += portable_pickle.dump(
+                scenario, os.path.join(arguments.export_drive, name)
+            ) / 1024
+        size_kb += portable_pickle.dump(
+            dict_recursive_remove_array_and_set(summary),
+            os.path.join(arguments.export_drive, ScenarioDescription.DATASET.SUMMARY_FILE),
+        ) / 1024
+        size_kb += portable_pickle.dump(
+            mapping,
+            os.path.join(arguments.export_drive, ScenarioDescription.DATASET.MAPPING_FILE),
+        ) / 1024
+        frames = sum(int(scenario.get("length", 0)) for scenario in exported)
+        size = f"{size_kb / 1024:.1f} MB" if size_kb >= 1024 else f"{size_kb:.0f} KB"
+        print(
+            f"exported     {len(exported)} scenario(s), {frames} frames -> "
+            f"{arguments.export_drive} ({size})"
+        )
+        print(
+            "             watch it with: scripts/watch-drive.sh "
+            + os.path.relpath(arguments.export_drive)
+        )
 
     print("result       {}".format("FAILED" if failures else "OK"))
     return 1 if failures else 0

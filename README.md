@@ -668,6 +668,39 @@ keeps the numbers and drops the frames (29 KB for the same drive).
 `--record --render offscreen` had never worked before 2026-08-24 — it ravelled the dict and
 died with `TypeError: float() argument must be a string or a real number, not 'dict'`.
 
+**Watching a drive that happened somewhere else.** `--export-drive <dir>` writes the drive
+itself out, as a ScenarioNet dataset this same tool can drive. It is for the case the model
+makes ordinary: the interesting drives happen on the GPU rig, which has no screen, and the
+question — is the car crawling, circling, or oscillating? — is one a picture answers in a
+second and no summary line answers at all.
+
+```bash
+# on the rig, headless, alongside whatever the drive was already doing
+./sim.sh scripts/drive.sh junction-1 -- --render offscreen --step-hz 100 \
+  --model-checkpoint "$MODEL_CHECKPOINT" --agent-policy remote --policy-url http://127.0.0.1:8642 \
+  --export-drive /work/workspaces/junction-1/drives/rig
+# exported  1 scenario(s), 3517 frames -> .../drives/rig (1.4 MB)
+
+# then scp the directory here and watch it in 3D
+./watch-drive.sh ../workspaces/junction-1/drives/rig
+```
+
+It records object *states*, not pixels, so nothing extra is drawn and the cost is invisible:
+measured on a 3516-step 100 Hz `junction-1` drive, the same steps and the same completion with
+the flag as without, 1.4 MB out. `watch-drive.sh` is a sibling of `drive.sh` rather than a flag
+on it because `drive.sh` takes a *workspace* and an exported drive is a bare dataset directory.
+`workspaces/*/drives/` is gitignored — these are carried between machines, not rebuilt.
+
+Two things about it that are MetaDrive's and worth knowing before reading numbers off the file:
+
+* **Its clock is labelled 10x slow at 100 Hz.** `convert_recorded_scenario_exported` refuses
+  any log interval but 0.1 s and stamps the timestep array `0.1 * i` whatever the drive ran at.
+  Positions, speeds and pedals are the real ones; only the timestamps lie. The picture is
+  unaffected — replay advances one recorded frame per `env.step`.
+* **It is not training data**, and `--record` above is. The exported drive is a *scenario*, and
+  `ScenarioEnv` scores route completion against the recorded trajectory — which here is the
+  model's own drive, so driving it would measure the model against its own mistakes.
+
 ### What a model can actually see
 
 Run the survey before choosing what your model takes as input. It drives, then reports every

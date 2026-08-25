@@ -80,9 +80,17 @@ export DOCKER_UID DOCKER_GID
 # and those are different measurements. `docker image inspect` reads labels the same way on both.
 #
 # A note and never a die: a sweep, or any --no-model drive, runs perfectly well on the older image.
-# An image with no label at all is stale by construction -- it predates the label, which is the same
-# build that predates the groups. No image yet says nothing, because compose is about to build one.
-# What this does NOT catch, and cannot: a version bump inside a group whose name did not change.
+# No image yet says nothing, because compose is about to build one.
+#
+# **An image with no label says nothing either, and that is the point.** Absent means unknown, not
+# missing: the label was added after the groups were, so an image built in between carries all three
+# groups and no label to prove it. Reading absent as "all three missing" is exactly what happened --
+# the rig was told it was missing sim, gpu and model, and the same run then loaded torch, TensorRT
+# and the checkpoint. A check that fires on a working image teaches people to ignore it, which costs
+# more than the check is worth.
+#
+# What this does NOT catch, and cannot: a version bump inside a group whose name did not change, or
+# an image old enough to predate the label.
 check_image_groups() {
     local want have missing=()
     # The uv sync line only -- awk drops comment lines, which now discuss --group themselves.
@@ -91,6 +99,9 @@ check_image_groups() {
     [[ -n "$(docker image inspect wingfin-sim --format '{{.Id}}' 2>/dev/null)" ]] || return 0
     have=$(docker image inspect wingfin-sim \
         --format '{{index .Config.Labels "wingfin.groups"}}' 2>/dev/null)
+    # Unlabelled: an image from before the label existed. Nothing can be said about it from here,
+    # so nothing is said. See the header.
+    [[ -n "$have" ]] || return 0
 
     local group
     for group in $want; do

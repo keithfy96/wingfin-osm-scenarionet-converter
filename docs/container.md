@@ -99,6 +99,12 @@ against an image built before `--group gpu --group model` was added to `docker/D
 image and compares it with the `uv sync` line — but the habit is what matters: **after a pull that
 changes the lock or the Dockerfile, `docker compose build`.**
 
+**Silence from that check is not a clean bill of health.** It says nothing about an image with no
+`wingfin.groups` label at all, because the label was added *after* the groups were: an image built
+between the two carries all three and no label to prove it. Reading that silence as "everything is
+missing" is exactly what it used to do, and it told a working rig it was missing torch moments
+before the same run loaded torch. Absent means unknown.
+
 To ask the image directly, on any machine:
 
 ```bash

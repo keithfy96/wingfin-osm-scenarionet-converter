@@ -649,6 +649,71 @@ measured 947–1002 ms), one per decision, and a full-length `junction-1` route 
 `--decision-hz 20` is 758 of them. `env.step` is the tick, so a slow policy makes a slow
 drive and never a wrong one.
 
+### Watching the drive
+
+The table above is where the numbers stop helping. The same model drive ends `out_of_road` at
+completion 0.163 on a laptop and `max_step` at 0.190 on the rig — 19% of the route in a thousand
+simulated seconds — and **crawling, circling and weaving all produce that line and want different
+fixes**. A statistic cannot separate them. A picture does it at a glance.
+
+`--export-drive <dir>` writes the drive out as a ScenarioNet dataset this same tool can drive.
+It records object *states* rather than pixels, so nothing extra is drawn, `--render offscreen`
+stays exactly as it is and the model keeps its cameras. Measured on a 3516-step `junction-1`
+drive: same steps and same completion with the flag as without.
+
+One flag on the tier-4 command above:
+
+```bash
+cd scripts
+./sim.sh scripts/drive.sh junction-1 -- \
+    --agent-policy remote --policy-url http://127.0.0.1:8642 \
+    --sensors imu,route --step-hz 100 --decision-hz 20 --render offscreen \
+    --export-drive /work/workspaces/junction-1/drives/rig
+```
+
+To see the mechanism work first, without waiting a quarter of an hour for forward passes:
+
+```bash
+cd scripts
+./sim.sh --no-model scripts/drive.sh junction-1 -- \
+    --render offscreen --step-hz 100 \
+    --export-drive /work/workspaces/junction-1/drives/mine
+./watch-drive.sh ../workspaces/junction-1/drives/mine
+```
+
+**`/work/...` inside the container is `workspaces/...` on the host**, which is the one thing here
+that is not guessable and the reason those two lines spell the same directory two different ways.
+In full, on this laptop, that is
+`/home/keith/Desktop/work/wingfin/metadrive-complete/converter-scenarionet-stage2-redesign/workspaces/junction-1/drives/`.
+`workspaces/*/drives/` is **gitignored** — an export never shows in `git status` and `git pull`
+will not carry one, so scp the directory off the rig. Budget ~40 MB for a 100000-step drive
+(1.4 MB for 3517 frames, measured).
+
+`watch-drive.sh` is a sibling of `drive.sh` rather than a flag on it, because `drive.sh` takes a
+*workspace* — `resolve_workspace` wants `source/manifest.json` and `source/map.osm` — and an
+exported drive is a bare dataset directory with neither. It takes a path, resolved against where
+you are standing, and opens it in 3D on whichever card `GPU=` picks.
+
+What to look for once the window is up:
+
+| what you see | what it means |
+|---|---|
+| the car creeps forward the whole way | longitudinal — the pedal map, or the bridge's clock |
+| the car drives off, turns around, comes back | the model is losing the route |
+| the car weaves and never settles | lateral control oscillating |
+
+**Its clock is labelled 10x slow at 100 Hz**, and that is MetaDrive's rather than ours:
+`convert_recorded_scenario_exported` refuses any log interval but 0.1 s and stamps the timestep
+array `0.1 * i` whatever rate the drive ran at. Positions, speeds and pedals are the real ones;
+only the timestamps lie. The picture is unaffected — replay advances one recorded frame per
+`env.step`.
+
+**It is not training data**, and `--record` is. An exported drive is a *scenario*, and
+`ScenarioEnv` scores route completion against the recorded trajectory — which here is the model's
+own drive, so driving it would measure the model against its own mistakes. `--record out.npz`
+writes the `(observation, executed action)` pairs instead, and the two flags are independent:
+both can be on.
+
 ## 5. The control — that the wire did not regress (~1 min)
 
 **On a machine that has never run this, do tier 5 before tier 4.** `--backend stub` is a real
@@ -717,8 +782,12 @@ flag failing: `StubBridge.control` is pure pursuit over `msg["waypoints"]` and n
 
 ## What is still not checked
 
-**Nobody has looked at the pictures.** Every check above is numeric. Tier 1 proves the simulator
-agrees which way is which, and tier 3 proves the six cameras differ from one another — but no
-command in this repo writes the camera frames to disk, so *"is the front camera really showing
+**Nobody has looked through the cameras.** Every check above is numeric, and the one thing that
+can now be watched is the *drive* — `--export-drive` and `watch-drive.sh` above put a headless
+machine's run in a 3D window here, which is what says whether the car crawled or circled.
+
+What that does **not** show is what the model was looking at. Tier 1 proves the simulator agrees
+which way is which and tier 3 proves the six cameras differ from one another, but the frames
+themselves are states away from anything anyone has seen: *"is the front camera really showing
 the road ahead"* has never been confirmed by eye. A `--save-frames` option on `av3-probe` would
 settle it in one run.

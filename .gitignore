@@ -12,5 +12,10 @@ build/
 # particular is one file per run, stamped, and never overwritten -- so tracking them
 # means the repo grows a file every time anyone measures anything.
 workspaces/*/reports/
+# Recorded drives (`drive.py --export-drive`). One directory per run, and a rig's 100000-step
+# model drive is tens of megabytes of positions. They are also the one thing here that is
+# *carried* between machines rather than rebuilt on each -- scp'd off the rig, watched once,
+# and done with. Nothing downstream reads them.
+workspaces/*/drives/
 node_modules/
 

@@ -160,6 +160,12 @@ CMD ["bash"]
 # spent a morning on `--model-checkpoint needs torch` for exactly that reason, against an image
 # built before `--group gpu --group model` was added to the line above.
 #
+# An image with **no** such label is not thereby stale. This line was added after the groups were,
+# so an image built between the two carries all three and no label to say so -- and reading that
+# silence as "all three missing" told the rig its working image was missing everything, moments
+# before that same run loaded torch, TensorRT and the checkpoint. `sim.sh` says nothing when the
+# label is absent, on purpose.
+#
 # A label and not `docker history`, and above all not image size: this laptop is on the classic
 # overlay2 store and prints one SIZE, while the rig is on the containerd snapshotter and prints
 # CONTENT SIZE and DISK USAGE, which are different measurements and not comparable to it. Labels
