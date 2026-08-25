@@ -10,6 +10,18 @@
 #   ./scripts/drive.sh -- --step-hz 100 --decision-hz 20   # 100/20/100: 20 Hz decisions
 #   GPU=integrated ./scripts/drive.sh           # force the built-in graphics
 #
+#   # the AV3 model supplying the trajectory a hosted controller steers by:
+#   METADRIVE_PYTHON=../.venv/bin/python ./drive.sh junction-1 -- \
+#       --agent-policy remote --policy-url http://127.0.0.1:8642 \
+#       --model-checkpoint <the .ep> --sensors imu,route \
+#       --step-hz 100 --decision-hz 20 --render offscreen
+#
+# **--model-checkpoint needs THIS repo's interpreter**, not the 3.8 checkout venv: torch 2.8
+# has no 3.8 wheel and does not need one, MetaDrive running on 3.10. Point METADRIVE_PYTHON
+# at .venv/bin/python for that run, after `uv sync --group sim --group gpu --group model`.
+# A pass takes about a second, so a whole drive is minutes rather than seconds -- env.step is
+# the tick, so that makes it slow and never wrong.
+#
 # Why a script rather than a command: MetaDrive runs on its own interpreter (3.8 / numpy 1.24,
 # against this repo's 3.10 / numpy 2.2), and which GPU renders is settled by the GLX loader
 # before python starts -- so driving anything means two environment variables in front of a

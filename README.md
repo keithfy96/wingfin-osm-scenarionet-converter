@@ -949,7 +949,10 @@ would let two machines run different simulators while every CSV claimed they wer
 There is a second opt-in group, `gpu`, holding the three packages MetaDrive's `image_on_cuda`
 path imports — `cupy-cuda12x[ctk]`, `PyOpenGL` and `cuda-python`. It is separate because it is
 about 1.5 GB of CUDA toolkit and only `--image-on-cuda` needs it; `uv sync` installs neither
-group. `cuda-python` is capped **below 13** on purpose: 13.0 removed the `cuda.cudart` shim
+group. A third, `model`, holds torch / torch-tensorrt / tensorrt for the AV3 checkpoint —
+see *Load the model checkpoint* below. **`uv sync` takes exactly the groups you name and
+removes the rest**, so once you want more than one, name them all:
+`uv sync --group sim --group gpu --group model`. `cuda-python` is capped **below 13** on purpose: 13.0 removed the `cuda.cudart` shim
 MetaDrive imports, and the cap is what keeps the gate open.
 
 **It renders on the real GPU with no X server, and the trap there is silent.** panda3d ships
@@ -1190,6 +1193,135 @@ Three things worth knowing:
   intent; that is the model's half of the job, not the controller's.
 - **The table describes one car.** `max_engine_force` is sampled from a `BoxSpace`, so the
   file records what it was measured on and every episode checks the live vehicle against it.
+
+### Load the model checkpoint
+
+Whether this machine can run the AV3 model at all, before anything is built around it.
+Stage 9 Phase C.1 — it does not drive and writes no file.
+
+```bash
+uv sync --group sim --group gpu --group model
+
+cd scripts
+./model-probe.sh                                # does the engine load, and what does it cost
+./model-probe.sh junction-1 -- --with-simulator # the same, with MetaDrive already on the card
+```
+
+It prints what the checkpoint declares about itself — read straight out of the `.ep` archive
+before torch is even imported, so a failure to load still says what the file wanted — then
+loads it, runs one pass at those shapes, and reports VRAM and timing.
+
+Measured on this machine (RTX 4050, 6141 MiB):
+
+| | model alone | beside `rigs/cams.txt` offscreen |
+|---|---|---|
+| card used after a warm-up pass | 2617 MiB | 4990 MiB |
+| **free** | 3524 MiB | **1151 MiB** |
+| forward pass | 1002 ms median | 987 ms median |
+
+Three runs put the median between 947 and 1002 ms; the best single pass seen was 919.
+
+
+Four things worth knowing before you read that table:
+
+- **It loads, and it will load elsewhere too.** The `.ep`'s 1.2 GB is a *serialized TensorRT
+  engine*, not weights, and a TRT engine is normally built for one GPU architecture — so
+  "compiled on another machine" was a real risk rather than a formality. This one was built
+  `AMPERE_PLUS`, deliberately: it runs on **any NVIDIA card from Ampere onwards** (RTX 30/40/50
+  series and the datacentre parts) and refuses below that rather than misbehaving. The probe
+  prints which, so you never have to guess for a different checkpoint.
+- **A pass takes about a second, which is 20× what a 20 Hz decision has.** Two causes, and
+  neither is fixable from this repo: the card is at 100% utilisation but capped at 35 W of a
+  60 W maximum, clocking 975–1335 MHz against 3105; and `AMPERE_PLUS` buys its portability by
+  giving up card-specific optimisations, which NVIDIA documents as costing speed. A slow
+  policy makes a *slow* drive, never a wrong one — `env.step` is the tick — so this is a
+  pacing fact, not a correctness one.
+- **The output is 20 waypoints, 8 wide** — `[x, y, yaw, yaw_rate, v_x, v_y, a_x, a_y]`. The
+  openpilot policy sends four, 3-wide, today.
+- **`MODEL_CHECKPOINT` in `.env`** points it somewhere else; unset it uses the openpilot fork
+  checkout's copy, which is the only one on this machine.
+
+
+### Put the model at the wheel
+
+Stage 9 Phases C.3 and C.2. The model decides *where to go*; the openpilot bridge still decides
+how hard and which way. Until now the "where" was `route_gt.py` — the recorded route resampled
+at the car's own current speed — which is a controller test by construction and is why the
+bridge asks to slow down almost every tick.
+
+**Check the conversions first, while nothing is steering.** Six things stand between the
+simulator and the model — pixels, camera order, frame history, ego speed, route, and the sign of
+the waypoints coming back — and **not one of them raises when it is wrong**. A mirrored route
+gives a model that loads, runs, returns twenty plausible waypoints and drives into the oncoming
+carriageway.
+
+```bash
+uv sync --group sim --group gpu --group model
+
+cd scripts
+./av3-probe.sh junction-1 -- --step-hz 100 --decision-hz 20
+./av3-probe.sh junction-1 -- --no-model        # conversions 2, 4 and 5 in seconds, no GPU pass
+```
+
+The ego is replayed from the tape, so the drive is the tape whatever the model says. It prints
+which rig camera fills which model slot and where each one aims, the ego-state pair beside the
+raw speed it was built from, the navigation block beside `policy_client`'s own `route` sensor —
+two independent projections of the same route, one mirrored — and the predicted waypoints
+against where the recorded car really went.
+
+Then drive it, in two terminals:
+
+```bash
+uv run python examples/openpilot_server.py --backend bridge --longitudinal table --port 8642
+
+cd scripts && METADRIVE_PYTHON=../.venv/bin/python ./drive.sh junction-1 -- \
+    --agent-policy remote --policy-url http://127.0.0.1:8642 \
+    --model-checkpoint /path/to/step_440000_trt_direct_full.ep \
+    --sensors imu,route --step-hz 100 --decision-hz 20 --render offscreen
+```
+
+`--model-checkpoint` implies `--camera-rig rigs/av3.txt`, which is the rig the weights were
+trained on. `--waypoints derive` puts the bridge back on the cubic-fit path every measurement
+before this was taken on, so those stay reproducible.
+
+Six things worth knowing:
+
+- **`rigs/av3.txt` is generated, not hand-written**, from wing-sim's own
+  `validation_invariants.yml` — the rig the weights were trained on. Its header records the
+  conversion and the two datum shifts. `rigs/cams.txt` is untouched: every step-timing figure in
+  this repo was priced with it, and it cannot be mapped onto the model safely anyway (it carries
+  `y: 0.0` on all seven cameras, so its yaw column has nothing to check against, and it names its
+  back pair the opposite of its own yaws).
+- **It renders 512×384, which is 4:3 on purpose.** The model eats 512×288, and the preprocessing
+  gets there by squashing a 4:3 frame vertically — which is what it was trained on. Render 16:9
+  natively and the vertical field of view is a third narrower, silently.
+- **Four of its six cameras are 105.4° fisheyes and MetaDrive has no fisheye lens.** They render
+  rectilinear at wing-sim's own unwarped fallback of 70°, which is what a CARLA run without
+  fisheye gives. It is a domain gap, and it is stated rather than hidden.
+- **A drive is minutes, not seconds.** About a second a forward pass, one per decision — a
+  full-length `junction-1` route at `--decision-hz 20` is 758 of them, so a quarter of an hour.
+  `env.step` is the tick, so a slow policy makes a slow drive and never a wrong one.
+- **The trajectory half works: the pace doubles.** Against the real bridge on `junction-1` with
+  `--longitudinal table`, mean speed goes **4.19 → 8.92 m/s** against a 10 m/s target. The
+  bridge's median `accel_cmd` goes *more* negative (−0.30 → −0.504 m/s²) and that is not a
+  contradiction — a car at its target speed correctly asks to hold. Speed is the statistic here,
+  not the sign of the request.
+- **What ends the drive is the lateral, and that is a reading rather than a bug to chase here.**
+  Over 40 decisions of `junction-1`'s `test` route the model predicts 16.5 m of travel in 2 s
+  where the car covers 24.1, with a 0.12 m median lateral and a standing **+1.6 m rightward
+  bias**; the bridge-driven run leaves the route at completion 0.163. That bias is also why the
+  waypoint sign cannot be settled from a drive — a constant bias reads exactly like a mirror —
+  and why `av3-probe` asks the model directly instead, feeding it a synthetic left-hand and
+  right-hand arc with everything else held fixed.
+- **It needs this repo's interpreter.** `av3-probe.sh` uses it already; `drive.sh` needs
+  `METADRIVE_PYTHON=../.venv/bin/python`, because torch has no Python 3.8 wheel and MetaDrive
+  does not need one.
+
+**`docs/running-a-test.md` is the ladder for checking all of it**, cheapest first — 1 s of
+tests, then the rig, then the conversions with no GPU pass, then the model predicting beside a
+replayed drive, then the drive itself, then the `--backend stub` control that keeps a wire
+regression distinguishable from a model one. Stop at whichever tier answers the question.
+
 
 ---
 
@@ -1473,6 +1605,8 @@ web/                  TypeScript sources for those clients
 tools/                drive.py, check_dataset.py, signal_control.py,
                       agent_env.py, sensor_survey.py, camera_rig.py, policy_client.py,
                       step_timing.py, geodesy.py   (all run under MetaDrive's venv)
+                      model_probe.py, av3_model.py, av3_probe.py   (3.10 only - torch has
+                      no 3.8 wheel, and MetaDrive does not need one)
                       view_point_cloud.py   (this repo's venv + open3d)
 examples/             drive_with_a_policy.py — the loop your own policy goes in
                       policy_server.py — the model's side, stdlib only, any interpreter

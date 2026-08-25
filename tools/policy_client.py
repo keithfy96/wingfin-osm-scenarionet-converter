@@ -355,6 +355,17 @@ class RemotePolicy:
         # right units. Passed in rather than assumed: MetaDrive's 0.1 s is a default and
         # `tools/drive.py --step-hz` moves it.
         self._step_seconds = float(step_seconds)
+        # Extra fields merged into every `/act` payload, set by the caller between steps.
+        # One dict rather than a second argument to `__call__`, because this has to travel
+        # through the `policy(observation)` signature that `drive.py`, `step_timing.py` and
+        # `examples/drive_with_a_policy.py` all call - the same signature `IdmDriver` fills.
+        # `tools/drive.py --model-checkpoint` puts the AV3 model's waypoints here.
+        self.extra = {}
+        # The same, for `/episode`. Separate because the two messages are read by different
+        # code on the far side and a field that belongs to the episode - how many waypoints
+        # the bridge should build its MPC for - cannot ride on a per-step payload: the bridge
+        # builds it once, at connect.
+        self.episode_extra = {}
         self._connection = None
         self.calls = 0
         self.seconds = 0.0
@@ -441,6 +452,8 @@ class RemotePolicy:
         if self._pack is not None:
             self._pack.reset()
             payload.update(self._pack.episode())
+        if self.episode_extra:
+            payload.update(self.episode_extra)
         self._post("/episode", payload)
 
     def __call__(self, observation=None):
@@ -463,6 +476,8 @@ class RemotePolicy:
         payload = {"step": self.step, "observation": encoded}
         if self._pack is not None:
             payload["sensors"] = self._pack()
+        if self.extra:
+            payload.update(self.extra)
 
         started = time.perf_counter()
         reply = self._post("/act", payload)

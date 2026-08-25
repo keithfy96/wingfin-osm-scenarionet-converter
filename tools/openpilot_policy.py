@@ -327,6 +327,9 @@ class BridgeConnection:
             "type": "init",
             "steer_ratio": DEFAULT_STEER_RATIO,
             "max_steer_angle": 40.0,
+            # The bridge builds its lateral MPC from this, once, at connect - so it cannot
+            # follow the first `/act`. `OpenpilotDriver.episode` overrides it with a model's
+            # real count; `route_gt.py`'s four is the default.
             "n_waypoints": len(WAYPOINT_OFFSETS_S),
             "zapeta_longitudinal_mode": "blended_except_creep",
             "telemetry_mpc_outputs": False,
@@ -515,6 +518,11 @@ class OpenpilotDriver:
                 "    ./scripts/pedal-sweep.sh junction-1"
             )
         self.pedal_map = pedal_map
+        # How many waypoints the bridge is told to expect. `route_gt.py`'s four until a model
+        # says otherwise, and `episode` overrides it from whatever the drive is sending: the
+        # AV3 checkpoint emits 20, which is in the prebuilt AV3_MPC_MENU ("4 16 20 32"), so
+        # the lateral MPC for it starts instantly rather than generating code on connect.
+        self.n_waypoints = len(self.offsets)
         self.max_steering_deg = 40.0
         self.wheelbase_m = 2.5
         self.step_seconds = None
@@ -556,7 +564,11 @@ class OpenpilotDriver:
         # message that has a car to describe at all - `/spec` is sent before `env.reset()`.
         if self.pedal_map is not None:
             self.notes = list(self.pedal_map.vehicle_notes(vehicle))
+        # Sent by `tools/drive.py` when a model is supplying the trajectory, so the bridge's
+        # MPC is built for the count it is about to receive rather than for `route_gt`'s four.
+        self.n_waypoints = int(payload.get("n_waypoints") or len(self.offsets))
         return self.bridge.connect(
+            n_waypoints=self.n_waypoints,
             max_steer_angle=self.max_steering_deg,
             steer_ratio=self.steer_ratio,
             # Ours, not the protocol's. The real bridge ignores what it does not know; the
@@ -564,10 +576,22 @@ class OpenpilotDriver:
             wheelbase_m=self.wheelbase_m,
         )
 
-    def act(self, observation, sensors, spec):
+    def act(self, observation, sensors, spec, waypoints=None, modelv2=None):
+        """One control tick. `waypoints` / `modelv2` are a model's, when the drive sends them.
+
+        **The fallback is not a nicety.** Without a model this is `route_gt.py` - the recorded
+        route resampled at the car's own current speed - which is a controller test by
+        construction and carries no speed intent for the longitudinal planner to read. Phase 0
+        measured what that costs: median `accel_cmd` -0.30 m/s^2 with 159 of 1559 calls
+        positive. A model's rows are what fix that, and every figure taken before there was one
+        stays reproducible through `--waypoints derive`.
+
+        **`waypoints` is sent even when `modelv2` is.** `server.py:_handle_step` reads it FIRST
+        and returns a hard stop on an empty list, before it looks at `modelv2` at all.
+        """
         del observation, spec  # the bridge reads the route and the imu, never the RL vector
         route = sensors.get("route")
-        if not route:
+        if not route and not waypoints:
             raise BridgeError(
                 "the bridge needs the route, which the drive is not sending. "
                 "Add --sensors imu,route."
@@ -575,12 +599,25 @@ class OpenpilotDriver:
         state = ego_state(sensors, self.last_action[0], self.max_steering_deg, self.steer_ratio)
         payload = {
             "type": "step",
-            "waypoints": waypoints_from_route(route, state["v_ego"], self.offsets),
+            "waypoints": (
+                waypoints
+                if waypoints
+                else waypoints_from_route(route, state["v_ego"], self.offsets)
+            ),
             "ego": state,
             # Never omitted: `server.py:614` reads a missing target as 0.0, which is a stop.
             "target_speed": self.target_speed_mps,
             "creep_state": "idle",
         }
+        if modelv2:
+            # Whether to send this at all is the DRIVE's decision, not the server's:
+            # `drive.py --waypoints derive` simply does not put the rows in the payload, which
+            # puts the bridge back on the cubic-fit path every measurement before Stage 9
+            # Phase C.2 was taken on. A second switch here would be a way to disagree.
+            # `from_predicted` rather than `derive`: the model already emits yaw, yaw rate,
+            # velocity and acceleration per waypoint, and reconstructing them from positions
+            # by a cubic fit throws that away. Its rows are used as-is, at their own times.
+            payload["modelv2"] = modelv2
         self.last_v_ego = state["v_ego"]
         self.last_reply = self.bridge.step(payload)
         self.last_action = to_metadrive_action(

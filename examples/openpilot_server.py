@@ -94,12 +94,30 @@ def build_handler(driver, telemetry):
                         ),
                         flush=True,
                     )
+                    # Said out loud when it is not `route_gt.py`'s four, because the bridge
+                    # builds its lateral MPC for this count once and a reader otherwise has no
+                    # way to tell a model-driven episode from an unflagged one.
+                    if sent["n_waypoints"] != len(driver.offsets):
+                        print(
+                            "waypoints    {} per tick, from the drive's model - not "
+                            "route_gt's {}".format(sent["n_waypoints"], len(driver.offsets)),
+                            flush=True,
+                        )
                     self._reply({"ok": True})
                     return
 
                 if route == "act":
+                    # `waypoints` / `modelv2` arrive only when the drive is running a model
+                    # (`tools/drive.py --model-checkpoint`), through `RemotePolicy.extra`.
+                    # Absent, the driver falls back to `route_gt.py`'s constant-speed
+                    # resampling of the route sensor, which is every measurement taken before
+                    # Stage 9 Phase C.2.
                     action = driver.act(
-                        payload.get("observation"), payload.get("sensors") or {}, None
+                        payload.get("observation"),
+                        payload.get("sensors") or {},
+                        None,
+                        waypoints=payload.get("waypoints"),
+                        modelv2=payload.get("modelv2"),
                     )
                     if telemetry is not None:
                         # The bridge's own reply at the top level, so a grep for one of its

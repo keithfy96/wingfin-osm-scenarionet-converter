@@ -102,8 +102,7 @@ def test_a_lateral_mount_swaps_into_x():
 @pytest.mark.parametrize(
     "field, value, reason",
     [
-        ("pitch", 3.0, "pitch"),  # never measured against MetaDrive - refused, not guessed
-        ("roll", 3.0, "roll"),
+        ("roll", 3.0, "roll"),  # never measured against MetaDrive - refused, not guessed
         ("tick_rate", 0.05, "tick_rate"),  # would silently be sampled at 10 Hz
         ("type", "lidar", "type"),
         ("fov", "wide", "not a number"),
@@ -113,6 +112,17 @@ def test_what_it_refuses_rather_than_guesses(field, value, reason):
     with pytest.raises(RigError) as raised:
         _parse(_with(field, value))
     assert reason in str(raised.value)
+
+
+def test_pitch_is_carried_through_untouched():
+    """`rigs/av3.txt` pitches four of its six cameras toward the road, and the sign was
+    MEASURED before this was allowed: `camera_rig --check-frame` probes a pitched NodePath
+    and panda3d's P is nose-up positive, which is CARLA's own convention. So there is nothing
+    to convert. Roll stays refused - wing-sim measured that IT does not flip where y and yaw
+    both do, and nothing here has checked that against MetaDrive."""
+    camera = _parse(_with("pitch", -10.0)).cameras[0]
+    assert camera.hpr[1] == pytest.approx(-10.0)
+    assert camera.hpr[2] == pytest.approx(0.0)
 
 
 def test_a_tick_rate_matching_the_interval_it_is_read_at_is_accepted():

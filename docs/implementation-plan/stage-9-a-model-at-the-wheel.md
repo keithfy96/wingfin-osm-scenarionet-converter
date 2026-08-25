@@ -2,10 +2,15 @@
 
 ## Status
 
-**Phases 0, A and B are built and measured; C is planned, not built.** Every
+**Every phase is built and measured.** Every
 number here is either measured on this machine and marked as such, or arithmetic over
 a measured number and marked as such. Where something is unknown it says so rather
 than estimating.
+
+**To check it yourself, `docs/running-a-test.md` is the ladder** — the six tiers from a
+one-second test run to a fifteen-minute drive, what each one proves, and how to read the
+output. This document is the record of *why* each piece is shaped the way it is; that one is
+the runbook.
 
 **What already works, and is the floor this builds on** (2026-08-23, measured):
 the openpilot bridge drives the ego. The fork is on disk at
@@ -51,7 +56,8 @@ Four pieces, in the order they are worth doing:
 | **Phase 0** | a MetaDrive pedal table | no | no | **yes - done, 2026-08-23** |
 | **Phase A** | send frames as uint8 | no | no | **yes - done, 2026-08-24** |
 | **Phase B** | keep frames on the GPU | yes | no | **yes - done, 2026-08-24** |
-| **Phase C** | the model in-process | yes | yes | no |
+| **Phase C.1** | load the checkpoint | yes | yes | **yes - done, 2026-08-24** |
+| **Phase C.2/3** | the model in-process | yes | yes | **yes - done, 2026-08-25** |
 
 Phase 0 is independent of the other three and is **done**: it repaired the half of the
 fit that was wrong, and measuring it showed the remaining speed undershoot belongs to
@@ -107,13 +113,27 @@ This is the substance of Phase C. None of them raises.
 | 4 | ego speed | m/s, world frame | `[v_fwd / 8.09, v_lat / 0.27]` | `av3_base.py:248` |
 | 5 | route | 25 raw points at 2 m | `(20, 7)` navigation features | `routes/route.py:141` |
 
-1. `modifiers.py` does exactly this and is usable as-is. **The resize is a no-op for
-   us** - CARLA rendered 1440x1080 and `rigs/cams.txt` renders 512x288 already - and
+1. `modifiers.py` does exactly this and is usable as-is, and
    **MetaDrive's frames are BGR natively** (`base_camera.py:100-113`), the same as
    CARLA's, so no extra swap. What remains is BGR->RGB, transpose, `/255`.
+
+   **CORRECTED at C.3: the resize is NOT a no-op, and calling it one is a geometry
+   error rather than a cost one.** The modifier's resize is 1440x1080 -> 512x288: a 4:3
+   frame squashed vertically by 1.33x into 16:9, which is what the model was trained on.
+   `rigs/cams.txt` renders 512x288 natively, so mounting the model on it would give a
+   vertical field of view a third narrower than the model has ever seen, with nothing
+   raising. `rigs/av3.txt` renders **512x384** - 4:3 at 1/8 the pixels - so the
+   preprocess does a real squash.
 2. **The most dangerous of the eight.** `model_dev.yml` states the order is a contract
-   with the weights: reorder it and the model still runs, and is wrong. Map by yaw and
-   verify; never pair by position in the list.
+   with the weights: reorder it and the model still runs, and is wrong.
+
+   **RESOLVED at C.3 by replacing the question.** The row above maps
+   `rigs/cams.txt`'s names onto the model's, which cannot be done safely: that file
+   carries `y: 0.0` on all seven cameras, so its yaw column has nothing to be
+   cross-checked against, and it names its back pair the opposite of its own yaws.
+   `rigs/av3.txt` is generated from wing-sim's own
+   `evaluation/configurations/validation_invariants.yml` instead, so the six names and
+   the six aims agree by construction and the map is the identity.
 3. A wrong `t_frames` usually fails at load. **A wrong `frame_stride_s` never does** -
    the model runs on history spaced differently from training and still scores. This
    interacts directly with `--decision-hz` and `tools/frame_gate.py`, which holds the
@@ -128,9 +148,15 @@ This is the substance of Phase C. None of them raises.
 
 **Coming out - model to bridge**
 
-| 6 | waypoint frame | model emits x forward, **y right** (CARLA) | our frame is **y left** -> negate |
+| 6 | waypoint frame | model emits x forward, **y right** (CARLA) | the bridge takes y right too -> **no flip** |
 
-Already the convention in `waypoints_from_route`, which writes `-float(left)`.
+**Measured at C.3, not assumed.** `waypoints_from_route` negates because it *starts*
+from MetaDrive's left-positive `route` sensor; the model's output starts in its own
+training frame, which is already the bridge's. `av3_probe --nav-sweep` settles it
+directly: with the pictures and the ego state held fixed and the navigation block
+replaced by a 30 m arc, a right-hand bend moved the predicted lateral **+1.109 m**
+relative to a left-hand one. This is the one conversion no source file can answer,
+because it is a property of the weights.
 
 **Coming back - bridge to car**
 
@@ -453,12 +479,186 @@ for -0.2 to -1.5, all of it above.
     in the camera; and the fourth `numpy.asarray` on a frame, in `camera_rig.CameraRig.read`,
     written down rather than pre-solved because nothing can reach it today.
 
-- [ ] **Phase C - the model in the same process**
+- [x] **Phase C.1 - the checkpoint loads, and what it costs** (2026-08-24)
 
-  What A and B are for, and the largest piece. Three parts, and the first is the one
-  that answers the unknowns:
+  **Both unknowns answered yes, and a third thing turned up that matters more than either.**
+  `tools/model_probe.py`, `scripts/model-probe.sh`, an opt-in `model` dependency group, and
+  `tests/unit/test_model_probe.py`. Nothing drives; nothing is written.
 
-  1. **Load the checkpoint.** Add the model stack - torch 2.8, torch-tensorrt 2.8,
+  ```bash
+  uv sync --group sim --group gpu --group model
+  cd scripts && ./model-probe.sh                                # does it load, and what does it cost
+  cd scripts && ./model-probe.sh junction-1 -- --with-simulator # the same, beside a renderer
+  ```
+
+  **Three of the questions did not need a GPU, a download or torch.** The `.ep` is a `pt2`
+  zip and `model_probe.read_archive` reads its graph with `zipfile` and `json`:
+  `torch_version` is **`2.8.0+cu128`**, the inputs are `images (1, 5, 6, 3, 288, 512)`,
+  `navigation (1, 20, 7)` and `ego_state (1, 5, 2)` in **bfloat16**, and the output is
+  **`(1, 20, 8)`**. That last one is the two corrected Known-limits bullets above. Reading it
+  first is also what makes a failure legible: a deserialisation error prints what the file
+  wanted beside what is installed, rather than a bare TensorRT message about a plan file.
+
+  **1. Does an engine compiled elsewhere deserialise here? Yes.** `sm_89`, RTX 4050,
+  TensorRT 10.12.0.36, load 9-13 s (mostly reading 1.2 GB off disk). This was the sharper
+  question because the archive is
+  **not weights**: `data/weights/model.pt` is **1,261 bytes** beside a **1,275,435,821-byte
+  serialized TensorRT engine**, and a TRT engine is built against one SM architecture and one
+  TRT version.
+
+  **2. Does it fit? Yes, with 1151 MiB to spare.** Measured on `junction-1` with
+  `rigs/cams.txt` mounted offscreen - the seven real cameras, 5.42 MB of image a step:
+
+  | card, of 6141 MiB | alone | beside the simulator |
+  |---|---|---|
+  | simulator only | - | 2377 MiB |
+  | + model loaded | 2561 | 4934 |
+  | + one warm-up pass | 2617 | 4990 |
+  | **free** | **3524** | **1151** |
+
+  **3. And it takes about a second a pass, which is the finding.** **947-1002 ms** - medians
+  over 10, 20 and 50 passes across three runs, best single pass 919. At `--decision-hz 20` a
+  decision has **50 ms**, so this is **20x** over. It does not make a drive wrong - `env.step` is the tick, so a slow policy
+  makes a slow drive and nothing else - but a simulated second will cost about twenty.
+
+  Three things separate that from a measurement fault, all measured:
+
+  - **It is not the timing loop.** Ten passes with a `cuda.synchronize()` either side average
+    **989.9 ms**; ten queued with one synchronize at the end average **999.3 ms**. Identical,
+    so nothing is being charged to the sync.
+  - **It is compute-bound and the card is capped.** 100% utilisation throughout, at
+    **34.6-35.1 W against a `Current Power Limit` of 35 W and a `Max Power Limit` of 60 W**,
+    with the SM clock at **975-1335 MHz against a 3105 MHz maximum** and 87-89 C against an
+    85 C target. `nvidia-smi -q -d PERFORMANCE` counts 4,339 s of SW power capping and
+    4,217 s of SW thermal slowdown. A reference point on the same card in the same state: a
+    4096^3 bf16 matmul runs at **14.4 TFLOP/s** (fp32 6.4). **Raising the limit is a machine
+    setting and Keith's to make, not this repo's** - and it is not a fix either: even a 2.5x
+    uplift leaves ~400 ms against 50.
+  - **It opened because it was built portable, on purpose.** Keith asked what made an engine
+    compiled elsewhere open here, and the answer is measured rather than inferred: the
+    engine's `HW_COMPATIBLE` field is `'1'` and TensorRT reports
+    **`HardwareCompatibilityLevel.AMPERE_PLUS`** - the two read independently and agree - while
+    the `CompilationSettings` pickled into `SERIALIZED_METADATA` show it was *asked for*:
+    `hardware_compatible: True`, beside `enabled_precisions: {bf16}`,
+    `immutable_weights: True`, `version_compatible: False` and a 6 GiB `workspace_size`. **So
+    it runs on any sm_80-or-newer NVIDIA GPU** and refuses below rather than degrading. An
+    earlier version of this entry said the build flags were "not worth chasing"; chasing them
+    is what turned "it works on this laptop" into "it works on any Ampere-or-newer card",
+    which is a different and much more useful statement.
+  - **The portability costs speed, and that cost is not measured.** NVIDIA documents
+    `AMPERE_PLUS` as restricting kernel selection to a portable subset, so it is a plausible
+    second contributor beside the 35 W cap. Quantifying it needs a `NONE`-level rebuild, and
+    **it cannot be rebuilt from here**: the archive carries a compiled engine and a 1.26 KB
+    weights stub, with no source model in it, and `immutable_weights: True` means even the
+    weights cannot be swapped.
+  - **The `DEVICE` field names this laptop and is not a build record.** It is re-derived on
+    deserialisation; no build GPU is recorded anywhere in the file. With `AMPERE_PLUS` the
+    build card stops mattering, which is the point.
+  - **The plan is 956,574,460 raw bytes across 777 layers** (the 1216 MiB in the archive is
+    base64, +33%) and declares **1578 MiB of scratch** on top of its weights, which is what
+    the measured ~2.5 GB of card is made of.
+
+  Four things not to re-derive:
+
+  - **`uv sync --group model` on its own *removes* `sim` and `gpu`.** uv syncs exactly the
+    groups named, so that line takes MetaDrive, panda3d and CuPy out and the next
+    `./drive.sh` dies. The line is `uv sync --group sim --group gpu --group model`, and all
+    three do coexist - measured, one environment, one interpreter.
+  - **numpy did not have to move.** `wing-sim/evaluation/pyproject.toml` pins
+    `numpy==1.26.4` beside the identical torch pins; this repo stayed at **2.2.6** and torch
+    2.8 resolved against it without complaint. Adopting that pin defensively would have been
+    the one change here able to break code that already works.
+  - **`torch_tensorrt.load` logs two failures before succeeding**, and neither is an error:
+    it tries the `.pt2` package loader (`f must be a buffer or a file ending in .pt2`), then
+    `torch.jit.load` (`PytorchStreamReader failed locating file constants.pkl`), and then
+    `torch.export.load` works. Reading either as the cause of a later problem is a wasted
+    afternoon.
+  - **The probe reads `torch/_export/serde`'s `ScalarType`, which is not `torch.ScalarType`.**
+    The two disagree from index 1: code **13 is `BFLOAT16` in the serde enum and `quint8` in
+    the runtime one**, and reading the graph with the wrong table mislabels every tensor in
+    the report without raising. `test_model_probe` asserts the baked table against torch's own
+    copy whenever torch is installed.
+
+  **What this leaves for C.2**, stated rather than discovered later: 1151 MiB of headroom is
+  **not** measured against `--image-on-cuda`, which puts a CuPy context and the frame stack on
+  the same card; and `tools/openpilot_policy.py` sends four waypoints from
+  `WAYPOINT_OFFSETS_S` where this model emits twenty, which is a message shape to decide
+  rather than a constant to change.
+
+- [x] **Phase C.2 / C.3 - the model in the same process** (2026-08-25)
+
+  `rigs/av3.txt`, `tools/av3_model.py`, `tools/av3_probe.py` / `scripts/av3-probe.sh`, and
+  `--camera-rig` / `--model-checkpoint` / `--waypoints` on `drive.py`. C.3 landed first -
+  the loader and the five in-conversions, with a probe that checks every one against a
+  recorded drive while nothing steers - and C.2 mounted it.
+
+  **Measured, `junction-1` at `--step-hz 100 --decision-hz 20`:**
+
+  | | |
+  |---|---|
+  | forward pass | 1088-1114 ms median (C.1's 947-1002 on a quieter box), one per decision |
+  | conversions 2, 4, 5 | agree over 320 route points, worst 0.0000 m |
+  | conversion 6, nav sweep | right arc **+2.172 m**, left arc **+1.062 m** -> +y is RIGHT |
+  | model drive, `--waypoints modelv2` | 1870 steps, 374 decisions, completion 0.464, `out_of_road` |
+  | model drive, `--waypoints derive` | 1870 / 374 / 0.464 - **identical, and that is the control** |
+  | `--backend stub`, no model | 3788 steps, `arrive_dest=True`, completion **0.950** - unchanged |
+  | **real bridge**, `--longitudinal table` | 752 steps, 151 decisions, completion 0.163, `out_of_road` |
+
+  **Against the real bridge the model doubles the pace and loses the route**, and the
+  criterion this plan set for it was the wrong statistic:
+
+  | `junction-1`, `--longitudinal table` | `route_gt` trajectory (Phase 0) | the model |
+  |---|---|---|
+  | mean `v_ego` | 4.19 m/s | **8.92 m/s** (max 13.89, target 10) |
+  | median `accel_cmd` | -0.30 m/s^2 | **-0.504 m/s^2** |
+  | completion | 0.815 | 0.163 |
+
+  The plan said to look for the median `accel_cmd` to stop being pinned negative. It does not,
+  and it should not have been asked to: a car **at** its target speed correctly asks to hold,
+  which reads negative. The thing Phase 0 actually diagnosed - a car crawling at 4 m/s under a
+  36 km/h cruise because the trajectory carried no speed intent - is gone: the pace **doubles**.
+  What ends the drive is the lateral, not the longitudinal, and that is the +1.6 m bias the
+  probe measures.
+
+  One pass per decision means a full-length route is 758 of them - a quarter of an hour.
+
+  **`mosque` says the same thing independently, and it corroborates the mechanism.** Over 23
+  spread decisions of its 3998-step route: conversions 2, 4 and 5 agree over **460** route
+  points at worst 0.0000 m, and the nav sweep gives right **+1.500 m** against left **+0.582**
+  - same sign, smaller response. Its standing bias is **+1.041 m** where `junction-1`'s is
+  +1.617, and 14 of 23 decisions are on a bend against 10 of 16 - and *there* the drive-based
+  statistic recovers the right answer on its own: **72%** sign agreement, off-path 0.396 m as
+  given against 0.598 m negated. Which is the mechanism stated rather than assumed: the drive
+  statistic fails on `junction-1` because the bias is large relative to the model's own
+  lateral, not because it is the wrong statistic in principle.
+
+  The two `--waypoints` modes coming out identical against `--backend stub` is not the flag
+  failing to take effect: `StubBridge.control` is pure pursuit over `msg["waypoints"]` and
+  never looks at `modelv2` at all, so it *cannot* tell them apart. The difference is only
+  visible against the real bridge, where `_handle_step` branches on the key.
+
+  **The wire is unregressed and the model drives; what it drives *like* is the domain gap.**
+  Over 40 spread decisions of the `test` route it predicts 16.5 m of travel in 2 s where the
+  car covers 24.1, with a 0.12 m median lateral where the route bends 27 m at 38 m ahead, and
+  a standing **+1.6 m rightward bias**. Four of its six cameras are 105.4 deg fisheyes
+  standing in as rectilinear, and the road is a Kuala Lumpur OSM extract rather than
+  Town10HD. `av3_probe` reports all of it rather than averaging it away.
+
+  **The bias is also why the waypoint sign could not be settled from a drive.** The
+  drive-based statistic leans the wrong way - 27% sign agreement, off-path 0.379 m as given
+  against 0.385 m negated - because a constant lateral bias reads exactly like a mirror.
+  `--nav-sweep` holds the pictures and the ego state fixed and replaces the navigation with a
+  30 m arc, which is the only test that separates them.
+
+  Three things the build turned up that this document had wrong, all corrected above:
+  the resize is **not** a no-op (it is a 4:3 -> 16:9 squash, so `rigs/av3.txt` renders
+  512x384); the camera map onto `rigs/cams.txt` cannot be made safe and was replaced by a rig
+  generated from wing-sim's own spec; and conversion 6 does **not** negate.
+
+  ~~What A and B are for, and the largest piece. Two parts left; C.1 below answered the
+  first:~~
+
+  1. ~~**Load the checkpoint.**~~ **Done - see above.** Add the model stack - torch 2.8, torch-tensorrt 2.8,
      tensorrt 10.12, cu128, matching whatever compiled
      `assets/models/step_440000_trt_direct_full.ep`. **Two unknowns, both cheap to
      settle and neither guessable**: whether a Torch-TensorRT program compiled
@@ -485,17 +685,22 @@ for -0.2 to -1.5, all of it above.
 
 ## Known limits, stated rather than hidden
 
-- **The waypoint count is not knowable until the checkpoint loads.**
-  `AV3Base._set_output_shape` reads it off the backend's warm-up output shape, which is
-  why the bridge's `AV3_MPC_MENU` is `"4 16 20 32"`. Our current four waypoints at
-  `(0.5, 1.0, 1.5, 2.0)` s happen to match `av3_base.N_WAYPOINTS = 4` over
-  `MODEL_HORIZON_S = 2.0` exactly, and match `OPENPILOT_TRAJECTORY_TYPE=0`. A count
-  outside the menu is code-generated at connect time - a slow first tick, not an error.
-- **The bridge has an unused richer path.** `msg["modelv2"]` selects `from_predicted`
-  instead of `derive` for a model shipping the full 8-wide
-  `[x, y, yaw, yaw_rate, v_x, v_y, a_x, a_y]` (`WAYPOINT_OUTPUT_WIDTH = 2` against
-  `MODELV2_OUTPUT_WIDTH = 8`). We send the 3-wide form. Whether this checkpoint
-  produces 8-wide output is part of Phase C.1.
+- ~~**The waypoint count is not knowable until the checkpoint loads.**~~ **Settled by
+  C.1, and it was knowable without loading anything**: the archive's own graph declares
+  the output as `(1, 20, 8)`. It is **20 waypoints, not 4**. This document had read
+  `av3_base.N_WAYPOINTS = 4` as this model's count, and it is a *fallback used until
+  `_set_output_shape` runs* - the comment above it says so. 20 over `MODEL_HORIZON_S =
+  2.0` is 0.1 s spacing, and **20 is already in the bridge's prebuilt `AV3_MPC_MENU`
+  (`"4 16 20 32"`)**, so there is no connect-time code generation and no slow first tick.
+  What is *not* settled is what `tools/openpilot_policy.py` should send: it emits four
+  waypoints at `(0.5, 1.0, 1.5, 2.0)` s from `WAYPOINT_OFFSETS_S`, and a 20-point
+  trajectory is a different message. C.2's problem.
+- ~~**The bridge has an unused richer path.**~~ **Settled by C.1: the output is 8 wide**,
+  which is `av3_base.MODELV2_OUTPUT_WIDTH` -
+  `[x, y, yaw, yaw_rate, v_x, v_y, a_x, a_y]`. So `msg["modelv2"]` / `from_predicted` is
+  reachable rather than the 3-wide `derive` form we send today. Whether to use it is a
+  C.2 decision and not a foregone one - `derive` is what every measurement in this
+  document was taken through.
 - **Phase B is worth nothing on a socket, and that is now measured.** `image_on_cuda`
   returns a CuPy array and `encode_array` needs host bytes, so the frame is copied back
   and the run has done strictly more work than the CPU path. Measured on `junction-1`
@@ -505,9 +710,23 @@ for -0.2 to -1.5, all of it above.
   the index; scons dies on `Missing SConscript 'rednose/SConscript'`, which reads as a
   broken Dockerfile. `git -C "$FORK" status --porcelain | awk '$1=="D"'` before any
   build. Repaired once already on 2026-08-23.
-- **Phase C has not been implemented or measured.** Its figures are either read from
-  source or arithmetic, and are marked as such; the measured ones quoted elsewhere
-  belong to Phases 0, A and B, which are built.
+- **C.2 and C.3 have not been implemented or measured.** Their figures are either read
+  from source or arithmetic, and are marked as such; the measured ones belong to Phases
+  0, A, B and C.1, which are built.
+- **The model runs at about 1 Hz on this machine, and the mechanism is measured.**
+  947-1002 ms a forward pass at 100% GPU utilisation, with the card capped at 35 W of a
+  60 W maximum and clocking 975-1335 MHz against 3105. A drive at `--decision-hz 20` will
+  therefore run at roughly a twentieth of the pace `--backend stub` sets. It is slow and
+  not wrong - `env.step` is the tick - but any C.2 timing has to be read against this,
+  and no figure in this document from before C.1 anticipated it.
+- **There is one lever on that cost and it is not ours.** The engine is built
+  `HardwareCompatibilityLevel.AMPERE_PLUS`, which NVIDIA documents as trading speed for
+  portability, and the archive holds no source model to rebuild from. **What to ask the
+  model's author**, so the ask is unambiguous: either an engine rebuilt at
+  `HardwareCompatibilityLevel.NONE` on the card it will run on - which drops the portability
+  penalty and locks the file to that architecture - or the source model, so it can be
+  compiled here for whatever machine it lands on. Everything else about the ~1 s pass is
+  this laptop's 35 W power cap, which is a machine setting rather than a code one.
 - **`--image-on-cuda` needs the discrete card, not merely a card.** CUDA-GL interop
   registers a GL texture with the CUDA context, so both have to be on the same GPU. On
   this hybrid machine that means `__NV_PRIME_RENDER_OFFLOAD=1

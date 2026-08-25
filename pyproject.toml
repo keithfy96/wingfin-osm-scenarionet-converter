@@ -67,9 +67,56 @@ gpu = [
   "cuda-python>=12,<13",
 ]
 
+# The model stack of Stage 9 Phase C: the AV3 checkpoint the openpilot bridge is driven by.
+# Opt-in beside `sim` and `gpu` -- `uv sync` with no flags still installs only the default and
+# `dev` groups.
+#
+# **The three versions are pinned to what compiled the engine, and the checkpoint says so
+# itself.** `step_440000_trt_direct_full.ep` is a `pt2` archive whose `models/model.json`
+# records `"torch_version": "2.8.0+cu128"`, so this is evidence read out of the file rather
+# than a README repeated. It matters more here than a version pin usually does: the archive's
+# 1.275 GB constant is a **serialized TensorRT engine**, built against one SM architecture and
+# one TensorRT version, so a mismatched stack does not degrade -- it fails to deserialize.
+# `tests/unit/test_model_probe.py` checks the pin against the archive rather than trusting
+# this comment.
+#
+# **numpy is deliberately not pinned here.** `wing-sim/evaluation/pyproject.toml` carries
+# `numpy==1.26.4` beside the identical torch pins; this repo is numpy 2.2.6 and the whole of
+# `tools/` runs against it. Adopting that pin to be safe would be the one change here able to
+# break code that already works.
+model = [
+  "torch==2.8.0",
+  "torch-tensorrt==2.8.0",
+  "tensorrt==10.12.0.36",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# Resolve only for the platform this runs on. Without it uv solves every environment,
+# including impossible ones: on aarch64 + tegra `torch-tensorrt` pins a Jetson TensorRT
+# `<10.4` against the `==10.12.0.36` above and the lock fails outright. Linux x86_64 is the
+# only target either the host or the container has ever been.
+[tool.uv]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+# torch and torch-tensorrt come from the cu128 wheel index rather than PyPI, and tensorrt from
+# NVIDIA's own. `explicit = true` keeps every other dependency resolving from PyPI as before.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torch-tensorrt = { index = "pytorch-cu128" }
+tensorrt = { index = "nvidia" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/osm_scenario"]

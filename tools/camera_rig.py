@@ -30,6 +30,8 @@ three *timesteps*; nothing here goes through `ImageObservation` at all.
     local +x 1 m  ->  +0.000 m ahead, +1.000 m right                +x right, +z up
     H = +55       ->  +55.00 deg from the car's heading  H positive turns LEFT
     H = -55       ->  -55.00 deg from the car's heading
+    P = +10       ->  +10.00 deg from the car's attitude  P positive is nose UP
+    P = -10       ->  -10.00 deg from the car's attitude
 
 CARLA is x forward, y right, z up, with **yaw positive to the right**. So the conversion is
 an **x/y swap** and a **sign flip on yaw**, neither of which is a rename:
@@ -37,8 +39,17 @@ an **x/y swap** and a **sign flip on yaw**, neither of which is a rename:
     position = (carla_y, carla_x, carla_z)
     hpr      = (-carla_yaw, carla_pitch, carla_roll)
 
-`pitch` and `roll` are `0.0` throughout the spec this was written for, so their signs have
-never been tested against anything. A non-zero one is **refused** rather than guessed.
+**Pitch passes through, and that was measured rather than reasoned** - the two rows above.
+CARLA quotes pitch nose-UP positive and panda3d's P agrees, so there is nothing to convert.
+The measurement has to be taken against the **car's own attitude**, exactly as the heading
+rows are: a car under throttle sits nose-up on its suspension, and read against the world the
+same probe returns 9.89 rather than 10.00. That 0.11 deg is the vehicle, not the frame.
+
+`rigs/av3.txt` needs it: four of its six cameras are pitched 5-10 deg toward the road, and
+`rigs/cams.txt` has pitch 0 on all seven, so nothing that already worked changes. **Roll is
+still refused.** Its sign is the counter-intuitive one - wing-sim measured that CARLA's roll
+does *not* flip against ISO where y and yaw both do - and no spec here carries a non-zero one,
+so guessing it would rotate a picture by twice the roll with nothing to notice.
 
 **`import yaml` is not available here.** `tools/` runs on MetaDrive's Python 3.8, where
 PyYAML is not installed, and installing into the reference checkout is out - the same
@@ -242,7 +253,7 @@ class CameraRig:
         """The resolved rig, in lines, for a report or a log."""
         lines = [
             "{} camera(s) from {}".format(len(self.cameras), self.path or "<spec>"),
-            "  CARLA spec (x fwd, y right, z up, +yaw right) -> MetaDrive "
+            "  CARLA spec (x fwd, y right, z up, +yaw right, +pitch nose-up) -> MetaDrive "
             "(x right, y fwd, z up, +heading LEFT)",
         ]
         for camera in self.cameras:
@@ -251,7 +262,13 @@ class CameraRig:
             lines.append(
                 f"  {camera.name:<16} {size:>9}  fov {camera.fov:>3.0f}  "
                 f"mount x{x:+.2f} y{y:+.2f} z{z:+.2f}  "
-                f"H{camera.hpr[0]:+7.1f}  aims {camera.aim}"
+                f"H{camera.hpr[0]:+7.1f} P{camera.hpr[1]:+5.1f}  aims {camera.aim}"
+            )
+        if self.tick_rate_s:
+            lines.append(
+                f"  declares tick_rate {self.tick_rate_s:g} s "
+                f"({1.0 / self.tick_rate_s:g} Hz) - the interval it must be READ at, "
+                "which is 1/--step-hz times the --decision-hz stride"
             )
         lines.append(f"  {self.megabytes:.2f} MB of uint8 image per step")
         return lines
@@ -373,12 +390,13 @@ def _parse(text, path=None, read_interval_s=STEP_S):
 
         pitch = _scalar(transform["pitch"], name, "pitch")
         roll = _scalar(transform["roll"], name, "roll")
-        if pitch or roll:
+        if roll:
             raise RigError(
-                f"{name}: pitch {pitch} / roll {roll}. Only yaw is converted: every camera "
-                "in the spec this was built for has pitch and roll of 0, so neither sign has been "
-                "measured against MetaDrive, and a guessed sign tilts the view the wrong "
-                "way silently."
+                f"{name}: roll {roll}. Only yaw and pitch are converted. Roll is the sign that "
+                "cannot be reasoned out - wing-sim measured that it does NOT flip between ISO "
+                "and CARLA where y and yaw both do - and no spec here carries a non-zero one, "
+                "so it has never been checked against MetaDrive. A guessed sign rotates the "
+                "picture by twice the roll and nothing raises."
             )
 
         forward = _scalar(transform["x"], name, "x")
@@ -454,12 +472,16 @@ def check_frame(dataset_dir):
             where = node.getPos(render)
             forward = node.getQuat(render).getForward()
             node.removeNode()
-            return where, math.degrees(math.atan2(forward[1], forward[0]))
+            return (
+                where,
+                math.degrees(math.atan2(forward[1], forward[0])),
+                math.degrees(math.asin(max(-1.0, min(1.0, forward[2])))),
+            )
 
-        base, _ = probe((0, 0, 0), (0, 0, 0))
+        base, _, base_elevation = probe((0, 0, 0), (0, 0, 0))
 
         def offset(position):
-            where, _ = probe(position, (0, 0, 0))
+            where, _, _ = probe(position, (0, 0, 0))
             dx, dy = where[0] - base[0], where[1] - base[1]
             return (
                 dx * math.cos(heading) + dy * math.sin(heading),
@@ -478,12 +500,28 @@ def check_frame(dataset_dir):
              f"ahead {ahead:+.3f} m, right {right:+.3f} m")
         )
         for degrees, label in ((55.0, "left"), (-55.0, "right")):
-            _, facing = probe((0, 0, 0), (degrees, 0, 0))
+            _, facing, _ = probe((0, 0, 0), (degrees, 0, 0))
             relative = ((facing - math.degrees(heading) + 180.0) % 360.0) - 180.0
             results.append(
                 (f"H={degrees:+.0f} turns {label}",
                  abs(relative - degrees) < 1e-2,
                  f"{relative:+.2f} deg from the car's heading")
+            )
+        # The one `rigs/av3.txt` rests on and `rigs/cams.txt` never exercised. CARLA quotes
+        # pitch nose-UP positive and `_parse` passes it through untouched, so panda3d's P has
+        # to mean the same thing or four of that rig's six cameras look at the sky.
+        for degrees, label in ((10.0, "up"), (-10.0, "down")):
+            _, _, elevation = probe((0, 0, 0), (0, degrees, 0))
+            # Against the car's own attitude, not against the world, for the reason the
+            # heading rows are: a car under throttle sits nose-up on its suspension, and
+            # measuring absolutely reported 9.89 rather than 10.00 - a 0.11 deg error that
+            # is the vehicle rather than the conversion.
+            relative = elevation - base_elevation
+            results.append(
+                (f"P={degrees:+.0f} tilts {label}",
+                 abs(relative - degrees) < 1e-2,
+                 f"{relative:+.2f} deg from the car's own attitude "
+                 f"(which is {base_elevation:+.2f} deg)")
             )
         return results
     finally:
@@ -514,7 +552,11 @@ if __name__ == "__main__":
         )
         raise SystemExit(2)
     try:
-        for line in load_rig(arguments[0]).describe():
+        # `None`, not STEP_S: this path *describes* a file, and refusing to print a 20 Hz
+        # spec because the default read interval is 10 Hz would make the tool unusable for
+        # exactly the rig it was extended for. The rate is printed instead, and the check
+        # still runs wherever a rig is actually loaded to be driven.
+        for line in load_rig(arguments[0], read_interval_s=None).describe():
             print(line)
     except RigError as error:
         print(f"rig spec rejected: {error}", file=sys.stderr)

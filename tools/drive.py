@@ -829,6 +829,34 @@ def main() -> int:
         help="traffic.json to read. Defaults to <workspace>/traffic/traffic.json, worked out "
         "from the dataset directory.",
     )
+    parser.add_argument(
+        "--camera-rig",
+        default=None,
+        help="A CARLA-shaped camera spec to mount on the ego (rigs/av3.txt is the AV3 "
+        "model's). Needs --render offscreen or 3D; the spec's tick_rate must match the "
+        "interval the cameras are read at, which is --decision-hz.",
+    )
+    parser.add_argument(
+        "--model-checkpoint",
+        default=None,
+        help="An AV3 .ep checkpoint to run at every decision, supplying the trajectory the "
+        "hosted controller consults. Implies --camera-rig rigs/av3.txt and "
+        "--agent-policy remote. About a second a forward pass on this card.",
+    )
+    parser.add_argument(
+        "--model-config",
+        default=None,
+        help="model_dev.yml for --model-checkpoint. The fork checkout's copy otherwise.",
+    )
+    parser.add_argument(
+        "--waypoints",
+        choices=("modelv2", "derive"),
+        default="modelv2",
+        help="What a model's prediction is sent as. `modelv2` forwards its own yaw, velocity "
+        "and acceleration per waypoint to the bridge's `from_predicted`; `derive` sends "
+        "positions only and lets the bridge reconstruct them by a cubic fit, which is the "
+        "path every measurement before Stage 9 Phase C.2 was taken on.",
+    )
     arguments = parser.parse_args()
 
     # Refused rather than worked around. `ManualControlPolicy.__init__` reads the keyboard
@@ -852,6 +880,46 @@ def main() -> int:
         print(
             f"result       FAILED: --policy-url only drives under --agent-policy remote, not "
             f"{arguments.agent_policy}. The other three ignore the action passed to env.step."
+        )
+        return 1
+    # --model-checkpoint implies the rig it was trained on and the socket that consults it.
+    # Defaulted rather than refused: there is exactly one rig this checkpoint reads, and
+    # naming it on every command line would be a way to get it wrong.
+    if arguments.model_checkpoint and not arguments.camera_rig:
+        arguments.camera_rig = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rigs", "av3.txt"
+        )
+    if arguments.model_checkpoint and arguments.agent_policy != "remote":
+        print(
+            f"result       FAILED: --model-checkpoint supplies a trajectory for a hosted "
+            f"controller to steer by, so it needs --agent-policy remote, not "
+            f"{arguments.agent_policy}. The model does not produce pedals; the bridge does."
+        )
+        return 1
+    # Refused here, before the terrain build, and printing the interpreter: torch missing is
+    # otherwise a traceback several minutes into a run. `_cuda_enable`'s refusal above does
+    # the same thing for the same reason.
+    if arguments.model_checkpoint:
+        try:
+            import torch  # noqa: F401
+        except ImportError:
+            print(
+                "result       FAILED: --model-checkpoint needs torch, which is not installed "
+                f"in {sys.executable}. Run:\n"
+                "  uv sync --group sim --group gpu --group model\n"
+                "and point METADRIVE_PYTHON at this repo's .venv."
+            )
+            return 1
+        if not os.path.exists(arguments.model_checkpoint):
+            print(f"result       FAILED: no checkpoint at {arguments.model_checkpoint}")
+            return 1
+    # A rig is cameras, and a camera has to be rendered before it can be read - the same rule
+    # the heavy --sensors are refused under, one line below.
+    if arguments.camera_rig and arguments.render not in ("offscreen", "3D"):
+        print(
+            f"result       FAILED: --camera-rig needs --render offscreen or 3D, not "
+            f"--render {arguments.render}. base_env.py:343 drops every camera when nothing "
+            "is rendering, so the rig would be mounted on nothing."
         )
         return 1
     # A camera has to be rendered before it can be read: `base_env.py:343` drops every camera
@@ -1193,6 +1261,31 @@ def main() -> int:
             if condition:
                 print("             note: " + warning)
 
+    # The rig, after the stride is known: its `tick_rate` is checked against the interval the
+    # cameras will really be read at, which is 1/--step-hz times that stride. Nothing here
+    # resamples, so a spec asking for a rate the drive is not running at is refused by name.
+    rig = None
+    if arguments.camera_rig:
+        from camera_rig import RigError, load_rig
+
+        try:
+            rig = load_rig(arguments.camera_rig, read_interval_s=decision_seconds)
+        except RigError as error:
+            print(f"result       FAILED: {error}")
+            return 1
+        # `image_observation` builds the observation from `config["sensors"][image_source]`
+        # (`image_obs.py:68`), and that name defaults to `rgb_camera`, which a rig does not
+        # have. Pointing it at a rig camera is what stops a dead 320x240 buffer being
+        # registered beside the rig and rendered every step - one of the very few image
+        # buffers panda3d holds reliably (`camera_rig.MAX_IMAGE_BUFFERS`).
+        merged = dict(offscreen.get("sensors", {}))
+        merged.pop("rgb_camera", None)
+        merged.update(rig.sensors())
+        offscreen["sensors"] = merged
+        offscreen["vehicle_config"] = dict(image_source=rig.image_source())
+        for line in rig.describe():
+            print("rig          " + line if line[:1].isdigit() else "             " + line)
+
     env = environment_class(
         {
             "data_directory": dataset,
@@ -1236,6 +1329,41 @@ def main() -> int:
             store_images=not arguments.record_no_images,
         )
 
+    # The model, after the env, because loading a 1.2 GB TensorRT engine before the terrain
+    # build would put both peaks on the card at once for no reason. `av3_model` reads the
+    # config with PyYAML and refuses a missing key rather than defaulting it.
+    model = None
+    if arguments.model_checkpoint:
+        import av3_model
+
+        try:
+            model = av3_model.AV3Model(
+                av3_model.load_config(arguments.model_config or av3_model.DEFAULT_CONFIG),
+                arguments.model_checkpoint,
+                decision_seconds,
+            ).load()
+        except av3_model.ModelError as error:
+            print(f"result       FAILED: {error}")
+            env.close()
+            return 1
+        note = model.history.spacing_note
+        print(
+            f"model        {model.n_waypoints} waypoints x {model.output_width} over "
+            f"{av3_model.MODEL_HORIZON_S:g} s, loaded in {model.load_seconds:.1f} s; "
+            f"history {model.config.t_frames} frames "
+            f"{model.history.actual_stride_s:g} s apart"
+        )
+        if note:
+            print("             note: " + note)
+        print(
+            "             sent as {}".format(
+                "modelv2 - its own yaw, yaw rate, velocity and acceleration per waypoint, "
+                "straight into the bridge's from_predicted"
+                if arguments.waypoints == "modelv2"
+                else "positions only; the bridge reconstructs the rest by a cubic fit"
+            )
+        )
+
     # Built after the env, because `SensorPack` checks the sensors it was asked for are really
     # registered rather than sending nothing for them.
     remote = None
@@ -1252,6 +1380,12 @@ def main() -> int:
             # (`openpilot_policy.BRIDGE_DT_S`), so getting it wrong mis-scales them silently.
             step_seconds=sim_step_seconds(env) * stride,
         )
+        if model is not None:
+            # `init` is sent once a connection and the bridge builds its lateral MPC from
+            # `n_waypoints`, so this cannot wait for the first `/act`. 20 is in the fork's
+            # prebuilt AV3_MPC_MENU ("4 16 20 32"), so the solver for it exists already and
+            # the first tick is not a code-generation pause.
+            remote.episode_extra = {"n_waypoints": model.n_waypoints}
         # The rates go through `spec`'s existing `extra`, which is why `policy_client` needs
         # no new field: what a model has to know is the interval between two calls, and
         # `step_seconds` above already carries it. These name the clocks underneath it, so a
@@ -1287,6 +1421,14 @@ def main() -> int:
     try:
         for index in indices:
             observation, _ = env.reset(seed=index)
+            if rig is not None:
+                # After the reset, not before: `mount` parents each camera to
+                # `env.agent.origin`, and the ego does not exist until the scenario is loaded.
+                rig.mount(env)
+            if model is not None:
+                # The ring is the model's memory of *this* drive; carrying it across episodes
+                # would open the next one with two seconds of the last one's road.
+                model.start_episode()
             if not gate_settled:
                 gate_settled = True
                 # Never under `image_on_cuda`: `frame_gate.install` refuses it outright,
@@ -1417,6 +1559,21 @@ def main() -> int:
                 deciding = decides_on(steps, stride)
                 if gate is not None:
                     gate.before_step(deciding)
+                if deciding and model is not None:
+                    # Observe then predict, in that order, so the frame being predicted on is
+                    # the newest in the ring rather than one decision stale - `av3_base`'s own
+                    # ordering. Both are inside the `deciding` branch, so a held step neither
+                    # reads a camera nor spends a forward pass.
+                    model.observe(rig.read(), env.agent)
+                    prediction = model.predict(env.agent)
+                    remote.extra = {
+                        # Sent even under `--waypoints modelv2`: `server.py:_handle_step`
+                        # reads `waypoints` FIRST and returns a hard stop on an empty list,
+                        # before it looks at `modelv2` at all.
+                        "waypoints": model.waypoints(prediction),
+                    }
+                    if arguments.waypoints == "modelv2":
+                        remote.extra["modelv2"] = model.modelv2_rows(prediction)
                 if deciding and remote is not None:
                     action = remote(observation)
                 observation, _, terminated, truncated, info = env.step(action)
@@ -1613,7 +1770,15 @@ def main() -> int:
                     f"{share:.0%} of it stands above the road"
                 )
     finally:
+        if model is not None:
+            model.close()
         env.close()
+
+    if model is not None:
+        print(
+            f"model        {model.n_waypoints} waypoints supplied per decision, sent as "
+            f"{arguments.waypoints}"
+        )
 
     if remote is not None and remote.calls:
         # Reported against `env.step`'s own 0.954 ms rather than alone, because the number only
