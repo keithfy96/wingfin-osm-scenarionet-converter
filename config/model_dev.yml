@@ -1,0 +1,93 @@
+ego:
+  blueprint: vehicle.tesla.model3
+  spawn_point: 136
+
+model:
+  # type selects the backend, and which fields below apply:
+  #   av3_trt  - Torch-TensorRT compiled .ep checkpoint. route_path set => AV31
+  #              (live navigation, bfloat16); unset => legacy AV3 (float16).
+  #   av3_onnx - onnxruntime .onnx checkpoint. No route.
+  #   route_gt - follows the route parquet directly. No checkpoint, no cameras,
+  #              no inference — used to tell model drift from controller drift.
+  # temp will phase out once version: is finalized in the code base.
+  type: av3_trt
+
+  kinematics_name: ego_kinematics
+  # route window — av3_trt (when AV31) and route_gt.
+  # relative to filepath.routes in validation_invariants.yml
+  route_path: town10_route.parquet
+  n_route: 20
+  route_spacing_m: 2.0
+  route_max_offset_m: 20
+
+  # av3_trt / av3_onnx only
+  # checkpoint, model/file name to be loaded
+  checkpoint: step_440000_trt_direct_full.ep
+  device: cuda
+  ego_velocity_scale: [8.09, 0.27]
+  waypoint_reference: axle_mid
+
+  # ---------- camera pre-processing ------- (bef model input)
+  # note always 6 cameras are being used.
+  # TODO: enable camera
+  # The cameras this model reads, in the order it was trained to receive them.
+  # Names must match `sensors` in validation_invariants.yml. The order is a
+  # contract with the weights — reorder it and the model still runs, and is wrong.
+  camera_order: [front_middle, front_right, rear_right, rear_middle, rear_left, front_left]
+
+  # The per-camera image this model expects, AFTER your preprocessing. The cameras
+  # render at 1440x1080 (see `sensors` in validation_invariants.yml); getting from
+  # that to this is what modifiers.py does. Its output is checked against these,
+  # and a mismatch warns rather than stopping the run.
+  expected_camera_image_width: 512
+  expected_camera_image_height: 288
+  # How many frames this model reads in one pass, and how far apart in time they
+  # are. t_frames COUNTS THE CURRENT FRAME, so 5 at 0.5 s spacing is the sequence
+  # [t-2.0, t-1.5, t-1.0, t-0.5, t] — four frames of history plus now.
+  #
+  # Both come from training, not from the cameras. The cameras fire at whatever
+  # `sensors` in validation_invariants.yml says and the buffer re-strides itself
+  # to hit frame_stride_s, so frame_stride_s is NOT the camera tick rate.
+  #
+  # A wrong t_frames usually stops the run at load — the checkpoint rejects the
+  # input. A wrong frame_stride_s never does: the model runs, on history spaced
+  # differently to how it was trained, and the run still scores.
+  t_frames: 5          # int, >= 1
+  frame_stride_s: 0.5  # float seconds, > 0
+  enable_fisheye_cameras: true
+  # Override the server's camera rate. This is the RENDER rate, and therefore the
+  # rate history is buffered at and the fastest the model could possibly predict —
+  # it is no longer the prediction rate itself.
+  enable_override_camera_tick: false
+  camera_tick: 0.05 # 20hz
+  # Override the server's `model.tick_rate` — how often the forward pass runs.
+  # Cheap in a way the camera override is not: nothing renders differently and the
+  # model still sees history at the camera rate, only inference is skipped.
+  # Quantised UP onto camera frames, so 0.15 against 0.1s cameras is 0.2s / 5hz;
+  # the run logs the effective rate under CLOCKS at startup.
+  # Required when the flag is on — there is no default rate to fall back to.
+  enable_override_model_tick: false
+  model_tick: 0.15 # -> 0.2s / 5hz at the shipped 0.1s camera rate
+
+controller:
+  selected: learned # openpilot or learned (follows the profile name) to load the controller to test
+  profiles:
+    openpilot:
+      name: openpilot
+      steer_ratio: 12
+      telemetry_mpc_outputs: true
+      use_predicted_modelv2: true
+      zapeta_longitudinal_mode: blended_except_creep
+      zapeta_steer_actuator_delay: 0.0
+      zapeta_steer_delay_extra: 0.0
+      zapeta_longitudinal_actuator_delay_lower: 0.05
+      zapeta_longitudinal_actuator_delay_upper: 0.05
+      carla_steer_curvature_gain: 0.385
+      carla_steer_understeer_coef: 0.003
+    learned:
+      name: learned
+      # a file name only — it is resolved against filepath.controllers
+      # (/workspace/data/controllers), the way model.checkpoint is resolved
+      # against filepath.models
+      checkpoint: learned_controller_v9.npz
+      pedal_mode: pid_ff
