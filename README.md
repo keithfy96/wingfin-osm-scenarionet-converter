@@ -668,6 +668,26 @@ keeps the numbers and drops the frames (29 KB for the same drive).
 `--record --render offscreen` had never worked before 2026-08-24 — it ravelled the dict and
 died with `TypeError: float() argument must be a string or a real number, not 'dict'`.
 
+**Knowing a drive is still running.** Every 30 seconds a running drive prints where it is,
+flushed, so a logged run says as much as a watched one:
+
+```
+progress     step 4200, 42.0 s driven, completion 0.081, 12 km/h, 205 ms/step (12 ms of it the policy round trip), 14m20s elapsed
+```
+
+A model drive needs it: `--agent-policy remote` has **no step budget** — the recording's length
+is no bound on a car not following it — so it ends only when the episode does or at MetaDrive's
+`horizon` of 100000 steps, and each decision is about a second of forward pass. A route that
+completes is 758 of them; one that runs to the horizon is 20 000, five and a half hours, and
+until this line existed the two were indistinguishable from a terminal, as was a hung socket.
+
+A step count climbing against a completion that is not is a car going nowhere; `ms/step` is
+measured over the last interval only, so a drive that slows says so rather than having it
+averaged away; and the round-trip share separates a slow model from a slow socket. A *replayed*
+drive gets `of 3695 (49%)` and `~2s left` as well, because there the recording is the bound —
+there is deliberately no ETA where there is no budget. `--progress-seconds N` sets the interval,
+`0` turns it off, and `--render 3D` ignores it.
+
 **Watching a drive that happened somewhere else.** `--export-drive <dir>` writes the drive
 itself out, as a ScenarioNet dataset this same tool can drive. It is for the case the model
 makes ordinary: the interesting drives happen on the GPU rig, which has no screen, and the

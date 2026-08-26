@@ -61,6 +61,7 @@ import logging
 import math
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -524,6 +525,85 @@ def _record_every_step() -> None:
     RecordManager.after_step = after_step
 
 
+def _duration(seconds):
+    """A wall-clock span, in the largest two units that say anything.
+
+    A drive here spans four orders of magnitude -- a replayed `junction-1` is 40 s, the same
+    route under the AV3 model is hours -- so a fixed unit is unreadable at one end or the other.
+    Seconds below a minute, `14m20s` below an hour, `5h30m` above it.
+    """
+    seconds = int(round(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m{seconds % 60:02d}s"
+    return f"{seconds // 3600}h{(seconds % 3600) // 60:02d}m"
+
+
+def _progress_line(
+    steps,
+    budget,
+    sim_seconds,
+    completion,
+    speed_ms,
+    ms_per_step,
+    policy_ms,
+    elapsed_seconds,
+):
+    """One heartbeat, as printed. Pure, so the two shapes below can be pinned by a test.
+
+    The loop it reports on prints nothing at all between `ego starts at ...` and the scenario
+    summary -- 40 seconds of silence on a replay, and hours on a model drive, which is the case
+    that matters: `--agent-policy remote` has **no step budget** (see where `budget` is set to
+    None below), so the drive ends only when the episode does or at MetaDrive's `horizon` of
+    100000. A route that completes is about 758 decisions at `--decision-hz 20`; one that runs
+    to the horizon is 20000, five and a half hours. From a terminal those are the same thing,
+    and so is a hung socket.
+
+    Two shapes, because the two cases have different truths to tell:
+
+        progress     step 1800 of 3695 (49%), 18.0 s driven, completion 0.462, 47 km/h,
+                     1.1 ms/step, 2s elapsed, ~2s left
+        progress     step 4200, 42.0 s driven, completion 0.081, 12 km/h, 205 ms/step
+                     (12 ms of it the policy round trip), 14m20s elapsed
+
+    **No ETA when `budget` is None.** The route fraction is the only progress that exists for a
+    car driving itself, and extrapolating it would put a confident number on a car that may be
+    circling. Completion standing still while the step count climbs is itself the reading, and
+    an ETA would hide it behind arithmetic.
+
+    `ms_per_step` is the caller's measurement of the interval **just ended**, not of the whole
+    run: a drive that stalls shows the figure climbing rather than having the stall averaged
+    into the minutes that went well. `policy_ms` is the round trip's share of it over the same
+    interval, or None when nothing is hosted -- the same split the end-of-run `policy` line
+    makes, and for the same reason: a slow model and a slow socket look identical per step.
+    """
+    head = f"step {steps}"
+    if budget:
+        head += f" of {budget} ({100.0 * steps / budget:.0f}%)"
+    parts = [head, f"{sim_seconds:.1f} s driven"]
+    # `completion == completion` is the nan test, and nan is what `info` yields before the
+    # environment has reported a route fraction at all.
+    if completion == completion:
+        parts.append(f"completion {completion:.3f}")
+    parts.append(f"{speed_ms * 3.6:.0f} km/h")
+
+    # A tenth of a millisecond matters at replay speed (1.1 ms a step) and is noise at model
+    # speed (205), so the precision follows the magnitude rather than being fixed at one.
+    rate = f"{ms_per_step:.1f} ms/step" if ms_per_step < 10 else f"{ms_per_step:.0f} ms/step"
+    if policy_ms is not None:
+        # Same magnitude-following precision, and for a sharper reason here: a local stub
+        # answers in 0.4 ms, which a bare `{:.0f}` renders as "0 ms" and reads as broken.
+        share = f"{policy_ms:.1f}" if policy_ms < 10 else f"{policy_ms:.0f}"
+        rate += f" ({share} ms of it the policy round trip)"
+    parts.append(rate)
+
+    parts.append(f"{_duration(elapsed_seconds)} elapsed")
+    if budget:
+        parts.append(f"~{_duration((budget - steps) * ms_per_step / 1000.0)} left")
+    return "progress     " + ", ".join(parts)
+
+
 def _container_path_refusal(path):
     """The message for an `--export-drive` naming a container path, typed outside the container.
 
@@ -889,6 +969,17 @@ def main() -> int:
         "was driven at -- MetaDrive stamps "
         "every export 0.1 s a frame regardless, which this overwrites -- so watch-drive.sh "
         "reads it back and a wrong --step-hz is refused rather than drawn as a spiking car.",
+    )
+    parser.add_argument(
+        "--progress-seconds",
+        type=float,
+        default=30.0,
+        help="How often the drive says it is still running, in seconds of wall clock. 0 turns "
+        "it off, and --render 3D ignores it because the window already says so. A wall-clock "
+        "interval rather than a step count on purpose: a replayed step is about 1 ms and a "
+        "step under the AV3 model about 200, so any step interval that suits one is silent "
+        "for hours or unreadable for the other. The line carries route completion, so a car "
+        "that is circling shows as a step count climbing against a completion that is not.",
     )
     parser.add_argument(
         "--lights",
@@ -1757,6 +1848,17 @@ def main() -> int:
             info = {}
             steps = 0
             action = [0, 0]
+            # Off under 3D, where the window is the heartbeat. Everything else here is
+            # headless -- offscreen, none and the top-down renders write to a file or to
+            # nothing -- and headless is where a running drive and a hung one look the same.
+            # A negative interval is off as well, rather than every-step: `interval >= -5` is
+            # true on every tick, and a line a millisecond is not a heartbeat.
+            progress_every = arguments.progress_seconds
+            if arguments.render == "3D" or progress_every <= 0:
+                progress_every = 0.0
+            started_wall = last_report = time.perf_counter()
+            last_steps = 0
+            last_policy = (0.0, 0)
             while budget is None or steps < budget:
                 previous_observation = observation
                 # `[0, 0]` for the three policies that ignore it - `replay` and `idm` are
@@ -1811,6 +1913,40 @@ def main() -> int:
                 if steps % path_every == 0:
                     path.append(tuple(env.agent.position))
                 steps += 1
+                if progress_every:
+                    wall = time.perf_counter()
+                    interval = wall - last_report
+                    if interval >= progress_every:
+                        # Both rates are measured across the interval that just ended rather
+                        # than across the run, so a drive that slows down says so on the next
+                        # line instead of having it averaged into the minutes that went well.
+                        stepped = steps - last_steps
+                        policy_ms = None
+                        if remote is not None:
+                            calls = remote.calls - last_policy[1]
+                            if calls:
+                                policy_ms = 1000 * (remote.seconds - last_policy[0]) / calls
+                            last_policy = (remote.seconds, remote.calls)
+                        print(
+                            _progress_line(
+                                steps,
+                                budget,
+                                steps * sim_dt,
+                                float(info.get("route_completion", float("nan"))),
+                                float(env.agent.speed),
+                                1000 * interval / stepped,
+                                policy_ms,
+                                wall - started_wall,
+                            ),
+                            # Not decoration. `scripts/sim.sh` adds `-T` when stdin is not a
+                            # tty, and python block-buffers a pipe -- so a heartbeat written
+                            # for a terminal would sit unflushed for hours in exactly the case
+                            # it is wanted, a long run being logged. Same reason
+                            # `tools/pedal_sweep.py` flushes its own progress.
+                            flush=True,
+                        )
+                        last_report = wall
+                        last_steps = steps
                 if arguments.render == "3D":
                     overlay = {"scenario": scenario_id}
                     if arguments.agent_policy == "manual":

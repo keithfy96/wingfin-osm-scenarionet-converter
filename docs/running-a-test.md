@@ -649,6 +649,36 @@ measured 947–1002 ms), one per decision, and a full-length `junction-1` route 
 `--decision-hz 20` is 758 of them. `env.step` is the tick, so a slow policy makes a slow
 drive and never a wrong one.
 
+**The drive says so every 30 seconds while it runs**, which is how you tell that apart from a
+hung one:
+
+```
+progress     step 4200, 42.0 s driven, completion 0.081, 12 km/h, 205 ms/step (12 ms of it the policy round trip), 14m20s elapsed
+```
+
+It matters most here, because **a model drive has no step budget at all**. `--agent-policy
+remote` sets one deliberately to `None` — the recording's length is no bound on a car that is
+not following it — so the drive ends when the episode does or at MetaDrive's `horizon` of
+100000 steps. That is the difference between the 758-decision drive above and a 20 000-decision
+one, which is five and a half hours, and from a terminal the two used to look the same.
+
+Read it as three separate readings:
+
+| field | what a bad one means |
+|---|---|
+| `step` climbing, `completion` not | the car is circling or stuck against something, not crawling |
+| `ms/step` climbing between lines | it is slowing down; the figure is measured over the last interval only, not averaged over the run |
+| the round-trip share near 40 ms | not a slow model — that is Nagle's algorithm meeting delayed ACK, costing 43x the simulator per step |
+
+A replayed drive gets the same line with `of 3695 (49%)` and a `~2s left` on the end, because
+there the recording *is* the bound. There is no ETA on a model drive on purpose: extrapolating
+one would put a confident number on a car that may be going nowhere.
+
+`--progress-seconds N` changes the interval, `0` turns it off, and `--render 3D` ignores it —
+the window is already the heartbeat. It is a wall-clock interval rather than a step count
+because a replayed step is about 1 ms and a step under the model about 200, so any step
+interval that suits one is silent for hours or unreadable for the other.
+
 ### Watching the drive
 
 The table above is where the numbers stop helping. The same model drive ends `out_of_road` at
