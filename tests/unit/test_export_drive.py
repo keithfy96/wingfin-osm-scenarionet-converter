@@ -12,6 +12,18 @@ failures rather than errors -- which is why they are here rather than left to a 
 3. **A float32 timestamp is not 0.1.** MetaDrive stamps an exported scenario's `ts` as float32,
    so a 10 Hz drive reads back as 0.10000000149, and an absolute 1e-9 rate check refused it with
    a message reading "10 Hz against 10 Hz".
+4. **A replayed car never leaves the height it spawned at when `decision_repeat` is 1**, which
+   is what `--step-hz 100` produces. Every dataset here carries z = 0, physics is what normally
+   lifts the car to its 0.537 m ride height, and the first physics call after a teleport moves
+   the body by exactly nothing -- so when every call follows a teleport, the car is drawn half a
+   ride height under the road. Also only visible in a window.
+5. **The timestamps MetaDrive writes are 0.1 s a frame at every rate.** That one reached a
+   person: a 100 Hz export claimed to be 10 Hz, so it replayed at 10 Hz, and the replay policy
+   sets the recorded *velocity* along with the recorded position -- the body coasted 1.26 m
+   between frames and was teleported back 1.13 m, once a frame, over a recorded line whose own
+   step distance is 0.109 m and whose heading barely moves. Keith watched that and reported a
+   car spiking back and forth. It is the only one of the four that a numeric check could not
+   have caught, because the wrong number made the rate check *agree*.
 """
 
 import pickle
@@ -165,3 +177,152 @@ def test_the_rate_check_ignores_float32_and_still_catches_a_real_mismatch(
     orders of magnitude below the smallest mismatch worth refusing.
     """
     assert (abs(sim_dt - data_dt) > 1e-6 * max(sim_dt, data_dt)) is mismatched
+
+
+@pytest.mark.parametrize("sim_dt", [0.01, 0.1, 0.02])
+def test_the_export_stamps_the_rate_the_drive_actually_ran_at(sim_dt):
+    """`drive.py` overwrites MetaDrive's timestep array. This is the arithmetic it uses.
+
+    MetaDrive cannot be asked for this: `convert_recorded_scenario_exported` raises on any
+    `scenario_log_interval` but 0.1 and stamps `0.1 * i` regardless. Correcting the output is
+    the only route, and the spacing is what `data_step_seconds` reads to decide whether a
+    replay's rate matches the file's.
+
+    float32 because that is the dtype MetaDrive wrote and a reader should find no difference
+    but the values -- and it is why the rate check next door is a relative tolerance.
+    """
+    frames = 353
+    stamps = np.asarray([sim_dt * index for index in range(frames)], dtype=np.float32)
+
+    assert stamps.dtype == np.float32
+    assert len(stamps) == frames
+    spacing = float(stamps[1]) - float(stamps[0])
+    assert abs(spacing - sim_dt) <= 1e-6 * sim_dt
+    # And the round trip a caller actually makes: spacing back to a whole-number rate.
+    assert round(1.0 / spacing, 6) == pytest.approx(1.0 / sim_dt, rel=1e-5)
+
+
+def test_settling_stops_when_the_car_stops_moving():
+    """`_settle_on_the_road`'s loop: run physics until z is still, then leave it alone.
+
+    Not a physics test -- a stopping test. The loop exists because Bullet will not integrate a
+    body on the first call after it has been teleported, so the settling has to happen at reset
+    with no teleports in it, and it has to end on its own rather than on a fixed count.
+    """
+    drive = pytest.importorskip("drive")
+
+    class Agent:
+        def __init__(self):
+            self.origin = self
+            self.z = 0.0
+
+        def getZ(self):
+            return self.z
+
+    class Engine:
+        def __init__(self, agent):
+            self.agent = agent
+            self.ticks = 0
+
+        def step_physics_world(self):
+            self.ticks += 1
+            # Rises, then stops -- the shape the real suspension has.
+            self.agent.z = min(0.539, self.agent.z + 0.02)
+
+    class Env:
+        pass
+
+    env = Env()
+    env.agent = Agent()
+    env.engine = Engine(env.agent)
+
+    was, now, ticks = drive._settle_on_the_road(env)
+
+    assert was == 0.0
+    assert now == pytest.approx(0.539)
+    # It must stop shortly after the height stops changing, not run to the 2000 bound.
+    assert ticks < 100
+    assert env.engine.ticks == ticks
+
+
+def test_settling_is_bounded_when_the_car_never_settles():
+    """A car that will not settle must not hang a drive that is otherwise fine."""
+    drive = pytest.importorskip("drive")
+
+    class Agent:
+        def __init__(self):
+            self.origin = self
+            self.z = 0.0
+
+        def getZ(self):
+            return self.z
+
+    class Engine:
+        def __init__(self, agent):
+            self.agent = agent
+
+        def step_physics_world(self):
+            self.agent.z += 1.0  # never converges
+
+    class Env:
+        pass
+
+    env = Env()
+    env.agent = Agent()
+    env.engine = Engine(env.agent)
+
+    _, _, ticks = drive._settle_on_the_road(env)
+
+    assert ticks == 2000
+
+
+# --- `/work/...` typed outside the container -----------------------------------------------
+#
+# The sixth thing, and the one Keith hit: the flag was *documented* with an absolute container
+# path, `/work/workspaces/junction-1/drives/rig`. It works, but only in the container, so the
+# command could not be carried to the rig and back unchanged -- and typed on a host it fails at
+# `os.makedirs("/work")` with a `Permission denied` that names neither cause nor fix. A
+# repo-relative path is one string everywhere, which is the property `rigs/cams.txt` already
+# has, so the refusal's job is to hand that string over rather than merely to decline.
+
+
+@pytest.fixture
+def not_in_container(monkeypatch):
+    import env_hint
+
+    monkeypatch.setattr(env_hint, "in_container", lambda: False)
+
+
+@pytest.fixture
+def inside_container(monkeypatch):
+    import env_hint
+
+    monkeypatch.setattr(env_hint, "in_container", lambda: True)
+
+
+def test_a_container_path_on_a_host_is_refused_with_the_path_to_use(not_in_container):
+    drive = pytest.importorskip("drive")
+
+    refusal = drive._container_path_refusal("/work/workspaces/junction-1/drives/rig")
+
+    assert refusal is not None
+    # The point of the message is the answer, not the complaint: the corrected string must be
+    # in there, ready to be copied, and it must not still carry the /work.
+    assert "--export-drive workspaces/junction-1/drives/rig" in refusal
+    assert "/work/workspaces" not in refusal.split("Drop the /work/")[1]
+
+
+def test_the_same_path_is_fine_inside_the_container(inside_container):
+    """`/work/...` is not wrong in there -- it is just not the spelling that travels."""
+    drive = pytest.importorskip("drive")
+
+    assert drive._container_path_refusal("/work/workspaces/junction-1/drives/rig") is None
+
+
+def test_an_ordinary_path_is_never_refused(not_in_container):
+    """Including an absolute one, and including one that merely starts with the same letters."""
+    drive = pytest.importorskip("drive")
+
+    assert drive._container_path_refusal("workspaces/junction-1/drives/rig") is None
+    assert drive._container_path_refusal("/home/keith/drives/rig") is None
+    assert drive._container_path_refusal("/workspaces/rig") is None

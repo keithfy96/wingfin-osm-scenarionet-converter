@@ -661,33 +661,46 @@ It records object *states* rather than pixels, so nothing extra is drawn, `--ren
 stays exactly as it is and the model keeps its cameras. Measured on a 3516-step `junction-1`
 drive: same steps and same completion with the flag as without.
 
-One flag on the tier-4 command above:
+One flag on the tier-4 command above, run on the rig:
 
 ```bash
 cd scripts
 ./sim.sh scripts/drive.sh junction-1 -- \
     --agent-policy remote --policy-url http://127.0.0.1:8642 \
     --sensors imu,route --step-hz 100 --decision-hz 20 --render offscreen \
-    --export-drive /work/workspaces/junction-1/drives/rig
+    --export-drive workspaces/junction-1/drives/rig
 ```
 
-To see the mechanism work first, without waiting a quarter of an hour for forward passes:
+Then scp `workspaces/junction-1/drives/rig` off the rig into the same place here, and open it:
+
+```bash
+cd scripts
+./watch-drive.sh workspaces/junction-1/drives/rig
+```
+
+To see the mechanism work first, on this machine, without waiting a quarter of an hour for
+forward passes — export and watch, the same directory named the same way twice:
 
 ```bash
 cd scripts
 ./sim.sh --no-model scripts/drive.sh junction-1 -- \
     --render offscreen --step-hz 100 \
-    --export-drive /work/workspaces/junction-1/drives/mine
-./watch-drive.sh ../workspaces/junction-1/drives/mine
+    --export-drive workspaces/junction-1/drives/mine
+./watch-drive.sh workspaces/junction-1/drives/mine
 ```
 
-**`/work/...` inside the container is `workspaces/...` on the host**, which is the one thing here
-that is not guessable and the reason those two lines spell the same directory two different ways.
-In full, on this laptop, that is
-`/home/keith/Desktop/work/wingfin/metadrive-complete/converter-scenarionet-stage2-redesign/workspaces/junction-1/drives/`.
+**Give it a repo-relative directory, and it is one string everywhere** — inside the container and
+out, on the rig and here, whichever directory you are standing in. `scripts/_common.sh` cds to
+the repo root before a script does anything, and the container's working directory is `/work`,
+which *is* the repo, so `workspaces/junction-1/drives/rig` names one place on both sides. It is
+the same property `rigs/cams.txt` has, for the same reason. A container-absolute
+`/work/workspaces/...` still works in the container, but it is a path that exists only in there:
+typed on a machine with a screen it would try to create `/work` at the filesystem root, so
+`drive.py` refuses it by name and prints the string to use instead.
+
 `workspaces/*/drives/` is **gitignored** — an export never shows in `git status` and `git pull`
-will not carry one, so scp the directory off the rig. Budget ~40 MB for a 100000-step drive
-(1.4 MB for 3517 frames, measured).
+will not carry one, so scp it. Budget ~40 MB for a 100000-step drive (1.4 MB for 3517 frames,
+measured).
 
 `watch-drive.sh` is a sibling of `drive.sh` rather than a flag on it, because `drive.sh` takes a
 *workspace* — `resolve_workspace` wants `source/manifest.json` and `source/map.osm` — and an
@@ -702,11 +715,27 @@ What to look for once the window is up:
 | the car drives off, turns around, comes back | the model is losing the route |
 | the car weaves and never settles | lateral control oscillating |
 
-**Its clock is labelled 10x slow at 100 Hz**, and that is MetaDrive's rather than ours:
-`convert_recorded_scenario_exported` refuses any log interval but 0.1 s and stamps the timestep
-array `0.1 * i` whatever rate the drive ran at. Positions, speeds and pedals are the real ones;
-only the timestamps lie. The picture is unaffected — replay advances one recorded frame per
-`env.step`.
+**The export carries the rate it was driven at, and `watch-drive.sh` reads it back**, so
+neither command above needs a `--step-hz`. That matters more than it sounds: a dataset can only
+be replayed at the rate it was written at, and the wrong rate does not fail, it *draws*. The
+replay policy sets the recorded velocity as well as the recorded position, so a simulator
+running slower than the tape coasts the car forward between frames and teleports it back — a
+car spiking back and forth, once a frame, over a drive whose recorded line is perfectly smooth.
+Passing a `--step-hz` of your own after `--` is refused by name rather than drawn.
+
+MetaDrive's own converter is where that came from: it refuses any log interval but 0.1 s and
+stamps the timestep array `0.1 * i` whatever the drive ran at, so a 100 Hz export used to claim
+to be 10 Hz. `drive.py` overwrites those timestamps with the real interval on the way out.
+
+**A replayed car at 100 Hz has to be settled onto the road first, and the drive says when it
+does.** Every dataset here carries z = 0, and physics is what normally lifts the ego to its
+0.537 m ride height. At `--step-hz 100` there is one physics tick per teleport, and Bullet does
+not integrate a body on the first tick after its transform is written from outside — so *every*
+tick is a first tick, the car never rises, and it is drawn half a ride height under the road.
+`drive.py` steps the physics world at reset, with no teleport in between, until the height stops
+changing (measured: 0.539 m in 105 ticks, against the 0.5365–0.5384 physics reaches unaided at
+every other rate). It fires only for a replayed car at one tick per teleport, so no rate that was
+already right moves — a 10 Hz drive still reports `vehicle z 0.014..0.537`.
 
 **It is not training data**, and `--record` is. An exported drive is a *scenario*, and
 `ScenarioEnv` scores route completion against the recorded trajectory — which here is the model's

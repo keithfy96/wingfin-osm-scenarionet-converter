@@ -524,6 +524,81 @@ def _record_every_step() -> None:
     RecordManager.after_step = after_step
 
 
+def _container_path_refusal(path):
+    """The message for an `--export-drive` naming a container path, typed outside the container.
+
+    `/work` is the container's name for the repo and nothing else's -- `compose.yaml` bind-mounts
+    `.:/work` and works from there. Out here it is an ordinary absolute path at the filesystem
+    root, so the flag would try to create it and fail with a bare `Permission denied` naming
+    nothing that helps.
+
+    The answer is not a different absolute path, it is a *relative* one: `scripts/_common.sh`
+    cds to the repo root before any script does anything, and the container's working directory
+    is the repo, so `workspaces/<ws>/drives/<label>` is one string on both machines and in both
+    environments. `rigs/README.md` calls that "one path, everywhere" and it is why
+    `rigs/cams.txt` needs no translation either.
+
+    Returns None when there is nothing to say, so the caller reads as the check it is.
+    """
+    if not path.startswith("/work/"):
+        return None
+    import env_hint
+
+    if env_hint.in_container():
+        return None
+    return (
+        f"result       FAILED: --export-drive {path} names a path inside the `sim` "
+        "container, and this is not the container.\n"
+        "             Drop the /work/ -- a repo-relative path is one string everywhere, "
+        "in here and out:\n"
+        f"               --export-drive {path[len('/work/') :]}"
+    )
+
+
+def _settle_on_the_road(env) -> tuple:
+    """Let a replayed car find its ride height, which at `decision_repeat` 1 it never can.
+
+    **The first physics call after a teleport moves the body by exactly nothing**, and a
+    replayed car is teleported every `env.step`. Traced on `junction-1`: at `decision_repeat`
+    2 the first `doPhysics` of the pair reports 0.00000 -> 0.00000 and the second 0.00000 ->
+    -0.00020, and at `decision_repeat` **1** every call is a first call, so z never leaves
+    the value it was spawned with. Bullet's, not MetaDrive's -- `set_position` writes the
+    transform from outside and one `stepSimulation(dt, 1, dt)` re-syncs rather than integrates.
+
+    The value it is stuck at is **0**, because that is what the dataset carries: every
+    scenario here has `position[:, 2]` identically zero, and `BaseVehicle.reset` spawns at
+    `position[-1]` when the position is 3-D (`base_vehicle.py:361`) rather than at its own
+    `HEIGHT / 2` fallback. Physics is what normally lifts the car off that, to a measured
+    **0.537 m** at 10 Hz -- so at 100 Hz the car is drawn half a ride height under the road.
+    Which is what a person saw, in a window, and no number in the drive summary said.
+
+    Nothing is patched to fix it. The physics world is simply stepped here, at reset, with no
+    teleport in between -- so calls 2 onwards *do* integrate and the suspension settles. It
+    reaches 0.53908 in 105 ticks, against the 0.5365-0.5384 physics arrives at unaided at
+    every other rate. That height then survives the whole drive for free: the replay policy
+    hands `set_position` a **2-D** position (`parse_object_state` drops z at its default
+    `include_z_position=False`), and a 2-D `set_position` keeps the body's current z
+    (`base_object.py:300-301`).
+
+    Deliberately not `HEIGHT / 2`, MetaDrive's own spawn fallback: that is 0.595 here and
+    would float the car 5.6 cm. Physics knows the answer; this only gives it room to say it.
+
+    Returns `(from, to, ticks)`. The caller decides when to call it -- every rate but this one,
+    and every policy that actually drives, must not.
+    """
+    before = float(env.agent.origin.getZ())
+    previous = None
+    # Bounded because this is a settling loop and a car that will not settle must not hang a
+    # drive. 105 ticks was measured; 2000 is two seconds of simulated suspension.
+    for ticks in range(1, 2001):
+        env.engine.step_physics_world()
+        current = float(env.agent.origin.getZ())
+        if previous is not None and ticks > 10 and abs(current - previous) < 1e-5:
+            break
+        previous = current
+    return before, float(env.agent.origin.getZ()), ticks
+
+
 def _images_are_normalised(env) -> bool:
     """True when the observation's image half is float32 in [0, 1] and may be stored as 8-bit.
 
@@ -807,10 +882,13 @@ def main() -> int:
         "pixels, so nothing extra is drawn and no --render mode is ruled out. Note the two "
         "neighbours: --record writes (observation, action) pairs for imitation learning, and "
         "--agent-policy replay *reads* a dataset - point it at what this wrote and the ego "
-        "retraces the drive. Its clock is mislabelled and MetaDrive is where that lives: "
-        "`convert_recorded_scenario_exported` refuses any log interval but 0.1 s and stamps "
-        "the timestep array 0.1*i whatever the drive ran at, so a 100 Hz drive's timestamps "
-        "read 10x slow. Positions, speeds and pedals are the real ones; only the clock lies.",
+        "retraces the drive. Give it a **repo-relative** directory - "
+        "workspaces/<ws>/drives/<label> - and it is one string everywhere: scripts/_common.sh "
+        "cds to the repo root and the container works from /work, which is the repo, so the "
+        "same command exports on a rig and watches on a laptop. The file carries the rate it "
+        "was driven at -- MetaDrive stamps "
+        "every export 0.1 s a frame regardless, which this overwrites -- so watch-drive.sh "
+        "reads it back and a wrong --step-hz is refused rather than drawn as a spiking car.",
     )
     parser.add_argument(
         "--lights",
@@ -1051,6 +1129,12 @@ def main() -> int:
     # this run exported, so a second drive into the same directory leaves `sd_*.pkl` files that
     # `dataset_summary.pkl` does not list - a dataset that reads as smaller than it is.
     if arguments.export_drive:
+        # Checked before the two below because it is the one that can be *answered* rather than
+        # only reported: see `_container_path_refusal`.
+        refusal = _container_path_refusal(arguments.export_drive)
+        if refusal:
+            print(refusal)
+            return 1
         if os.path.isdir(arguments.export_drive) and os.listdir(arguments.export_drive):
             print(
                 f"result       FAILED: --export-drive {arguments.export_drive} exists and is "
@@ -1422,6 +1506,7 @@ def main() -> int:
     # starts a fresh `episode_info` on every `before_reset` (`record_manager.py:50`), so
     # after a two-scenario run the engine holds only the second one.
     exported = []
+    reported_settle = False
     recorder = None
     if arguments.record:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1527,6 +1612,19 @@ def main() -> int:
     try:
         for index in indices:
             observation, _ = env.reset(seed=index)
+            # Only where the car cannot settle itself: a replayed ego at one physics tick per
+            # teleport. See `_settle_on_the_road`. Every other rate reaches the same height on
+            # its own, so this fires on nothing that was already right.
+            if arguments.agent_policy == "replay" and env.config["decision_repeat"] == 1:
+                was, now, ticks = _settle_on_the_road(env)
+                if not reported_settle:
+                    reported_settle = True
+                    print(
+                        f"ride height  settled the replayed car from z {was:.3f} to {now:.3f} m "
+                        f"in {ticks} physics ticks. At decision_repeat 1 the body never "
+                        f"integrates -- every physics call follows a teleport -- so without "
+                        f"this it stays at the dataset's z and is drawn under the road."
+                    )
             if rig is not None:
                 # After the reset, not before: `mount` parents each camera to
                 # `env.agent.origin`, and the ego does not exist until the scenario is loaded.
@@ -1891,10 +1989,33 @@ def main() -> int:
             # `PGMap`, neither of which a ScenarioNet map carries. That is why this writes a
             # dataset instead of a replay file.
             if arguments.export_drive:
+                import numpy as np
                 from metadrive.scenario.utils import convert_recorded_scenario_exported
 
                 episode = env.engine.dump_episode()
-                exported.append(convert_recorded_scenario_exported(episode))
+                recorded = convert_recorded_scenario_exported(episode)
+                # **The timestamps MetaDrive writes are wrong at any rate but 10 Hz, and the
+                # error is visible rather than academic.** `convert_recorded_scenario_exported`
+                # refuses any `scenario_log_interval` but 0.1 (`utils.py:135`) and stamps the
+                # array `0.1 * i` regardless, so a 100 Hz drive claims to be a 10 Hz one.
+                #
+                # Played back, `ReplayTrafficParticipantPolicy.act` sets position, heading **and
+                # velocity** from the tape each step (`replay_policy.py:62-65`). The velocity is
+                # the real 12.6 m/s, and a simulator that believes the file then advances 0.1 s
+                # of physics -- so the body coasts 1.26 m forward and the next frame teleports it
+                # back to a position 0.126 m along. The car spikes back and forth, once a frame,
+                # over a drive whose recorded line is smooth. Keith watched exactly that.
+                #
+                # Corrected here rather than asked for, MetaDrive having refused. `sim_dt` is
+                # this run's own `env.step` interval, and one recorded frame is one `env.step`.
+                # Fixing it is what makes `data_step_seconds` (:256) read the truth, which is
+                # what makes `_refuse_mismatch` below refuse a wrong-rate replay instead of
+                # drawing a car that never drove that way.
+                stamps = recorded["metadata"]["ts"]
+                recorded["metadata"]["ts"] = np.asarray(
+                    [sim_dt * index for index in range(len(stamps))], dtype=np.float32
+                )
+                exported.append(recorded)
     finally:
         if model is not None:
             model.close()

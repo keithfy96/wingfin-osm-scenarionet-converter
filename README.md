@@ -678,12 +678,18 @@ second and no summary line answers at all.
 # on the rig, headless, alongside whatever the drive was already doing
 ./sim.sh scripts/drive.sh junction-1 -- --render offscreen --step-hz 100 \
   --model-checkpoint "$MODEL_CHECKPOINT" --agent-policy remote --policy-url http://127.0.0.1:8642 \
-  --export-drive /work/workspaces/junction-1/drives/rig
-# exported  1 scenario(s), 3517 frames -> .../drives/rig (1.4 MB)
+  --export-drive workspaces/junction-1/drives/rig
+# exported  1 scenario(s), 3517 frames -> workspaces/junction-1/drives/rig (1.4 MB)
 
 # then scp the directory here and watch it in 3D
-./watch-drive.sh ../workspaces/junction-1/drives/rig
+./watch-drive.sh workspaces/junction-1/drives/rig
 ```
+
+**Repo-relative, so it is one string everywhere** — in the container and out, on the rig and
+here, from whichever directory it is typed. `scripts/_common.sh` cds to the repo root and the
+container's working directory is `/work`, which is the repo; `rigs/cams.txt` is the same string
+for the same reason. `/work/workspaces/...` still works inside the container, but names nothing
+outside it, so `drive.py` refuses that spelling on a host and prints the one to use.
 
 It records object *states*, not pixels, so nothing extra is drawn and the cost is invisible:
 measured on a 3516-step 100 Hz `junction-1` drive, the same steps and the same completion with
@@ -691,12 +697,28 @@ the flag as without, 1.4 MB out. `watch-drive.sh` is a sibling of `drive.sh` rat
 on it because `drive.sh` takes a *workspace* and an exported drive is a bare dataset directory.
 `workspaces/*/drives/` is gitignored — these are carried between machines, not rebuilt.
 
-Two things about it that are MetaDrive's and worth knowing before reading numbers off the file:
+**The export carries the rate it was driven at**, and `watch-drive.sh` reads it back off the
+file, so neither command above names a `--step-hz`. A dataset can only be replayed at the rate
+it was written at, and the wrong rate does not fail — it *draws*. `ReplayTrafficParticipantPolicy`
+sets the recorded velocity as well as the recorded position, so a simulator running slower than
+the tape coasts the car forward between frames and yanks it back: a car spiking back and forth,
+once a frame, over a recorded line that is perfectly smooth. MetaDrive's converter stamps every
+export `0.1 * i` regardless of rate, which is exactly that trap; `drive.py` overwrites the
+timestamps with the real interval on the way out, and `_refuse_mismatch` then refuses a wrong
+`--step-hz` by name instead of drawing it.
 
-* **Its clock is labelled 10x slow at 100 Hz.** `convert_recorded_scenario_exported` refuses
-  any log interval but 0.1 s and stamps the timestep array `0.1 * i` whatever the drive ran at.
-  Positions, speeds and pedals are the real ones; only the timestamps lie. The picture is
-  unaffected — replay advances one recorded frame per `env.step`.
+**A replayed car at 100 Hz has to be settled onto the road first, and the drive says when it
+does.** Every dataset here carries z = 0, and physics is what normally lifts the ego to its
+0.537 m ride height. At `--step-hz 100` there is one physics tick per teleport, and Bullet does
+not integrate a body on the first tick after its transform is written from outside — so *every*
+tick is a first tick, the car never rises, and it is drawn half a ride height under the road.
+`drive.py` steps the physics world at reset, with no teleport in between, until the height stops
+changing (measured: 0.539 m in 105 ticks, against the 0.5365–0.5384 physics reaches unaided at
+every other rate). It fires only for a replayed car at one tick per teleport, so no rate that was
+already right moves — a 10 Hz drive still reports `vehicle z 0.014..0.537`.
+
+One thing about it worth knowing before reading numbers off the file:
+
 * **It is not training data**, and `--record` above is. The exported drive is a *scenario*, and
   `ScenarioEnv` scores route completion against the recorded trajectory — which here is the
   model's own drive, so driving it would measure the model against its own mistakes.
