@@ -461,13 +461,13 @@
     "artifacts": {
       "dataset_mapping": {
         "path": "scenarionet-10hz/dataset_mapping.pkl",
-        "sha256": "71254c7fa2a0b193f3d0a9b3a046f1315795636f1ec60577cd0b730617a63235",
-        "size_bytes": 76
+        "sha256": "1398cc2b56de6c9bbdf59eeeb6945aa34a0cd88959cc8f7e8b171f27f39f4521",
+        "size_bytes": 142
       },
       "dataset_summary": {
         "path": "scenarionet-10hz/dataset_summary.pkl",
-        "sha256": "5fc2946b33474a2d58b3270d29b870eb0752b91cef2359d95987dc5bdd4db3a5",
-        "size_bytes": 6537
+        "sha256": "36120215bb34fb2d264b87a303518a05c511c24fde1fd9cc380f6c1747c34874",
+        "size_bytes": 10040
       },
       "reachability_html": {
         "path": "inspection/stage-6-reachability.html",
@@ -479,10 +479,15 @@
         "sha256": "b3f19e9a871e1b410d351fd1f47b8fd250f6dac67760b96b1f1080b3b432661a",
         "size_bytes": 193181
       },
+      "scenario:junction-1-57dcd345d17e5a86-fold-demo": {
+        "path": "scenarionet-10hz/sd_osm-scenario_v1_junction-1-57dcd345d17e5a86-fold-demo.pkl",
+        "sha256": "57de68f97e853c9fd7ce8ef1bc15cbda8193e69b871358226cd9b88a3acd4510",
+        "size_bytes": 787853
+      },
       "scenario:junction-1-57dcd345d17e5a86-test": {
         "path": "scenarionet-10hz/sd_osm-scenario_v1_junction-1-57dcd345d17e5a86-test.pkl",
-        "sha256": "d1caa0777da9e1713a3c2f85f8d61fca000fdd30d680f8a5cfa4a7504893b0e8",
-        "size_bytes": 796442
+        "sha256": "6a486a68589f74304f856cc811d60c51d7204e694f78ead52ee4ccd3e9b29a67",
+        "size_bytes": 796244
       },
       "signal_builder_html": {
         "path": "inspection/stage-6-signal-builder.html",
@@ -507,9 +512,9 @@
     "report": "reports/scenario-conversion-10hz.json",
     "routes": [
       {
-        "distance_m": 524.7,
-        "driving_duration_s": 41.6,
-        "duration_s": 41.6,
+        "distance_m": 524.26,
+        "driving_duration_s": 41.33,
+        "duration_s": 41.33,
         "end_lane": "edc12fd6981044bc",
         "junction_movements": 13,
         "lane_changes": 1,
@@ -531,10 +536,42 @@
           "edc12fd6981044bc"
         ],
         "name": "test",
-        "slowest_kph": 20.38,
+        "slowest_kph": 20.48,
         "source": "generated",
         "speed_kph": 50.0,
         "start_lane": "b9cc26585f026f95",
+        "stops": [],
+        "waiting_s": 0
+      },
+      {
+        "distance_m": 408.41,
+        "driving_duration_s": 32.86,
+        "duration_s": 32.86,
+        "end_lane": "4ad42af4a197d590",
+        "junction_movements": 14,
+        "lane_changes": 0,
+        "lanes": [
+          "845da000e94a19e1",
+          "01b86be0711cbff4",
+          "c284f6b52538a3f0",
+          "092264ff002b1f4c",
+          "9d1142bdbe10a335",
+          "a566b487c1bad350",
+          "d20282ae0fe3c37e",
+          "c21d5460fc71993a",
+          "a6ab945d47c56404",
+          "a4faee911623a708",
+          "6cfcc5df42fba873",
+          "082810467fb71325",
+          "24a98f481500472a",
+          "5dd860be4a659421",
+          "4ad42af4a197d590"
+        ],
+        "name": "fold-demo",
+        "slowest_kph": 25.84,
+        "source": "generated",
+        "speed_kph": 50.0,
+        "start_lane": "845da000e94a19e1",
         "stops": [],
         "waiting_s": 0
       }
@@ -566,7 +603,8 @@
       }
     },
     "scenario_files": [
-      "sd_osm-scenario_v1_junction-1-57dcd345d17e5a86-test.pkl"
+      "sd_osm-scenario_v1_junction-1-57dcd345d17e5a86-test.pkl",
+      "sd_osm-scenario_v1_junction-1-57dcd345d17e5a86-fold-demo.pkl"
     ],
     "scenario_id": "junction-1-57dcd345d17e5a86",
     "signals": null,

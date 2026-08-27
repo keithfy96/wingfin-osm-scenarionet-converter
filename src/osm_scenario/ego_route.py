@@ -51,6 +51,7 @@ from typing import Any
 import networkx as nx
 import numpy as np
 
+from osm_scenario.generation import MIN_TRIMMED_LANE_M
 from osm_scenario.lane_model import LaneFeature, Point2D, PreliminaryLaneModel
 from osm_scenario.signal_plan import LIGHT_RED, colour_at, seconds_until_green
 from osm_scenario.topology import BEND_FILLET_MIN_DEGREES
@@ -250,6 +251,26 @@ COINCIDENT_M = 1e-3
 # 4.1°. Anything near this is a cubic that has doubled back on itself, which is a different
 # fault from a sharp road and is caught separately from `MAX_VERTEX_TURN_DEG` for that reason.
 MAX_CURVE_TURN_DEG = 20.0
+
+# How close to `MIN_TRIMMED_LANE_M` a lane's centreline has to land to be the junction-box
+# clamp rather than a way that happens to be short. The same figure, for the same reason, as
+# `conversion._STUB_LANE_TOLERANCE_M`: a trim is interpolated along the line, so the length
+# comes back a fraction of a millimetre off the constant, and nothing in either extract sits
+# within 7 cm of it. See `_is_stub_lane`.
+STUB_LANE_TOLERANCE_M = 0.01
+
+# Above this much turn across a junction box, the crossing is guided by the stub lanes'
+# midpoints; below it, one cubic spans the whole box. Swept on both extracts against two
+# things at once - the share of routes carrying a bend tighter than a car can turn, and how
+# much of the drive line ends up off the drivable surface. One cubic everywhere is the
+# smoothest line there is, but a box turning more than this is a loop of short ways driven
+# *round*, and cutting across it put the line a median 18.7 m and up to 40.8 m from the road.
+# 60 and 120 both hold the line inside the box, and 120 is taken: it leaves the routes
+# carrying an undrivable bend at 36.4% against 60's 43.1% on `junction-1`, and it is what
+# lets the worked case - `fold-demo`, a 96.2 deg crossing - come out at 9.60 m of radius
+# rather than 1.71 m. The cost is `mosque`'s off-road distance at 0.23% against 0.14%, with
+# today's code at 0.11%; on `junction-1` the two are level at 1.16% and 1.12%.
+BOX_GUIDE_MIN_DEG = 120.0
 
 # How far short of a light's stop line the recorded car comes to rest. MetaDrive builds a
 # 0.25 m invisible wall across the lane at the stop point and flips its collision mask with
@@ -542,9 +563,171 @@ def _turn(
     return head, curve[1:-1], tail
 
 
+def _junction_box(
+    arriving: np.ndarray,
+    stubs: Sequence[np.ndarray],
+    leaving: np.ndarray,
+    *,
+    what: str,
+    reserve: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Cross a run of clamped stub lanes as ONE manoeuvre, not one turn per stub.
+
+    A big intersection is often mapped as several nodes joined by short ways rather than one
+    node, and `_is_stub_lane` names the 2.00 m fragments that leaves behind. Built stub by
+    stub, `_turn` ran once per fragment - and **the turn is not spread along the fragments,
+    it is concentrated in the gaps between them.** Measured on `junction-1`'s `fold-demo`
+    route, whose crossing turns -96.2 deg in total:
+
+        lane 6   49.62 m   heading  +15.45 deg
+        stub 7    2.00 m   heading  +17.64 deg     (still aimed along the approach)
+                gap 2.65 m   <-- -88.97 of the -96.2 deg happens across this gap
+        stub 8    2.00 m   heading  -71.33 deg     (already aimed at the exit)
+        lane 9   26.83 m   heading  -80.78 deg
+
+    So `_turn` had to swing 89 deg across 2.65 m, with `_spare(2.0)` = 1.00 m to cut back into
+    on either side, and the cubic it laid between those cuts had about a metre of radius. Each
+    such cubic passed `MAX_CURVE_TURN_DEG` on its own; the fold was the concatenation. The
+    room the manoeuvre needs is in the **real** lanes either side, which is why the whole run
+    is crossed at once and only those two are trimmed.
+
+    The turn itself is ordinary and that is the point: at all 34 mid-route folds on
+    `junction-1` a single arc through the junction needs a median 15.3 m of radius, while the
+    line drawn through it came out at a median 1.40 m - against a DefaultVehicle turning
+    circle of 2.94 m, which is geometry (`wheelbase / tan(max_steer)`) and so is not helped by
+    slowing down. Over 300 seeded routes per extract this takes the share wasting more than
+    90 deg of steering over a 12 m window from 53.1% to 13.8% on `junction-1` and 58.3% to
+    24.0% on `mosque`, and `fold-demo`'s own tightest radius from 0.95 m to 9.60 m.
+
+    **The stubs do not shape the curve below `BOX_GUIDE_MIN_DEG`, and that was measured rather
+    than assumed.** Interpolating through them - their endpoints, or one midpoint each - puts
+    a 19 m span beside a 2 m span at a shared waypoint, so the two handles differ tenfold and
+    the curvature jumps exactly at the joint: routes carrying a bend tighter than the car can
+    turn went from 64.9% to 80.3%, worse than doing nothing.
+
+    **What this does not fix, said here so it is not rediscovered as a regression.** The drive
+    line now leaves the mapped drivable surface more often - 0.23% of route distance to 1.16%
+    on `junction-1`, worst continuous run 6.09 m to 25.81 m - because the surface through a
+    box is a set of narrow ribbons following the *folded* path: through `fold-demo`'s box the
+    corner spans 1275 m2 of ground and only 954 m2 of it is mapped as drivable. A line a car
+    can steer and a line inside those ribbons are not the same line, and closing that gap is a
+    change to what `conversion.py` exports, not to this module.
+    """
+    pieces = [arriving, *stubs, leaving]
+    for before, after in zip(pieces, pieces[1:], strict=False):
+        # Per span, never across the run. Every individual gap on either extract measures
+        # under `MAX_CROSSING_M` (worst 14.43 m), while the straight line from the approach to
+        # the exit reaches 41 m and would refuse a third of the routes the map permits.
+        gap = float(np.linalg.norm(after[0] - before[-1]))
+        if gap > MAX_CROSSING_M:
+            raise RouteError(
+                f"the route leaves a {gap:.0f} m gap inside the junction before {what}, more "
+                "than a junction spans. The lanes do not meet there, and a car would drive "
+                "straight across it"
+            )
+
+    direction_in = _unit(arriving[-1] - arriving[-2], what="the lane before " + what)
+    direction_out = _unit(leaving[1] - leaving[0], what=what)
+    angle = _turn_between(direction_in, direction_out)
+    across = leaving[0] - arriving[-1]
+    sideways = abs(float(across[0] * -direction_in[1] + across[1] * direction_in[0]))
+
+    # The same trims `_turn` would take, sized by the whole crossing rather than by one stub,
+    # and bounded by what each real lane can spare and by what the manoeuvre after this one
+    # needs left over.
+    wanted = _wanted_trim(angle=angle, sideways=sideways)
+    leaving_length = _length_of(leaving)
+    trim_in = min(wanted, _spare(_length_of(arriving)))
+    trim_out = min(wanted, _spare(leaving_length), max(0.0, leaving_length - reserve))
+    head = _trim_end(arriving, trim_in)
+    tail = _trim_start(leaving, trim_out)
+
+    if abs(math.degrees(angle)) >= BOX_GUIDE_MIN_DEG:
+        # A box this sharp is a loop of short ways driven round rather than a corner cut
+        # across, and one cubic tangent to both ends leaves the road: measured on
+        # `junction-1`, the line strays a median 18.7 m and up to 40.8 m from the road the
+        # stubs trace, against 0.45-0.91 m below 120 deg. One waypoint per stub - its
+        # midpoint, never its two endpoints - keeps the line inside the box.
+        middles = [
+            np.asarray(stub, dtype=np.float64).mean(axis=0).reshape(1, 2) for stub in stubs
+        ]
+        waypoints = _drop_repeats(np.vstack([head[-1:], *middles, tail[:1]]))
+    else:
+        waypoints = _drop_repeats(np.vstack([head[-1:], tail[:1]]))
+    if len(waypoints) < 2:
+        return head, np.empty((0, 2), dtype=np.float64), tail
+    tangents = _catmull_rom_tangents(waypoints, direction_in, direction_out)
+
+    spans: list[np.ndarray] = []
+    for index in range(len(waypoints) - 1):
+        turn = _turn_between(tangents[index], tangents[index + 1])
+        span = _turn_curve(
+            waypoints[index],
+            tangents[index],
+            waypoints[index + 1],
+            tangents[index + 1],
+            turn=turn,
+        )
+        if span is None:
+            continue
+        # The joint is already the last point of the span before it.
+        spans.append(span if not spans else span[1:])
+    if not spans:
+        return head, np.empty((0, 2), dtype=np.float64), tail
+    curve = np.vstack(spans)
+    # Both ends are already `head[-1]` and `tail[0]`.
+    return head, curve[1:-1], tail
+
+
 def _spare(length: float) -> float:
     """How much of a lane of this length one turn may use. See `MAX_TURN_TRIM_FRACTION`."""
     return max(MAX_TURN_TRIM_FRACTION * length, length - MIN_TANGENT_M)
+
+
+def _is_stub_lane(points: np.ndarray) -> bool:
+    """Is this lane the interior of a junction box rather than a piece of road?
+
+    A big intersection is often mapped as several nodes joined by short ways rather than one
+    node - `junction-1`'s node 1927184814 is four one-way ways in a loop round the box. Those
+    ways are shorter than the two setbacks that cut every lane back from its junctions, so
+    `generation._trimmed_edge` scales both setbacks down and stops at `MIN_TRIMMED_LANE_M`.
+    The length is therefore the whole test, and it is exact rather than approximate: a lane
+    measures `MIN_TRIMMED_LANE_M` only when the clamp bound. The next lengths up - 2.07 m,
+    2.37 m, 3.65 m - kept their setbacks and are ordinary road that must not be caught.
+
+    The same test as `conversion._stub_lanes`, which suppresses the *paint* on these lanes for
+    a related reason. Written here rather than imported because `conversion` imports this
+    module; the tolerance is `STUB_LANE_TOLERANCE_M` in both, and nothing in either extract
+    sits within 7 cm of the constant, so the two cannot drift apart in practice.
+    """
+    return _length_of(points) <= MIN_TRIMMED_LANE_M + STUB_LANE_TOLERANCE_M
+
+
+def _catmull_rom_tangents(
+    waypoints: np.ndarray, first: np.ndarray, last: np.ndarray
+) -> np.ndarray:
+    """A direction at every waypoint: pinned at the ends, `P[i+1] - P[i-1]` in between.
+
+    Used only where `_junction_box` guides a crossing by the stubs' positions. The interior
+    directions come from the neighbouring waypoints rather than from each stub's own heading -
+    not because that heading is meaningless (it is not: the stubs of a box interpolate its turn
+    perfectly well) but because the drive line must not be tangent to a 2 m fragment at both
+    ends. That tangency is what starved the manoeuvre; see `_junction_box`.
+    """
+    tangents = np.empty_like(waypoints)
+    tangents[0] = first
+    tangents[-1] = last
+    for index in range(1, len(waypoints) - 1):
+        span = waypoints[index + 1] - waypoints[index - 1]
+        length = float(np.linalg.norm(span))
+        # Falls back to the chord out of this point rather than raising: three waypoints in a
+        # row that double back exactly is not a shape any real junction has, and a route is
+        # not worth refusing over it.
+        if length < COINCIDENT_M:
+            span = waypoints[index + 1] - waypoints[index]
+            length = float(np.linalg.norm(span))
+        tangents[index] = span / length if length >= COINCIDENT_M else tangents[index - 1]
+    return tangents
 
 
 def _wanted_trim(*, angle: float, sideways: float) -> float:
@@ -647,7 +830,8 @@ def _lane_change(
     # The reserve yields first, and can yield to nothing. A short lane with a change and a
     # junction on it is a road the map genuinely has, and refusing to drive one because the
     # turn after it would be tight cuts the drivable network on the strength of a constant.
-    # What is left is bounded by `_spare` inside `_turn` and checked by `_curve_is_sane`.
+    # What is left is bounded by `_spare` inside `_turn` and checked by `_turn_curve`,
+    # whose halving loop refuses any cubic turning more than `MAX_CURVE_TURN_DEG` at a sample.
     window = _length_of(joining) - entry
     reserve = min(reserve, max(0.0, window - 2.0 * MIN_TANGENT_M))
     latest = _length_of(joining) - reserve
@@ -907,6 +1091,8 @@ def route_polyline(
     lanes = {lane.identifier: lane for lane in model.lanes}
     changing = set(lane_changes)
     crossings = junction_crossings(model)
+    centrelines = [_xy(lanes[lane_id].centerline) for lane_id in route_lanes]
+    is_stub = [_is_stub_lane(points) for points in centrelines]
 
     finished: list[np.ndarray] = []
     current: np.ndarray | None = None
@@ -914,11 +1100,46 @@ def route_polyline(
     position = 0
     while position < len(route_lanes):
         lane_id = route_lanes[position]
-        centre = _xy(lanes[lane_id].centerline)
+        centre = centrelines[position]
         if current is None:
             current = centre
             position += 1
             continue
+        if is_stub[position]:
+            # A run of stubs is the inside of one junction box and is crossed once. Gathered
+            # the way a run of lane changes is below, and for the same reason: built stub by
+            # stub, the second manoeuvre gets only what the first left over - and on a 2 m
+            # lane the first leaves 1 m. See `_junction_box`.
+            last = position
+            while last + 1 < len(route_lanes) and is_stub[last + 1]:
+                last += 1
+            exit_at = last + 1
+            if exit_at < len(route_lanes) and exit_at not in changing:
+                exit_lane = route_lanes[exit_at]
+                exit_centre = centrelines[exit_at]
+                after = exit_at + 1
+                reserve = 0.0
+                if after < len(route_lanes) and after not in changing:
+                    reserve = _turn_reserve(
+                        exit_centre, centrelines[after], what=f"lane {exit_lane}"
+                    )
+                head, curve, tail = _junction_box(
+                    current,
+                    centrelines[position : last + 1],
+                    exit_centre,
+                    what=f"lane {exit_lane}",
+                    reserve=reserve,
+                )
+                finished.append(head)
+                if len(curve):
+                    finished.append(curve)
+                current = tail
+                position = exit_at + 1
+                continue
+            # A run that ends the route, or one whose exit is reached by changing lane, is
+            # left to the per-lane path below. Both are rare and neither is the fold: a route
+            # that stops inside a junction has no crossing to build, and a change out of a box
+            # is `_lane_change`'s manoeuvre rather than a turn's.
         if position in changing:
             # A run of changes is one manoeuvre, not several. A car crossing three lanes
             # sweeps across them once; building a separate crossing per lane gives the
@@ -928,14 +1149,14 @@ def route_polyline(
             while last + 1 < len(route_lanes) and (last + 1) in changing:
                 last += 1
             lane_id = route_lanes[last]
-            centre = _xy(lanes[lane_id].centerline)
+            centre = centrelines[last]
             position = last
             # What comes after the crossing decides how much of this lane it may use. A run
             # of changes is always followed by a turn or by the end of the route, never by
             # another change, because the run above already swallowed those.
             reserve = 0.0
             if last + 1 < len(route_lanes):
-                following = _xy(lanes[route_lanes[last + 1]].centerline)
+                following = centrelines[last + 1]
                 reserve = _turn_reserve(centre, following, what=f"lane {lane_id}")
             # A lane arrived at by changing across is meant to start away from where the
             # last piece ended - that offset is the manoeuvre, not a fault - so it is
@@ -952,7 +1173,7 @@ def route_polyline(
             following = position + 1
             if following < len(route_lanes) and following not in changing:
                 reserve = _turn_reserve(
-                    centre, _xy(lanes[route_lanes[following]].centerline), what=f"lane {lane_id}"
+                    centre, centrelines[following], what=f"lane {lane_id}"
                 )
             head, curve, tail = _turn(
                 current,
