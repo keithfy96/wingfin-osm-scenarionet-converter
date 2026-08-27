@@ -718,6 +718,28 @@ cd scripts
 ./watch-drive.sh workspaces/junction-1/drives/mine
 ```
 
+**Ctrl-C stops the drive and exports what it has.** This is the flag's real failure mode on a
+long run: the car *stalls*, and a stall is not a termination — the episode never ends, the loop
+steps on to a budget that is the better part of an hour under the model, and Ctrl-C used to raise
+straight through the export and take the recording with it. Now it finishes the frame it is in,
+writes the drive and exits `0`:
+
+```
+^C
+stopping     Ctrl-C - finishing this frame, then exporting the drive so far. Ctrl-C again kills the run.
+             did not arrive: stopped early at your request
+exported     1 scenario(s), 842 frames -> workspaces/junction-1/drives/rig (352 KB)
+```
+
+Stopping by hand is not counted as a failure — the exit status means *the dataset is drivable*.
+**A second Ctrl-C still kills the run.** On the rig, where the drive is inside `./sim.sh`, the
+signal needs a tty: `docker compose run` forwards it, and a piped run (`-T`) wants
+`docker kill --signal=INT <container>` instead.
+
+Re-run into the same directory as often as you like — **an export replaces its directory**, and
+removes only the three shapes it wrote (`dataset_summary.pkl`, `dataset_mapping.pkl`, `sd_*.pkl`).
+A directory holding anything else is refused by name rather than emptied.
+
 **Give it a repo-relative directory, and it is one string everywhere** — inside the container and
 out, on the rig and here, whichever directory you are standing in. `scripts/_common.sh` cds to
 the repo root before a script does anything, and the container's working directory is `/work`,

@@ -705,6 +705,36 @@ second and no summary line answers at all.
 ./watch-drive.sh workspaces/junction-1/drives/rig
 ```
 
+**Ctrl-C stops the drive and exports what it has.** Without that the flag is unusable on the
+run that most needs it: a car that *stalls* never terminates — `terminated` and `truncated` stay
+false, the loop steps on to its budget, and under the model that budget is the better part of an
+hour. Ctrl-C used to raise straight through the export and throw the whole recording away. Now it
+sets a flag, the loop leaves at the end of the frame it is in, and the drive is written exactly as
+if it had finished:
+
+```bash
+^C
+stopping     Ctrl-C - finishing this frame, then exporting the drive so far. Ctrl-C again kills the run.
+scenario 0   ...: 842 of 30170 steps (3017 recorded frames at 0.1 s), arrive_dest=False, ...
+             did not arrive: stopped early at your request
+exported     1 scenario(s), 842 frames -> workspaces/junction-1/drives/rig (352 KB)
+```
+
+It exits `0` and does not count as a failure — the exit status means *the dataset is drivable*,
+and a run cut short by hand says nothing either way about that. **A second Ctrl-C still kills the
+run**, from wherever the process is, including mid-write. In a container the signal needs a tty:
+`docker compose run` forwards it, and under `-T` the equivalent is
+`docker kill --signal=INT <container>`.
+
+**An export replaces its directory** rather than merging into it, so the same
+`drives/<label>` can be re-run into as many times as it takes — which stopping early makes the
+ordinary gesture. Only the three shapes a drive export writes are removed (`dataset_summary.pkl`,
+`dataset_mapping.pkl`, `sd_*.pkl`); a directory holding anything else is refused by name, because
+`--export-drive` takes a *directory* and a directory is the argument that gets mistyped. Merging
+is what is ruled out: `dataset_summary.pkl` lists only what the run that wrote it exported, so a
+shorter second drive would otherwise leave the first drive's scenarios beside a summary that does
+not name them — a dataset that reads as smaller than it is, and drives as one.
+
 **Repo-relative, so it is one string everywhere** — in the container and out, on the rig and
 here, from whichever directory it is typed. `scripts/_common.sh` cds to the repo root and the
 container's working directory is `/work`, which is the repo; `rigs/cams.txt` is the same string

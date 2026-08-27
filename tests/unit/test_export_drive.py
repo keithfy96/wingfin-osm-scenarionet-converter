@@ -326,3 +326,175 @@ def test_an_ordinary_path_is_never_refused(not_in_container):
     assert drive._container_path_refusal("workspaces/junction-1/drives/rig") is None
     assert drive._container_path_refusal("/home/keith/drives/rig") is None
     assert drive._container_path_refusal("/workspaces/rig") is None
+
+
+# --- stopping a drive early ------------------------------------------------------------------
+#
+# `--export-drive` writes the recording once, after the drive loop. Everything before that lives
+# in MetaDrive's `RecordManager`, so a Ctrl-C used to run the `finally` that closes the engine and
+# take the whole recording with it. That matters because **a car that stalls never terminates**:
+# `terminated` and `truncated` stay false, the loop steps to its budget, and on an AV3 drive the
+# budget is fifty minutes. Ctrl-C was the only way out, and it was also the way to lose the run.
+#
+# Three things have to hold, and none of them can be checked by a drive:
+#   1. The stop is a *flag*, not an exception, so the loop leaves at a frame boundary.
+#   2. The second Ctrl-C still kills the process.
+#   3. A re-export replaces the previous one rather than merging into it.
+
+
+def _sigint(handler_owner):
+    """Deliver a SIGINT to whatever handler is currently installed, without a real signal.
+
+    A real `os.kill` would work here and is worse: pytest runs this suite in-process, and a
+    handler that failed to be restored would then take the runner down rather than this test.
+    """
+    import signal as signal_module
+
+    handler = signal_module.getsignal(signal_module.SIGINT)
+    handler(signal_module.SIGINT, None)
+    return handler_owner
+
+
+def test_the_first_ctrl_c_sets_the_flag_and_does_not_raise():
+    """The whole point: the loop has to reach its own next iteration to leave cleanly."""
+    drive = pytest.importorskip("drive")
+
+    said = []
+    with drive._EarlyClose(lambda: said.append("stopping")) as closing:
+        assert not closing.asked
+        _sigint(closing)
+        assert closing.asked
+
+    assert said == ["stopping"], "the handler is what reports; a slow step would look dead"
+
+
+def test_the_second_ctrl_c_still_kills_the_run():
+    """The escape hatch. A graceful stop that cannot itself be interrupted is a worse bargain."""
+    drive = pytest.importorskip("drive")
+
+    with drive._EarlyClose() as closing:
+        _sigint(closing)
+        with pytest.raises(KeyboardInterrupt):
+            _sigint(closing)
+
+
+def test_the_previous_handler_is_restored_even_when_the_drive_raises():
+    """A handler is process-global; a drive that dies must not leave Ctrl-C meaning nothing."""
+    import signal as signal_module
+
+    drive = pytest.importorskip("drive")
+
+    before = signal_module.getsignal(signal_module.SIGINT)
+    with pytest.raises(RuntimeError), drive._EarlyClose():
+        assert signal_module.getsignal(signal_module.SIGINT) is not before
+        raise RuntimeError("the drive fell over")
+    assert signal_module.getsignal(signal_module.SIGINT) is before
+
+    # And `restore` twice is not an error: the drive loop's `finally` calls it, and so does the
+    # context manager the tests use.
+    closing = drive._EarlyClose().install()
+    closing.restore()
+    closing.restore()
+    assert signal_module.getsignal(signal_module.SIGINT) is before
+
+
+def test_the_loop_leaves_before_its_next_step_so_the_last_frame_is_whole():
+    """The invariant behind `assert frames[-1].episode_step == episode_len - 1`.
+
+    `convert_recorded_scenario_exported` refuses an episode whose last frame is half appended
+    (`metadrive/scenario/utils.py:143`), and MetaDrive appends in `after_step`. So the flag has
+    to be read at the *top* of the loop. Modelled here rather than asserted about, because the
+    ordering is the whole of the fix: a check after the step would record frame 4 and export 3.
+    """
+    drive = pytest.importorskip("drive")
+
+    frames = []
+    with drive._EarlyClose() as closing:
+        for step in range(10):
+            if closing.asked:
+                break
+            frames.append(step)          # stands in for env.step -> after_step -> append
+            if step == 3:
+                _sigint(closing)
+
+    assert frames == [0, 1, 2, 3], "the step that was running when Ctrl-C landed is kept, whole"
+
+
+def test_only_the_files_a_drive_export_wrote_are_ever_owned(tmp_path):
+    """`--export-drive` takes a *directory*, which is the argument a person mistypes."""
+    drive = pytest.importorskip("drive")
+
+    for name in ("dataset_summary.pkl", "dataset_mapping.pkl", "sd_wingfin_drive_Map-0.pkl"):
+        (tmp_path / name).write_bytes(b"x")
+    (tmp_path / "routes.json").write_text("{}")
+    (tmp_path / "notes.md").write_text("mine")
+
+    owned, foreign = drive._export_files(tmp_path)
+
+    assert owned == ["dataset_mapping.pkl", "dataset_summary.pkl", "sd_wingfin_drive_Map-0.pkl"]
+    assert foreign == ["notes.md", "routes.json"]
+
+
+def test_a_missing_directory_is_neither_owned_nor_in_the_way(tmp_path):
+    """`workspaces/<ws>/drives/` does not exist the first time, and that is not a refusal."""
+    drive = pytest.importorskip("drive")
+
+    assert drive._export_files(tmp_path / "never-driven") == ([], [])
+
+
+def test_a_re_export_leaves_no_scenario_the_summary_does_not_list(tmp_path):
+    """The fault the old "refuses a non-empty directory" rule existed to prevent.
+
+    `dataset_summary.pkl` names only what the run that wrote it exported. A second, *shorter*
+    drive into the same directory - which stopping early makes the ordinary case - would leave
+    the first drive's `sd_*.pkl` beside a summary that does not list them: a dataset that reads
+    as smaller than it is, and drives as one.
+    """
+    drive = pytest.importorskip("drive")
+
+    # A long first drive.
+    for name in ("sd_wingfin_drive_Map-0.pkl", "sd_wingfin_drive_Map-1.pkl"):
+        (tmp_path / name).write_bytes(b"first")
+    (tmp_path / "dataset_summary.pkl").write_bytes(b"first")
+    (tmp_path / "dataset_mapping.pkl").write_bytes(b"first")
+    keep = tmp_path / "README.md"          # nothing else in there is touched
+    keep.write_text("hand-written")
+
+    replaced = drive._clear_export(tmp_path)
+    # A short second drive, Ctrl-C'd out of its first scenario.
+    (tmp_path / "sd_wingfin_drive_Map-0.pkl").write_bytes(b"second")
+    (tmp_path / "dataset_summary.pkl").write_bytes(b"second")
+    (tmp_path / "dataset_mapping.pkl").write_bytes(b"second")
+
+    assert replaced == 4
+    owned, foreign = drive._export_files(tmp_path)
+    assert owned == ["dataset_mapping.pkl", "dataset_summary.pkl", "sd_wingfin_drive_Map-0.pkl"]
+    assert foreign == ["README.md"] and keep.read_text() == "hand-written"
+
+
+def test_the_owned_names_are_metadrives_own():
+    """Two constants are copied into `drive.py`, and a copy needs the original to be pinned to.
+
+    They are written out rather than imported so the precheck can run before MetaDrive is
+    imported at all -- importing it pulls in panda3d, and the refusal it feeds is about a
+    directory. Read here out of the **checkout's source text** rather than by importing it:
+    MetaDrive is deliberately not a dependency of this repo, so an `importorskip` would skip
+    every time and pin nothing. `test_conversion._metadrive_src` is the same reasoning applied
+    to the schema, and its `skipif` is why this asserts the file was found rather than skipping
+    when it was not - a moved checkout must fail here, not go quiet.
+    """
+    drive = pytest.importorskip("drive")
+    from test_conversion import METADRIVE_SRC
+
+    source = (METADRIVE_SRC / "scenario" / "scenario_description.py").read_text()
+    for constant, value in (
+        ("SUMMARY_FILE", drive._EXPORT_SUMMARY),
+        ("MAPPING_FILE", drive._EXPORT_MAPPING),
+    ):
+        assert f'{constant} = "{value}"' in source, f"MetaDrive renamed {constant}"
+
+    # And the third shape, which is a *pattern* rather than a constant: every scenario file
+    # `extract_dataset_summary_and_mapping` writes goes through `SD.get_export_file_name`,
+    # which builds `sd_<dataset>_<version>_<id>.pkl`. That prefix and suffix are what
+    # `_export_files` matches on.
+    assert '"sd_{}_{}_{}.pkl"' in source

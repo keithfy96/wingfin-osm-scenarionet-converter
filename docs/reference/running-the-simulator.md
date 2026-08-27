@@ -613,3 +613,66 @@ getting faster. `step_ms_*` is still every step, because `ms/step` is per step b
 `decision_hz 20`, `camera_draw_hz 20`, CSV owned by the caller — and the four-set batch there
 reproduces the host's figures to within the noise (0.34x / 2.55x / 1.47x against 0.34x /
 2.64x / 1.49x).
+
+### Ctrl-C stops a drive and keeps the recording (2026-08-27)
+
+**Symptom.** `--export-drive` produced nothing on any run that was not allowed to finish. On a
+drive under the AV3 model — about a second a decision, a budget near fifty minutes — that is the
+only kind of run there is: the car stops, and there is no way to get the recording out.
+
+**Why the car stopping is the hard case.** A stall is not a termination. `terminated` and
+`truncated` both stay false, the episode is still live, and the loop steps on to a budget that
+was sized for a car that drives. Nothing ends it early, so the only exit is Ctrl-C — and Ctrl-C
+was also how the recording was lost.
+
+**Why it was lost.** Every frame lives in MetaDrive's `RecordManager` until
+`engine.dump_episode()` is called, and that call sits *after* the drive loop, inside the same
+`try` whose `finally` closes the engine. A `KeyboardInterrupt` runs that `finally` and
+propagates past the `if exported:` block that does the writing. The frames were all recorded;
+none of them reached disk.
+
+**The fix, and the one constraint on it.** A SIGINT handler sets a flag; it does not raise. The
+loop reads the flag at the **top**, before its next `env.step`. That position is not a style
+choice: MetaDrive appends a frame in `after_step`, and `convert_recorded_scenario_exported`
+asserts `frames[-1].episode_step == episode_len - 1` (`metadrive/scenario/utils.py:143`) — an
+episode dumped from part-way through a step fails an assert rather than exporting short. Between
+two steps the last frame is complete, and that is the only place a partial recording is a valid
+one. `engine.dump_episode()` itself is safe to call mid-episode: `get_episode_metadata`
+returns a `copy.deepcopy` (`metadrive/manager/record_manager.py:130`), so it reads without
+consuming.
+
+**The second Ctrl-C still kills the run.** The first restores whatever handler was installed
+before it, so the next signal is an ordinary `KeyboardInterrupt` from wherever the process is,
+including mid-write. A graceful stop that could not itself be interrupted would be a worse
+bargain than the one it replaced. The handler is scoped to the drive loop and restored in the
+`finally`, because a handler is process-global and Ctrl-C during `env.close()` should keep
+meaning what it always meant.
+
+**It is not a failure.** Stopping by hand does not increment `failures`, on the reasoning
+already written there for `manual` and `remote`: the exit status means *the dataset is
+drivable*, and a run the operator cut short says nothing either way about that. The
+`did not arrive` line reads `stopped early at your request` and takes precedence over every
+other reason, because it is the one the operator already knows and none of the others explains.
+
+**Ctrl-C before the first step exports nothing, deliberately.** Interrupted during the terrain
+build or the settling loop, the engine holds only the reset frame. A one-frame scenario would
+pass `convert_recorded_scenario_exported` and be watchable and empty; the run says so instead.
+
+**The export replaces its directory.** It used to *refuse* a non-empty one, and the reasoning was
+sound — `dataset_summary.pkl` names only what the run that wrote it exported, so merging leaves
+the previous drive's `sd_*.pkl` beside a summary that does not list them, a dataset that reads
+as smaller than it is. Stopping early makes re-running into the same `drives/<label>` the
+ordinary gesture rather than a mistake, so the rule became a scoped replace: exactly the three
+shapes an export writes (`dataset_summary.pkl`, `dataset_mapping.pkl`, `sd_*.pkl`) are
+removed, and a directory holding anything else is still refused by name. `--export-drive` takes
+a *directory*, which is the argument a person mistypes into something that already matters, so
+nothing the tool did not write is ever deleted. The clear happens after
+`extract_dataset_summary_and_mapping` has run its `SD.sanity_check` and immediately before the
+first `dump`, so a drive that fails on its way to a dataset leaves the previous export standing.
+
+**In a container the signal needs a tty.** `docker compose run` forwards SIGINT; under `-T`
+it does not, and the equivalent is `docker kill --signal=INT <container>`. Documented rather
+than engineered around.
+
+**Nothing marks a partial export as partial.** The scenario line and the `did not arrive`
+reason say so on the run that produced it; the file itself carries only its length.

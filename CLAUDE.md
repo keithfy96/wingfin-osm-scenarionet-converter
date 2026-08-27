@@ -329,6 +329,10 @@ These describe *what runs*, and are deliberately distinct from `docs/implementat
   that is the only place it is written down.
 - **Use `tools/drive.py`, not `python -m scenarionet.sim`**, for 3D. The broken map is
   MetaDrive terrain defaults, not our data, and none of the fixes are reachable from `sim`.
+- **Ctrl-C ends a drive at the next frame boundary and still exports it**; a second Ctrl-C
+  kills the run. The flag must never be read mid-`env.step` — `convert_recorded_scenario_exported`
+  asserts the last frame is whole. An export **replaces** its directory, removing only the three
+  shapes it wrote.
 - **The container is one environment, not two.** MetaDrive runs on this repo's 3.10; only
   the 3D row cannot run in there. `tools/` and `scripts/` are live through the bind mount,
   so only a dependency change needs a rebuild.

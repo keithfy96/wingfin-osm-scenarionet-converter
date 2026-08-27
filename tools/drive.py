@@ -57,9 +57,11 @@ far the drive got.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
 import math
 import os
+import signal
 import sys
 import time
 
@@ -633,6 +635,138 @@ def _container_path_refusal(path):
         "in here and out:\n"
         f"               --export-drive {path[len('/work/') :]}"
     )
+
+
+# What a drive export puts in its directory, and nothing else. `sd_*.pkl` is MetaDrive's own
+# naming -- every scenario file goes through `SD.get_export_file_name`, which builds
+# `sd_<dataset>_<version>_<id>.pkl` (`scenario/scenario_description.py:388`) -- and the two
+# constants are `ScenarioDescription.DATASET.SUMMARY_FILE` and `.MAPPING_FILE`. Written out
+# here rather than imported so the precheck can run before MetaDrive is imported at all,
+# importing it pulling in panda3d for a question about a directory. A copy needs the original
+# pinned to it: `test_the_owned_names_are_metadrives_own` reads all three out of the checkout's
+# source text, which works whether or not MetaDrive is installed in this venv.
+_EXPORT_SUMMARY = "dataset_summary.pkl"
+_EXPORT_MAPPING = "dataset_mapping.pkl"
+
+
+def _export_files(directory):
+    """Split a directory into the files a drive export owns and the files it does not.
+
+    **Only what this tool wrote may be deleted.** `--export-drive` takes a directory rather
+    than a file, and a directory is the one argument a person mistypes into something that
+    already matters -- so a replace that trusted the path would be one typo away from removing
+    a workspace. Ownership is decided by name, against the three shapes
+    `extract_dataset_summary_and_mapping` produces, and everything else is reported back for
+    the caller to refuse on.
+
+    Returns `(owned, foreign)`, both sorted lists of bare names. A directory that does not
+    exist is `([], [])` -- there is nothing to replace and nothing in the way.
+    """
+    try:
+        names = sorted(os.listdir(directory))
+    except FileNotFoundError:
+        return [], []
+    owned, foreign = [], []
+    for name in names:
+        if name in (_EXPORT_SUMMARY, _EXPORT_MAPPING) or (
+            name.startswith("sd_") and name.endswith(".pkl")
+        ):
+            owned.append(name)
+        else:
+            foreign.append(name)
+    return owned, foreign
+
+
+def _clear_export(directory) -> int:
+    """Remove the previous export from `directory`, leaving anything else untouched.
+
+    The write that follows is a **replace**, not a merge, and this is the half that makes it
+    one. `dataset_summary.pkl` names only what the run that wrote it exported, so a second,
+    shorter drive into the same directory would otherwise leave the first drive's `sd_*.pkl`
+    beside a summary that does not list them -- a dataset that reads as smaller than it is,
+    which is exactly the fault the old "refuses a non-empty directory" rule existed to prevent.
+    Replacing is the version of that rule that survives stopping a drive early, because
+    re-running into the same `drives/<label>` is then the ordinary gesture rather than a mistake.
+
+    Returns how many files were removed, so the caller can say whether anything was replaced.
+    """
+    owned, _ = _export_files(directory)
+    for name in owned:
+        os.remove(os.path.join(directory, name))
+    return len(owned)
+
+
+class _EarlyClose:
+    """Ctrl-C ends the drive at the next frame boundary instead of throwing the drive away.
+
+    **The recording only reaches disk after the loop ends.** Every frame lives in MetaDrive's
+    `RecordManager` until `engine.dump_episode()` is called, and that call sits after the drive
+    loop -- so a `KeyboardInterrupt` runs the `finally` that closes the engine and takes the
+    whole recording with it. On a drive under the AV3 model, where a decision is about a second
+    and the budget is fifty minutes, that is the difference between having the run and not: a
+    car that *stalls* never terminates, so the loop keeps stepping to a budget nobody wants to
+    wait out, and Ctrl-C was the only way out.
+
+    **At a frame boundary, not wherever the signal lands.**
+    `convert_recorded_scenario_exported` asserts `frames[-1].episode_step == episode_len - 1`
+    (`scenario/utils.py:143`), so an episode dumped from inside `env.step` -- half a frame
+    appended -- fails an assert rather than exporting short. The handler therefore only sets a
+    flag; the loop reads it at the top, before its next step, where the last frame is complete.
+
+    **The second Ctrl-C still kills the run.** The first restores whatever handler was
+    installed before, so the next signal behaves exactly as it does today -- a
+    `KeyboardInterrupt` from wherever the process happens to be, including mid-write. A
+    graceful stop that could not itself be interrupted would be a worse bargain than the one it
+    replaces.
+
+    Scoped to the drive loop, because a signal handler is process-global: outside the loop
+    there is no partial recording to save, and Ctrl-C during argument parsing or `env.close()`
+    should keep meaning what it has always meant.
+    """
+
+    def __init__(self, on_request=None):
+        self.asked = False
+        self._on_request = on_request
+        self._previous = None
+
+    def _handle(self, signum, frame):  # noqa: ARG002 - the signal module's signature
+        self.asked = True
+        # Put back before anything else runs, so a second Ctrl-C during the export is a plain
+        # KeyboardInterrupt. `signal.default_int_handler` is what Python installs at startup,
+        # and is the fallback for the case where the previous handler was not a callable
+        # (SIG_DFL / SIG_IGN, which `signal.signal` accepts but cannot be called).
+        previous = self._previous
+        if not callable(previous):
+            previous = signal.default_int_handler
+        signal.signal(signal.SIGINT, previous)
+        if self._on_request is not None:
+            self._on_request()
+
+    def install(self):
+        """Take over SIGINT. Paired with `restore`, which must run however the drive ends."""
+        with contextlib.suppress(ValueError):
+            # ValueError only when this is not the main thread, where a handler cannot be
+            # installed at all. A drive that cannot be closed early is worse than one that
+            # can; a drive that refuses to start is worse than both.
+            self._previous = signal.signal(signal.SIGINT, self._handle)
+        return self
+
+    def restore(self):
+        """Put back whatever handler was there before, once. Safe to call twice."""
+        previous, self._previous = self._previous, None
+        if previous is not None:
+            with contextlib.suppress(ValueError):
+                signal.signal(signal.SIGINT, previous)
+
+    # `install`/`restore` rather than only `with`, because the drive loop already sits inside a
+    # try/finally that closes the engine, and the handler has to be put back on exactly that
+    # path. The context manager is the same pair, and is what the tests use.
+    def __enter__(self):
+        return self.install()
+
+    def __exit__(self, *_):
+        self.restore()
+        return False
 
 
 def _settle_on_the_road(env) -> tuple:
@@ -1215,10 +1349,13 @@ def main() -> int:
             return 1
 
     # Checked here, before the terrain build, for the reason the checkpoint above is: a drive
-    # is minutes, and a directory that cannot be written is knowable in microseconds. Non-empty
-    # is refused rather than merged because `save_dataset` writes a summary naming only what
-    # this run exported, so a second drive into the same directory leaves `sd_*.pkl` files that
-    # `dataset_summary.pkl` does not list - a dataset that reads as smaller than it is.
+    # is minutes, and a directory that cannot be written is knowable in microseconds. A
+    # directory that already holds a drive is **replaced**, never merged: `save_dataset` writes
+    # a summary naming only what this run exported, so merging would leave the previous drive's
+    # `sd_*.pkl` beside a summary that does not list them - a dataset that reads as smaller than
+    # it is. Replacing rather than refusing, because Ctrl-C stopping a drive early makes
+    # re-running into the same `drives/<label>` the ordinary gesture; see `_clear_export`.
+    # Anything the export does not own is still refused, so a mistyped directory is safe.
     if arguments.export_drive:
         # Checked before the two below because it is the one that can be *answered* rather than
         # only reported: see `_container_path_refusal`.
@@ -1226,10 +1363,14 @@ def main() -> int:
         if refusal:
             print(refusal)
             return 1
-        if os.path.isdir(arguments.export_drive) and os.listdir(arguments.export_drive):
+        owned, foreign = _export_files(arguments.export_drive)
+        if foreign:
             print(
-                f"result       FAILED: --export-drive {arguments.export_drive} exists and is "
-                "not empty. Name a new directory; a drive is not merged into an existing one."
+                f"result       FAILED: --export-drive {arguments.export_drive} holds "
+                f"{len(foreign)} file(s) this did not write "
+                f"({', '.join(foreign[:3])}{', ...' if len(foreign) > 3 else ''}).\n"
+                "             A drive export replaces a directory, so it will only write into "
+                "an empty one or one holding a previous drive."
             )
             return 1
         if os.path.exists(arguments.export_drive) and not os.path.isdir(arguments.export_drive):
@@ -1461,6 +1602,20 @@ def main() -> int:
     if arguments.export_drive:
         recording = {"record_episode": True}
         _record_every_step()
+        # Said before the drive rather than discovered after one. A drive that stalls does not
+        # terminate - `terminated` and `truncated` stay false and the loop steps to its budget -
+        # so the moment this is wanted is fifty minutes into a run nobody wants to sit through,
+        # and a flag nobody knew about is the same as no flag. `owned` is what the export is
+        # about to replace; naming it is the only warning that a previous drive is going.
+        print(
+            f"export       {arguments.export_drive} - Ctrl-C stops the drive and exports "
+            "what it has; a second Ctrl-C kills the run"
+        )
+        if owned:
+            print(
+                f"             replacing a previous drive there ({len(owned)} file(s)); "
+                "an export replaces its directory rather than merging into it"
+            )
     try:
         stride = decision_stride(effective_hz, arguments.decision_hz)
     except ValueError as error:
@@ -1700,7 +1855,19 @@ def main() -> int:
     # returns None unless this env renders offscreen; see `frame_gate`.
     gate = None
     gate_settled = False
+    # Printed from the handler itself, not from the loop, because under the AV3 model a step is
+    # about a second: a Ctrl-C that says nothing for a second reads as a Ctrl-C that did not
+    # land, and the next one kills the run this exists to save.
+    closing = _EarlyClose(
+        lambda: print(
+            "stopping     Ctrl-C - finishing this frame, then "
+            + ("exporting the drive so far" if arguments.export_drive else "closing")
+            + ". Ctrl-C again kills the run.",
+            flush=True,
+        )
+    )
     try:
+        closing.install()
         for index in indices:
             observation, _ = env.reset(seed=index)
             # Only where the car cannot settle itself: a replayed ego at one physics tick per
@@ -1860,6 +2027,14 @@ def main() -> int:
             last_steps = 0
             last_policy = (0.0, 0)
             while budget is None or steps < budget:
+                # Read here, at the top, and never anywhere inside the step. MetaDrive appends
+                # a frame in `after_step`, and `convert_recorded_scenario_exported` asserts
+                # `frames[-1].episode_step == episode_len - 1` (`scenario/utils.py:143`) -- so
+                # an episode dumped from part-way through a step fails an assert rather than
+                # exporting short. Between two steps the last frame is complete, which is the
+                # only place a partial recording is a valid one.
+                if closing.asked:
+                    break
                 previous_observation = observation
                 # `[0, 0]` for the three policies that ignore it - `replay` and `idm` are
                 # chosen through `agent_policy` and never read the argument, and `manual` reads
@@ -2014,7 +2189,13 @@ def main() -> int:
                 # the data. Naming the reason is the difference between the two.
                 named = ("out_of_road", "crash", "crash_object", "crash_vehicle", "max_step")
                 reasons = [name for name in named if info.get(name)]
-                if allowance is None:
+                if closing.asked:
+                    # Ahead of every other reason, and ahead of `reasons` below, because it is
+                    # the one the operator already knows and none of the others explains. A
+                    # drive stopped by hand did not run out of steps and did not leave the road.
+                    ran_out = "stopped early at your request"
+                    reasons = []
+                elif allowance is None:
                     # There is no budget under `manual`, so the loop can only have been left by
                     # the episode ending. If none of the named reasons is set, MetaDrive ended
                     # it for one this script does not name rather than the steps running out.
@@ -2047,7 +2228,10 @@ def main() -> int:
                 # the route the same way every time. `remote` is the same case with a model in
                 # the driving seat: the exit status must keep meaning "the dataset is drivable"
                 # rather than "the model drove it".
-                if arguments.agent_policy not in ("manual", "remote"):
+                # Not counted when the drive was stopped by hand, for the same reason the two
+                # policies below are exempt: the exit status means *the dataset is drivable*,
+                # and a run the operator cut short says nothing either way about that.
+                if not closing.asked and arguments.agent_policy not in ("manual", "remote"):
                     failures += 1
 
             cars = getattr(env.engine, "live_traffic_manager", None)
@@ -2124,7 +2308,13 @@ def main() -> int:
             # `ReplayManager.reset` reads `map_config` and `block_sequence` and spawns a
             # `PGMap`, neither of which a ScenarioNet map carries. That is why this writes a
             # dataset instead of a replay file.
-            if arguments.export_drive:
+            if arguments.export_drive and steps == 0:
+                # Ctrl-C during the terrain build or the settling loop. The engine holds only
+                # the reset frame, and a one-frame scenario is not a drive: `SD.sanity_check`
+                # inside `extract_dataset_summary_and_mapping` is the wrong place to find that
+                # out, and an export written from it would be watchable and empty.
+                print("             nothing to export: the drive was stopped before its first step")
+            elif arguments.export_drive:
                 import numpy as np
                 from metadrive.scenario.utils import convert_recorded_scenario_exported
 
@@ -2152,7 +2342,20 @@ def main() -> int:
                     [sim_dt * index for index in range(len(stamps))], dtype=np.float32
                 )
                 exported.append(recorded)
+
+            # After the export, not before it: the scenario that was interrupted is still a
+            # drive and still worth writing. Only the ones after it are abandoned.
+            if closing.asked:
+                if index != indices[-1]:
+                    print(
+                        f"             stopped early: {indices.index(index) + 1} of "
+                        f"{len(indices)} scenario(s) driven"
+                    )
+                break
     finally:
+        # First, and on every path out: a handler left installed would make a Ctrl-C during
+        # `env.close()` or the export set a flag nothing reads, instead of stopping the process.
+        closing.restore()
         if model is not None:
             model.close()
         env.close()
@@ -2246,6 +2449,11 @@ def main() -> int:
         summary, mapping, scenarios = extract_dataset_summary_and_mapping(
             exported, "wingfin", "drive"
         )
+        # Here, after the sanity check and immediately before the write, rather than at the
+        # precheck: a drive that fails on its way to a dataset must leave the previous export
+        # standing. Between this line and the last `dump` below the directory is incomplete,
+        # and that window is milliseconds against a drive of minutes.
+        replaced = _clear_export(arguments.export_drive)
         size_kb = 0
         for name, scenario in scenarios.items():
             size_kb += portable_pickle.dump(
@@ -2264,6 +2472,7 @@ def main() -> int:
         print(
             f"exported     {len(exported)} scenario(s), {frames} frames -> "
             f"{arguments.export_drive} ({size})"
+            + (f", replacing {replaced} file(s)" if replaced else "")
         )
         print(
             "             watch it with: scripts/watch-drive.sh "
