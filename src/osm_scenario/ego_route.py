@@ -578,6 +578,7 @@ def _junction_box(
     *,
     what: str,
     reserve: float = 0.0,
+    guide_from: int = 0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Cross a run of clamped stub lanes as ONE manoeuvre, not one turn per stub.
 
@@ -675,7 +676,11 @@ def _junction_box(
         # midpoint, never its two endpoints - keeps the line inside the box.
         middles: list[np.ndarray] = []
         headings: list[np.ndarray | None] = []
-        for stub in stubs:
+        # `guide_from` drops the stubs of a lane the route changes off part-way through the
+        # box. They are still crossed - they are still this junction, and both the gap check
+        # and `_box_path` above still count them - but a line steered through a lane it has
+        # left and then through the one it joined doubles back. See `route_polyline`.
+        for stub in stubs[guide_from:]:
             points = np.asarray(stub, dtype=np.float64)
             middles.append(points.mean(axis=0).reshape(1, 2))
             step = points[-1] - points[0]
@@ -1184,6 +1189,17 @@ def route_polyline(
             last = position
             while last + 1 < len(route_lanes) and is_stub[last + 1]:
                 last += 1
+            # **A change inside the run drops every stub before it as a guide.** The stubs
+            # steer the crossing by their positions, and a change is a step sideways onto a
+            # lane that starts further *back* through the box - guided through both, the line
+            # runs out to the stub it is leaving and doubles back to the one it joined, which
+            # measured 76.37 deg at a vertex on `junction-1` where `MAX_VERTEX_TURN_DEG`'s
+            # sweep allows 30. The run is still crossed whole, because the road either side of
+            # the change is the same junction; only the lane whose stubs are followed changes.
+            guiding = position
+            for step in range(position, last + 1):
+                if step in changing:
+                    guiding = step
             exit_at = last + 1
             # **Neither of the two awkward cases may go back to the per-lane path**, which is
             # the starved construction this branch exists to replace. Measured over 300 seeded
@@ -1212,6 +1228,7 @@ def route_polyline(
                     exit_centre,
                     what=f"lane {exit_lane}",
                     reserve=reserve,
+                    guide_from=guiding - position,
                 )
                 finished.append(head)
                 if len(curve):
@@ -1227,6 +1244,7 @@ def route_polyline(
                 centrelines[position:last],
                 centrelines[last],
                 what=f"lane {route_lanes[last]}",
+                guide_from=min(guiding - position, max(0, last - position - 1)),
             )
             finished.append(head)
             if len(curve):
