@@ -1207,12 +1207,16 @@ def route_polyline(
             # `junction-1` and 1.12 m on `mosque` - the worst manoeuvres on either map, and
             # 56.7% and 64.6% of them tighter than a car can turn.
             #
-            # A run whose exit is reached by *changing lane* is still one crossing. The exit
-            # lane simply starts to one side, and `_junction_box` already measures that offset
-            # as `sideways` and sizes the manoeuvre by it - landing on the exit lane's
-            # centreline out of the box *is* the change, made across the whole junction rather
-            # than squeezed into the 2 m fragment at the end of it. Any further change in the
-            # run is left to the branch below, which picks up from the exit lane.
+            # The guard that used to stand here also excluded a run whose *exit* is reached by
+            # changing lane. **That case cannot arise**, and the reason is worth keeping: a
+            # neighbour is only a lane-change destination if it shares the `source_edge`
+            # (`conversion._lane_change_moves`), and a stub's side-neighbour is therefore
+            # another lane of the same clamped edge - another stub, which the gather above has
+            # already swallowed. Counted over 300 seeded routes: 0 of 487 runs on `junction-1`
+            # and 0 of 428 on `mosque`, against 101 and 149 that carry a change *inside* the
+            # run, which is the real case and is handled by `guiding` above. The condition is
+            # gone rather than kept, because a guard against something impossible reads as
+            # evidence that it happens.
             if exit_at < len(route_lanes):
                 exit_lane = route_lanes[exit_at]
                 exit_centre = centrelines[exit_at]
