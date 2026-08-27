@@ -460,14 +460,14 @@
   "stage_6": {
     "artifacts": {
       "dataset_mapping": {
-        "path": "scenarionet-100hz/dataset_mapping.pkl",
+        "path": "scenarionet-10hz/dataset_mapping.pkl",
         "sha256": "71254c7fa2a0b193f3d0a9b3a046f1315795636f1ec60577cd0b730617a63235",
         "size_bytes": 76
       },
       "dataset_summary": {
-        "path": "scenarionet-100hz/dataset_summary.pkl",
-        "sha256": "c1d4b90f989604d405d232645c8789f375e58eb408fb27f151087165909a5e06",
-        "size_bytes": 36092
+        "path": "scenarionet-10hz/dataset_summary.pkl",
+        "sha256": "5fc2946b33474a2d58b3270d29b870eb0752b91cef2359d95987dc5bdd4db3a5",
+        "size_bytes": 6537
       },
       "reachability_html": {
         "path": "inspection/stage-6-reachability.html",
@@ -480,9 +480,9 @@
         "size_bytes": 193181
       },
       "scenario:junction-1-57dcd345d17e5a86-test": {
-        "path": "scenarionet-100hz/sd_osm-scenario_v1_junction-1-57dcd345d17e5a86-test.pkl",
-        "sha256": "074efd77138da8eccd2d176bc30d4b129f0ee8abefe602793b3dcc2b0597f7a6",
-        "size_bytes": 1121208
+        "path": "scenarionet-10hz/sd_osm-scenario_v1_junction-1-57dcd345d17e5a86-test.pkl",
+        "sha256": "d1caa0777da9e1713a3c2f85f8d61fca000fdd30d680f8a5cfa4a7504893b0e8",
+        "size_bytes": 796442
       },
       "signal_builder_html": {
         "path": "inspection/stage-6-signal-builder.html",
@@ -502,41 +502,39 @@
       "signals": 1,
       "stop_lines": 0
     },
-    "dataset_dir": "scenarionet-100hz",
+    "dataset_dir": "scenarionet-10hz",
     "map_features": 974,
-    "report": "reports/scenario-conversion-100hz.json",
+    "report": "reports/scenario-conversion-10hz.json",
     "routes": [
       {
-        "distance_m": 403.75,
-        "driving_duration_s": 36.95,
-        "duration_s": 36.95,
-        "end_lane": "5dd860be4a659421",
-        "junction_movements": 14,
-        "lane_changes": 2,
+        "distance_m": 524.7,
+        "driving_duration_s": 41.6,
+        "duration_s": 41.6,
+        "end_lane": "edc12fd6981044bc",
+        "junction_movements": 13,
+        "lane_changes": 1,
         "lanes": [
-          "86762d6619cf4163",
-          "a1e15b3bd8cc0bb4",
-          "3fd9dca0a0c74f0b",
-          "3ad37ab301e5a43e",
-          "15438e6fd90cf39e",
-          "72fdbea2a86f51e8",
-          "b63366201b38cca1",
-          "9f83d567b07605dc",
-          "a1817878db518d3a",
-          "d2aa783c96ced0ae",
-          "c21d5460fc71993a",
-          "a6ab945d47c56404",
-          "a4faee911623a708",
-          "6cfcc5df42fba873",
-          "082810467fb71325",
-          "24a98f481500472a",
-          "5dd860be4a659421"
+          "b9cc26585f026f95",
+          "283d8199e77c8e18",
+          "869d96e6c66026e9",
+          "e0825b2a06b65022",
+          "8598a1c3144ee3ce",
+          "a07cb54a4cb2bf69",
+          "06f4b600e698ca81",
+          "b6e51e4cab42384b",
+          "d2e454f7d7517d46",
+          "de780b2c9152ccd8",
+          "0afbd72e5f0b9450",
+          "ba662c1bbce21423",
+          "f1b14d371791e7de",
+          "85ece6dffb7a3197",
+          "edc12fd6981044bc"
         ],
         "name": "test",
-        "slowest_kph": 6.62,
+        "slowest_kph": 20.38,
         "source": "generated",
         "speed_kph": 50.0,
-        "start_lane": "86762d6619cf4163",
+        "start_lane": "b9cc26585f026f95",
         "stops": [],
         "waiting_s": 0
       }
@@ -577,7 +575,7 @@
       "sha256": "fc205bca2305a0cc3cb68e7a7ee83b5c8d8a200622d6a1749dde0b258cab65fb"
     },
     "status": "converted",
-    "step_hz": 100.0
+    "step_hz": 10.0
   },
   "tool_versions": {
     "converter": "0.1.0",

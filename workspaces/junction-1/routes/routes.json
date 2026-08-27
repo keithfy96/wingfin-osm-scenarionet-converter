@@ -7,8 +7,8 @@
   "routes": [
     {
       "name": "test",
-      "start_lane": "86762d6619cf4163",
-      "end_lane": "5dd860be4a659421"
+      "start_lane": "b9cc26585f026f95",
+      "end_lane": "edc12fd6981044bc"
     }
   ]
 }

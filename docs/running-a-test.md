@@ -704,8 +704,7 @@ cd scripts
 Then scp `workspaces/junction-1/drives/rig` off the rig into the same place here, and open it:
 
 ```bash
-cd scripts
-./watch-drive.sh workspaces/junction-1/drives/rig
+./scripts/watch-drive.sh workspaces/junction-1/drives/rig
 ```
 
 To see the mechanism work first, on this machine, without waiting a quarter of an hour for
