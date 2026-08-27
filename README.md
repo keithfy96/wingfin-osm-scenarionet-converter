@@ -714,15 +714,19 @@ if it had finished:
 
 ```bash
 ^C
-stopping     Ctrl-C - finishing this frame, then exporting the drive so far. Ctrl-C again kills the run.
+stopping     Ctrl-C - finishing this frame, then exporting the drive so far. Ctrl-C again exits at once, keeping nothing.
 scenario 0   ...: 842 of 30170 steps (3017 recorded frames at 0.1 s), arrive_dest=False, ...
              did not arrive: stopped early at your request
 exported     1 scenario(s), 842 frames -> workspaces/junction-1/drives/rig (352 KB)
 ```
 
 It exits `0` and does not count as a failure — the exit status means *the dataset is drivable*,
-and a run cut short by hand says nothing either way about that. **A second Ctrl-C still kills the
-run**, from wherever the process is, including mid-write. In a container the signal needs a tty:
+and a run cut short by hand says nothing either way about that. **A second Ctrl-C exits the
+process outright** — `os._exit(130)`, no unwinding — so it is immediate and it keeps nothing.
+It exits rather than raising because a `KeyboardInterrupt` lands wherever the process happens to
+be, and under `--render 3D` that is inside panda3d's render or `env.close()`'s teardown of the
+GL context; doing that segfaulted a laptop's GPU driver on 2026-08-28. In a container the signal
+needs a tty:
 `docker compose run` forwards it, and under `-T` the equivalent is
 `docker kill --signal=INT <container>`.
 

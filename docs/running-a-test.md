@@ -726,13 +726,16 @@ writes the drive and exits `0`:
 
 ```
 ^C
-stopping     Ctrl-C - finishing this frame, then exporting the drive so far. Ctrl-C again kills the run.
+stopping     Ctrl-C - finishing this frame, then exporting the drive so far. Ctrl-C again exits at once, keeping nothing.
              did not arrive: stopped early at your request
 exported     1 scenario(s), 842 frames -> workspaces/junction-1/drives/rig (352 KB)
 ```
 
 Stopping by hand is not counted as a failure — the exit status means *the dataset is drivable*.
-**A second Ctrl-C still kills the run.** On the rig, where the drive is inside `./sim.sh`, the
+**A second Ctrl-C exits the process at once** and keeps nothing — `os._exit(130)`, which runs no
+`finally` and no destructor. That is deliberate: raising instead means a `KeyboardInterrupt`
+wherever the process stands, and `env.close()` is unwinding panda3d's GL context and bullet's
+physics world by then. On the rig, where the drive is inside `./sim.sh`, the
 signal needs a tty: `docker compose run` forwards it, and a piped run (`-T`) wants
 `docker kill --signal=INT <container>` instead.
 

@@ -713,34 +713,69 @@ class _EarlyClose:
     appended -- fails an assert rather than exporting short. The handler therefore only sets a
     flag; the loop reads it at the top, before its next step, where the last frame is complete.
 
-    **The second Ctrl-C still kills the run.** The first restores whatever handler was
-    installed before, so the next signal behaves exactly as it does today -- a
-    `KeyboardInterrupt` from wherever the process happens to be, including mid-write. A
-    graceful stop that could not itself be interrupted would be a worse bargain than the one it
-    replaces.
+    **The second Ctrl-C still kills the run, but it exits rather than raises.** A graceful stop
+    that could not itself be interrupted would be a worse bargain than the one it replaces, so
+    the second signal always gets out. What it must not do is *raise*. The handler underneath
+    is Python's own, and a `KeyboardInterrupt` surfaces wherever the process happens to be --
+    which under `--render 3D` is inside panda3d's C++ render call. Unwinding a half-drawn frame
+    segfaulted on this laptop on 2026-08-28, and the driver was then left freeing the VA space
+    of a process that had died mid-ioctl: a cascade of `NVRM: GPU0 kgmmuInvalidateTlb_GM107:
+    TLB invalidation failed` ending in GPU_IN_FULLCHIP_RESET, with the card gone from
+    `nvidia-smi` and unbound in `lspci` until a reboot. `os._exit` instead -- no unwinding, no
+    destructors, and the kernel closes the GL context's fd exactly as it does for any process
+    that exits normally.
 
     Scoped to the drive loop, because a signal handler is process-global: outside the loop
     there is no partial recording to save, and Ctrl-C during argument parsing or `env.close()`
     should keep meaning what it has always meant.
     """
 
-    def __init__(self, on_request=None):
+    #: The exit the second Ctrl-C takes. An attribute only so a test can watch it being called
+    #: without ending the test runner; nothing else should replace it.
+    _exit = staticmethod(os._exit)
+
+    def __init__(self, on_request=None, on_kill=None):
         self.asked = False
         self._on_request = on_request
+        self._on_kill = on_kill
         self._previous = None
 
     def _handle(self, signum, frame):  # noqa: ARG002 - the signal module's signature
         self.asked = True
-        # Put back before anything else runs, so a second Ctrl-C during the export is a plain
-        # KeyboardInterrupt. `signal.default_int_handler` is what Python installs at startup,
-        # and is the fallback for the case where the previous handler was not a callable
-        # (SIG_DFL / SIG_IGN, which `signal.signal` accepts but cannot be called).
-        previous = self._previous
-        if not callable(previous):
-            previous = signal.default_int_handler
-        signal.signal(signal.SIGINT, previous)
+        # Arm the second stage before anything else runs, so a Ctrl-C during the export -- or
+        # during a frame slow enough that the loop has not yet come back around to read the
+        # flag -- still gets out. Deliberately *not* `restore()`: putting the previous handler
+        # back is what made the second Ctrl-C a KeyboardInterrupt, and the class docstring
+        # says what that did to the GPU. The original is still put back by `restore`, on the
+        # way out, so Ctrl-C outside the loop keeps meaning what it always meant.
+        self.arm_exit()
         if self._on_request is not None:
             self._on_request()
+
+    def arm_exit(self):
+        """From now on, any Ctrl-C exits at once rather than setting a flag.
+
+        Armed by the first Ctrl-C, and again by the drive once the loop is over: past that
+        point there is no next frame boundary to stop at, so a handler that only sets a flag
+        would swallow the press entirely. Idempotent.
+        """
+        with contextlib.suppress(ValueError):
+            signal.signal(signal.SIGINT, self._kill)
+
+    def _kill(self, signum, frame):  # noqa: ARG002 - the signal module's signature
+        """The second Ctrl-C: leave now, without unwinding anything."""
+        if self._on_kill is not None:
+            # A message is not worth staying in a handler for. Whatever it raises, the exit
+            # below still has to happen -- that is the whole contract of the second Ctrl-C.
+            with contextlib.suppress(Exception):
+                self._on_kill()
+        # `os._exit` runs no `finally`, no `atexit` and no buffer flush of its own, and a
+        # message the user never sees is exactly why they press it a third time.
+        for stream in (sys.stdout, sys.stderr):
+            with contextlib.suppress(Exception):
+                stream.flush()
+        # 128 + SIGINT, which is what a shell reports for a process ended by Ctrl-C.
+        self._exit(130)
 
     def install(self):
         """Take over SIGINT. Paired with `restore`, which must run however the drive ends."""
@@ -1862,9 +1897,19 @@ def main() -> int:
         lambda: print(
             "stopping     Ctrl-C - finishing this frame, then "
             + ("exporting the drive so far" if arguments.export_drive else "closing")
-            + ". Ctrl-C again kills the run.",
+            + ". Ctrl-C again exits at once, keeping nothing.",
             flush=True,
-        )
+        ),
+        lambda: print(
+            "stopping     Ctrl-C again - exiting now. "
+            + (
+                "The drive so far is lost: it lives in MetaDrive's RecordManager until the "
+                "loop ends, and nothing is written on this path."
+                if arguments.export_drive
+                else "Nothing was being exported."
+            ),
+            flush=True,
+        ),
     )
     try:
         closing.install()
@@ -2353,12 +2398,20 @@ def main() -> int:
                     )
                 break
     finally:
-        # First, and on every path out: a handler left installed would make a Ctrl-C during
-        # `env.close()` or the export set a flag nothing reads, instead of stopping the process.
-        closing.restore()
-        if model is not None:
-            model.close()
-        env.close()
+        # `arm_exit` here and `restore` last, rather than restoring first. The original reason
+        # to restore first was that a flag-setting handler left installed would swallow a
+        # Ctrl-C during `env.close()`; arming the *exit* handler answers that without handing
+        # SIGINT back to Python -- and `env.close()` is the worst place in the run to raise.
+        # It unwinds panda3d's GL context and bullet's physics world, and a KeyboardInterrupt
+        # landing in `bullet_world.remove(node)` there is what segfaulted on 2026-08-28 and
+        # left the driver freeing the VA space of a process that had died mid-ioctl.
+        closing.arm_exit()
+        try:
+            if model is not None:
+                model.close()
+            env.close()
+        finally:
+            closing.restore()
 
     if model is not None:
         print(

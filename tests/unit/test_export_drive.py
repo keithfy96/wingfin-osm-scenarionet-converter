@@ -338,7 +338,11 @@ def test_an_ordinary_path_is_never_refused(not_in_container):
 #
 # Three things have to hold, and none of them can be checked by a drive:
 #   1. The stop is a *flag*, not an exception, so the loop leaves at a frame boundary.
-#   2. The second Ctrl-C still kills the process.
+#   2. The second Ctrl-C still ends the process, by *exiting* rather than raising. It used to
+#      put Python's own handler back, so the next signal was a `KeyboardInterrupt` from
+#      wherever the process stood -- under `--render 3D` that is inside panda3d's C++ render
+#      call, and unwinding a half-drawn frame segfaulted, taking the nvidia driver's VA space
+#      with it (`NVRM: ... GPU_IN_FULLCHIP_RESET`, card gone until a reboot). 2026-08-28.
 #   3. A re-export replaces the previous one rather than merging into it.
 
 
@@ -368,14 +372,48 @@ def test_the_first_ctrl_c_sets_the_flag_and_does_not_raise():
     assert said == ["stopping"], "the handler is what reports; a slow step would look dead"
 
 
-def test_the_second_ctrl_c_still_kills_the_run():
-    """The escape hatch. A graceful stop that cannot itself be interrupted is a worse bargain."""
+def test_the_second_ctrl_c_exits_and_does_not_raise():
+    """The escape hatch. A graceful stop that cannot itself be interrupted is a worse bargain.
+
+    It has to *exit*, though, not raise. `os._exit` is stubbed here for the obvious reason --
+    the real one would end pytest -- and the assertion is that it was reached at all, with no
+    exception in flight. An exception is what the previous version did, and see the banner.
+    """
     drive = pytest.importorskip("drive")
 
+    codes, said = [], []
+    with drive._EarlyClose(on_kill=lambda: said.append("exiting")) as closing:
+        closing._exit = codes.append
+        _sigint(closing)
+        assert closing.asked
+        _sigint(closing)  # raises nothing: reaching the next line is half the assertion
+
+    assert codes == [130], "128 + SIGINT, what a shell reports for a process ended by Ctrl-C"
+    assert said == ["exiting"], "the user pressed it twice; silence is why they press a third"
+
+
+def test_the_first_ctrl_c_does_not_put_the_raising_handler_back():
+    """The mechanism, separately from its effect.
+
+    Restoring the previous handler is what made the second Ctrl-C a `KeyboardInterrupt`. If
+    this ever goes back to `restore()`, the exit test above still passes -- it calls the
+    handler that is installed, whatever it is -- and the segfault comes back. So assert on
+    which handler is armed, not only on what it does.
+    """
+    import signal as signal_module
+
+    drive = pytest.importorskip("drive")
+
+    before = signal_module.getsignal(signal_module.SIGINT)
     with drive._EarlyClose() as closing:
         _sigint(closing)
-        with pytest.raises(KeyboardInterrupt):
-            _sigint(closing)
+        armed = signal_module.getsignal(signal_module.SIGINT)
+        assert armed is not before, "the raising handler is back; a 2nd Ctrl-C would throw"
+        assert armed == closing._kill
+
+    # And the original is still what is left behind, so Ctrl-C outside the loop -- during
+    # `env.close()`, or at a prompt -- keeps meaning exactly what it always meant.
+    assert signal_module.getsignal(signal_module.SIGINT) is before
 
 
 def test_the_previous_handler_is_restored_even_when_the_drive_raises():
@@ -395,6 +433,39 @@ def test_the_previous_handler_is_restored_even_when_the_drive_raises():
     closing = drive._EarlyClose().install()
     closing.restore()
     closing.restore()
+    assert signal_module.getsignal(signal_module.SIGINT) is before
+
+
+def test_arming_the_exit_covers_the_teardown_that_the_loop_does_not():
+    """The dangerous window is not the loop -- it is `env.close()`, after the loop.
+
+    Measured on 2026-08-28: hammering SIGINT at 50 ms for a whole `--render none` drive ended
+    **6 of 6** runs in a `KeyboardInterrupt` out of
+    `base_object.detach_from_physics_world -> bullet_world.remove(node)`, reached through
+    `env.close() -> close_engine -> clear_stored_maps`. Under `--render 3D` that same unwind
+    also has panda3d's GL context in it, which is why it segfaulted rather than printing.
+
+    The loop's own flag cannot help there: the loop is already over. So the drive arms the
+    exit handler itself on the way into the teardown, whether or not anyone pressed anything,
+    and only restores the original once `env.close()` has returned.
+    """
+    import signal as signal_module
+
+    drive = pytest.importorskip("drive")
+
+    before = signal_module.getsignal(signal_module.SIGINT)
+    closing = drive._EarlyClose().install()
+    try:
+        assert not closing.asked, "no signal has arrived; this is the drive arming it, not a press"
+        closing.arm_exit()
+        assert signal_module.getsignal(signal_module.SIGINT) == closing._kill
+
+        codes = []
+        closing._exit = codes.append
+        _sigint(closing)
+        assert codes == [130], "a press during env.close() must exit, not raise into bullet"
+    finally:
+        closing.restore()
     assert signal_module.getsignal(signal_module.SIGINT) is before
 
 
