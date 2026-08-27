@@ -745,7 +745,7 @@ It records object *states*, not pixels, so nothing extra is drawn and the cost i
 measured on a 3516-step 100 Hz `junction-1` drive, the same steps and the same completion with
 the flag as without, 1.4 MB out. `watch-drive.sh` is a sibling of `drive.sh` rather than a flag
 on it because `drive.sh` takes a *workspace* and an exported drive is a bare dataset directory.
-`workspaces/*/drives/` is gitignored — these are carried between machines, not rebuilt.
+`workspaces/*/drives/` is **tracked**, so `git pull` is the way a drive gets from the rig to a screen. Commit the ones worth keeping rather than every iteration: a pickle of float arrays does not delta-compress, so a re-run into the same directory costs its full 1.4 MB again, permanently.
 
 **The export carries the rate it was driven at**, and `watch-drive.sh` reads it back off the
 file, so neither command above names a `--step-hz`. A dataset can only be replayed at the rate

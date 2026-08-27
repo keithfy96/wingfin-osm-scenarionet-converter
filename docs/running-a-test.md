@@ -749,9 +749,11 @@ the same property `rigs/cams.txt` has, for the same reason. A container-absolute
 typed on a machine with a screen it would try to create `/work` at the filesystem root, so
 `drive.py` refuses it by name and prints the string to use instead.
 
-`workspaces/*/drives/` is **gitignored** — an export never shows in `git status` and `git pull`
-will not carry one, so scp it. Budget ~40 MB for a 100000-step drive (1.4 MB for 3517 frames,
-measured).
+`workspaces/*/drives/` is **tracked**, so the way a drive reaches a screen is `git push` on the
+rig and `git pull` here — no scp, the path being the same string on both machines. Budget ~40 MB
+for a 100000-step drive (1.4 MB for 3517 frames, measured), and note that it is history rather
+than disk: a pickle of float arrays does not delta-compress, so **a re-run into the same
+directory is a whole new blob, not a diff**. Commit the drives worth keeping.
 
 `watch-drive.sh` is a sibling of `drive.sh` rather than a flag on it, because `drive.sh` takes a
 *workspace* — `resolve_workspace` wants `source/manifest.json` and `source/map.osm` — and an

@@ -12,10 +12,15 @@ build/
 # particular is one file per run, stamped, and never overwritten -- so tracking them
 # means the repo grows a file every time anyone measures anything.
 workspaces/*/reports/
-# Recorded drives (`drive.py --export-drive`). One directory per run, and a rig's 100000-step
-# model drive is tens of megabytes of positions. They are also the one thing here that is
-# *carried* between machines rather than rebuilt on each -- scp'd off the rig, watched once,
-# and done with. Nothing downstream reads them.
-workspaces/*/drives/
+# Recorded drives (`drive.py --export-drive`) are **tracked**, deliberately: the rig records and
+# the laptop watches, and `git pull` is the transport rather than scp. Nothing downstream reads
+# them -- they are carried, not rebuilt -- so the cost is history only. Worth knowing before
+# adding one: a drive is about 1.1 MB per 3500 frames, a pickle of float arrays does not
+# delta-compress, and a re-run into the same directory is a whole new blob rather than a diff.
+# Commit the drives worth keeping, not every iteration.
+# Keith's own recordings, for reading a bug back rather than for the pipeline. Unanchored, so
+# it matches a `recordings/` at any depth rather than only in a workspace -- nothing here is
+# generated into a directory of that name, so there is nothing for it to swallow by accident.
+recordings/
 node_modules/
 
