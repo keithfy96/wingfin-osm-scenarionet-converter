@@ -2,13 +2,13 @@
   "artifacts": {
     "dataset_mapping": {
       "path": "scenarionet-10hz/dataset_mapping.pkl",
-      "sha256": "1398cc2b56de6c9bbdf59eeeb6945aa34a0cd88959cc8f7e8b171f27f39f4521",
-      "size_bytes": 142
+      "sha256": "71254c7fa2a0b193f3d0a9b3a046f1315795636f1ec60577cd0b730617a63235",
+      "size_bytes": 76
     },
     "dataset_summary": {
       "path": "scenarionet-10hz/dataset_summary.pkl",
-      "sha256": "36120215bb34fb2d264b87a303518a05c511c24fde1fd9cc380f6c1747c34874",
-      "size_bytes": 10040
+      "sha256": "eda7650130e73fc6f4e03809540ea022a2c71168df617eb2f3804ca50141cc41",
+      "size_bytes": 6565
     },
     "reachability_html": {
       "path": "inspection/stage-6-reachability.html",
@@ -20,15 +20,10 @@
       "sha256": "b3f19e9a871e1b410d351fd1f47b8fd250f6dac67760b96b1f1080b3b432661a",
       "size_bytes": 193181
     },
-    "scenario:junction-1-57dcd345d17e5a86-fold-demo": {
-      "path": "scenarionet-10hz/sd_osm-scenario_v1_junction-1-57dcd345d17e5a86-fold-demo.pkl",
-      "sha256": "57de68f97e853c9fd7ce8ef1bc15cbda8193e69b871358226cd9b88a3acd4510",
-      "size_bytes": 787853
-    },
     "scenario:junction-1-57dcd345d17e5a86-test": {
       "path": "scenarionet-10hz/sd_osm-scenario_v1_junction-1-57dcd345d17e5a86-test.pkl",
-      "sha256": "6a486a68589f74304f856cc811d60c51d7204e694f78ead52ee4ccd3e9b29a67",
-      "size_bytes": 796244
+      "sha256": "acef1afc36033e17a73b41d46c04adde67b1dbd1cc5f80bbd93bab78dc10803a",
+      "size_bytes": 796560
     },
     "signal_builder_html": {
       "path": "inspection/stage-6-signal-builder.html",
@@ -49,7 +44,7 @@
     "stop_lines": 0
   },
   "dataset_dir": "scenarionet-10hz",
-  "generated_at": "2026-08-27T14:40:24.423515+00:00",
+  "generated_at": "2026-08-28T06:40:58.537785+00:00",
   "inputs": {
     "reviewed_lane_model": "lane-model/reviewed.json",
     "reviewed_lane_model_sha256": "fc205bca2305a0cc3cb68e7a7ee83b5c8d8a200622d6a1749dde0b258cab65fb",
@@ -60,16 +55,15 @@
   "report_version": 1,
   "routes": [
     {
-      "distance_m": 524.26,
-      "driving_duration_s": 41.33,
-      "duration_s": 41.33,
-      "end_lane": "edc12fd6981044bc",
-      "junction_movements": 13,
-      "lane_changes": 1,
+      "distance_m": 504.99,
+      "driving_duration_s": 41.66,
+      "duration_s": 41.66,
+      "end_lane": "a81888453a2a8f6e",
+      "junction_movements": 12,
+      "lane_changes": 3,
       "lanes": [
-        "b9cc26585f026f95",
-        "283d8199e77c8e18",
-        "869d96e6c66026e9",
+        "d976ca388f2599ba",
+        "d75fbcca2cdb8384",
         "e0825b2a06b65022",
         "8598a1c3144ee3ce",
         "a07cb54a4cb2bf69",
@@ -79,47 +73,17 @@
         "de780b2c9152ccd8",
         "0afbd72e5f0b9450",
         "ba662c1bbce21423",
-        "f1b14d371791e7de",
-        "85ece6dffb7a3197",
-        "edc12fd6981044bc"
+        "37238b17cc969fd4",
+        "e6db35d27fefcca5",
+        "6bf730d3520ef887",
+        "a4ebf22b789ca72f",
+        "a81888453a2a8f6e"
       ],
       "name": "test",
-      "slowest_kph": 20.48,
+      "slowest_kph": 14.12,
       "source": "generated",
       "speed_kph": 50.0,
-      "start_lane": "b9cc26585f026f95",
-      "stops": [],
-      "waiting_s": 0
-    },
-    {
-      "distance_m": 408.41,
-      "driving_duration_s": 32.86,
-      "duration_s": 32.86,
-      "end_lane": "4ad42af4a197d590",
-      "junction_movements": 14,
-      "lane_changes": 0,
-      "lanes": [
-        "845da000e94a19e1",
-        "01b86be0711cbff4",
-        "c284f6b52538a3f0",
-        "092264ff002b1f4c",
-        "9d1142bdbe10a335",
-        "a566b487c1bad350",
-        "d20282ae0fe3c37e",
-        "c21d5460fc71993a",
-        "a6ab945d47c56404",
-        "a4faee911623a708",
-        "6cfcc5df42fba873",
-        "082810467fb71325",
-        "24a98f481500472a",
-        "5dd860be4a659421",
-        "4ad42af4a197d590"
-      ],
-      "name": "fold-demo",
-      "slowest_kph": 25.84,
-      "source": "generated",
-      "speed_kph": 50.0,
-      "start_lane": "845da000e94a19e1",
+      "start_lane": "d976ca388f2599ba",
       "stops": [],
       "waiting_s": 0
     }
@@ -151,8 +115,7 @@
     }
   },
   "scenario_files": [
-    "sd_osm-scenario_v1_junction-1-57dcd345d17e5a86-test.pkl",
-    "sd_osm-scenario_v1_junction-1-57dcd345d17e5a86-fold-demo.pkl"
+    "sd_osm-scenario_v1_junction-1-57dcd345d17e5a86-test.pkl"
   ],
   "scenario_id": "junction-1-57dcd345d17e5a86",
   "signals": null,

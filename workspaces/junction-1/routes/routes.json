@@ -7,13 +7,8 @@
   "routes": [
     {
       "name": "test",
-      "start_lane": "b9cc26585f026f95",
-      "end_lane": "edc12fd6981044bc"
-    },
-    {
-      "name": "fold-demo",
-      "start_lane": "845da000e94a19e1",
-      "end_lane": "4ad42af4a197d590"
+      "start_lane": "d976ca388f2599ba",
+      "end_lane": "a81888453a2a8f6e"
     }
   ]
 }
