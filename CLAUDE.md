@@ -393,6 +393,10 @@ These describe *what runs*, and are deliberately distinct from `docs/implementat
   uuid per process, so the run stops being repeatable. Use the spawn ordinal.
 - **`LOST_LATERAL_M` confounds any collision measurement** taken with it on: it culls
   exactly the cars that were about to crash. Isolate it before comparing anything.
+- **Traffic cars steer by `WindowedTrajectoryIDMPolicy`, not the stock policy.** The stock
+  whole-line projection is captured by a U-turn route's parallel leg and the stock heading
+  PID winds up its integral in queues - both put cars on the median for 20+ s. Do not
+  "simplify" it back.
 
 ### Lane markings and road surfaces at export
 → `docs/reference/lane-markings-and-surfaces.md`
