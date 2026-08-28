@@ -641,12 +641,26 @@ one. `engine.dump_episode()` itself is safe to call mid-episode: `get_episode_me
 returns a `copy.deepcopy` (`metadrive/manager/record_manager.py:130`), so it reads without
 consuming.
 
-**The second Ctrl-C still kills the run.** The first restores whatever handler was installed
-before it, so the next signal is an ordinary `KeyboardInterrupt` from wherever the process is,
-including mid-write. A graceful stop that could not itself be interrupted would be a worse
-bargain than the one it replaced. The handler is scoped to the drive loop and restored in the
-`finally`, because a handler is process-global and Ctrl-C during `env.close()` should keep
-meaning what it always meant.
+**The second Ctrl-C exits the process; it must never raise.** A graceful stop that could not
+itself be interrupted would be a worse bargain than the one it replaced, so the second signal
+always gets out — but by `os._exit(130)`, not by a `KeyboardInterrupt`.
+
+The first version restored Python's own handler, so the next signal raised from wherever the
+process stood. Measured 2026-08-28 by hammering SIGINT every 50 ms across a `--render none`
+drive: **6 of 6 runs** ended in a `KeyboardInterrupt` out of
+`base_object.detach_from_physics_world -> bullet_world.remove(node)`, reached via `env.close()
+-> close_engine -> BaseEngine.close -> clear_stored_maps`. With `os._exit` the same hammer gave
+**6 of 6 clean exits at 130**.
+
+**The dangerous window is the teardown, not the loop.** Under `--render 3D` that same unwind is
+also dismantling panda3d's GL context, and a laptop RTX 4050 did not survive it: SIGSEGV in the
+drive, then `NVRM: GPU0 kgmmuInvalidateTlb_GM107: TLB invalidation failed` and
+`dmaFreeMapping_GM107: error updating VA space` ending in `GPU_IN_FULLCHIP_RESET` — after which
+`nvidia-smi` reported *No devices found* and `lspci -s 01:00.0` showed the card with no kernel
+driver bound and `Mem- BusMaster-`. It came back only on a reboot. So the drive calls
+`_EarlyClose.arm_exit()` on the way *into* the `finally` and restores the original handler only
+after `env.close()` has returned: from the first Ctrl-C to the end of teardown, every signal
+exits rather than raises.
 
 **It is not a failure.** Stopping by hand does not increment `failures`, on the reasoning
 already written there for `manual` and `remote`: the exit status means *the dataset is
