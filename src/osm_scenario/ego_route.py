@@ -280,6 +280,30 @@ BOX_GUIDE_MIN_DEG = 120.0
 # value that still costs nothing. See `_junction_box`.
 BOX_TRIM_SPANS = 1.0
 
+# Above this much sideways displacement, a box crossing is guided by its stubs however
+# little it turns. A staggered junction steps the route across to a carriageway that runs on,
+# nearly parallel, some metres over - `junction-1` crosses way 334662874 like this, turning
+# 2.8 deg while stepping 14.95 m sideways. Below `_SMOOTHING_MAX_DEG` that displacement is
+# what sizes the trim, so `_wanted_trim` asked 49.7 m of each lane and the cubic joined two
+# points 104.62 m apart in a near-straight chord (max bulge 1.87 m) that cut the corner the
+# road takes - 30 m of it down the oncoming carriageway. Guiding follows the stubs' diagonal
+# instead. Swept at 2/4/6/8 m over both extracts' traffic pairs: 6 reads the best wrong-way
+# total (285 m against 578 m unguided on `junction-1`, level with 4; 8 misses a box at 329 m)
+# and the fewest routes bent tighter than the car. Everything this catches steps over 10 m;
+# everything it must leave alone - an ordinary offset join - steps under 2 m.
+BOX_SIDEWAYS_MAX_M = 6.0
+
+# Guide waypoints closer together than this collapse into one. Two stub midpoints 3.9 m apart
+# carrying an 89 deg heading change between them is a corner no cubic can round - the guided
+# crossing of `junction-1`'s -96.2 deg box (`fold-demo`'s own junction) came out at 1.06 m of
+# radius against the car's 2.94, jackknifing six of the sixty traffic routes. Dropping the
+# crowded waypoint hands that stretch back to the neighbouring spans: the same six routes read
+# 2.76-3.59 m. Swept at 0/3/4/5 m: 3 leaves the 1.06 m kinks, 5 costs `mosque` 3 m of road,
+# 4 is the narrowest value that clears every kink. An interior waypoint is also dropped when
+# it crowds the *exit* - the tail end of the crossing is a lane, not a guide, and keeps its
+# place.
+BOX_GUIDE_SPACING_M = 4.0
+
 # How far short of a light's stop line the recorded car comes to rest. MetaDrive builds a
 # 0.25 m invisible wall across the lane at the stop point and flips its collision mask with
 # the colour, so a car recorded *on* the line is recorded inside the wall - harmless under
@@ -608,11 +632,17 @@ def _junction_box(
     90 deg of steering over a 12 m window from 53.1% to 13.8% on `junction-1` and 58.3% to
     24.0% on `mosque`, and `fold-demo`'s own tightest radius from 0.95 m to 9.60 m.
 
-    **The stubs do not shape the curve below `BOX_GUIDE_MIN_DEG`, and that was measured rather
-    than assumed.** Interpolating through them - their endpoints, or one midpoint each - puts
+    **The stubs do not shape the curve below `BOX_GUIDE_MIN_DEG` unless the crossing steps
+    more than `BOX_SIDEWAYS_MAX_M` sideways, and both halves were measured rather than
+    assumed.** Interpolating through every box - their endpoints, or one midpoint each - puts
     a 19 m span beside a 2 m span at a shared waypoint, so the two handles differ tenfold and
     the curvature jumps exactly at the joint: routes carrying a bend tighter than the car can
-    turn went from 64.9% to 80.3%, worse than doing nothing.
+    turn went from 64.9% to 80.3%, worse than doing nothing. The exception is the staggered
+    crossing that hardly turns but steps double-digit metres across: there the *unguided*
+    cubic is the fault - `_wanted_trim` sizes the trim from that step, and the chord it draws
+    between two points ~100 m apart runs down the oncoming carriageway. Guiding those and only
+    those took the sixty junction-1 traffic routes from 578 m of wrong-way driving to 285 m,
+    and mosque's from 44 m to 30 m, with no route bent tighter than before.
 
     **What this does not fix, said here so it is not rediscovered as a regression.** The drive
     line now leaves the mapped drivable surface more often - 0.23% of route distance to 1.16%
@@ -645,7 +675,13 @@ def _junction_box(
     # and bounded by what each real lane can spare and by what the manoeuvre after this one
     # needs left over.
     wanted = _wanted_trim(angle=angle, sideways=sideways)
-    guided = abs(math.degrees(angle)) >= BOX_GUIDE_MIN_DEG
+    # Guided when the crossing turns hard *or steps far sideways*. The second clause is the
+    # staggered-junction case: nearly no turn, a double-digit sideways step, and a trim sized
+    # by that step - a single cubic then chords the dogleg the road takes and drives the
+    # oncoming carriageway. See `BOX_SIDEWAYS_MAX_M`.
+    guided = (
+        abs(math.degrees(angle)) >= BOX_GUIDE_MIN_DEG or sideways > BOX_SIDEWAYS_MAX_M
+    )
     if guided:
         # **`_wanted_trim` diverges at a box that doubles back, and must not be believed
         # there.** It returns `TURN_RADIUS_M * tan(angle/2)`, the tangent length of an arc
@@ -687,12 +723,17 @@ def _junction_box(
             reach = float(np.linalg.norm(step))
             headings.append(step / reach if reach >= COINCIDENT_M else None)
         stacked = np.vstack([head[-1:], *middles, tail[:1]])
-        # The waypoints are deduplicated exactly as `_drop_repeats` would, but the stub
-        # headings have to fall away with them or the two lists stop lining up.
+        # Interior waypoints keep `BOX_GUIDE_SPACING_M` between themselves and the exit -
+        # crowded guides are a corner no cubic can round; see the constant - and the stub
+        # headings have to fall away with the dropped ones or the two lists stop lining up.
         keep = [0]
-        for index in range(1, len(stacked)):
-            if float(np.linalg.norm(stacked[index] - stacked[keep[-1]])) > COINCIDENT_M:
+        for index in range(1, len(stacked) - 1):
+            apart = float(np.linalg.norm(stacked[index] - stacked[keep[-1]]))
+            ahead = float(np.linalg.norm(stacked[-1] - stacked[index]))
+            if apart > BOX_GUIDE_SPACING_M and ahead > BOX_GUIDE_SPACING_M:
                 keep.append(index)
+        if float(np.linalg.norm(stacked[-1] - stacked[keep[-1]])) > COINCIDENT_M:
+            keep.append(len(stacked) - 1)
         waypoints = stacked[keep]
         along: list[np.ndarray | None] = [None, *headings, None]
         guides = [along[index] for index in keep]
