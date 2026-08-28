@@ -7,8 +7,11 @@ Leaflet-over-OSM page the stage pages use, with one toggleable layer per defect 
 
 - **U-turn stretches**: >= 140 deg of heading change inside 30 m of arc, with how many
   routes take the spot and the tightest radius on it.
-- **Bends under the car's steering lock** (2.9424 m - wheelbase 2.469 / tan 40 deg): a car
-  physically cannot follow the line there, whatever its speed.
+- **Bends under the car's steering lock** (2.9424 m - wheelbase 2.469 / tan 40 deg): drawn
+  geometry no arc of the car's wheelbase can lie along. Measured, a solo car still tracks
+  the flagged spots to ~0.25 m at profile speed (the polyline spends only a vertex there);
+  they are flagged as drawing defects, not as predicted crash sites - the driven failures
+  were the tracker's, see `docs/reference/live-traffic.md`.
 - **Wrong-way runs**: the drawn line inside a lane's width while opposed to it by > 120 deg.
 - **Off-road runs**: the drawn line more than a texel (0.125 m) outside the sealed road
   surface - the same union `conversion.py` exports.
@@ -292,8 +295,11 @@ _TEMPLATE = """<!doctype html>
     <h1>Traffic-line defects — %(workspace)s</h1>
     <p class="muted">Measured on <code>traffic/traffic.json</code> (seed %(seed)s, %(count)s routes)
     against the reviewed lane model and the sealed road surface the converter exports.
-    These are the <b>drawn</b> lines the traffic cars are asked to follow; a car tracking a
-    bend under its %(lock).2f m steering lock leaves the line however slowly it goes.</p>
+    These are the <b>drawn</b> lines the traffic cars are asked to follow. A bend under the
+    %(lock).2f m steering lock is a drawing defect - no arc of the wheelbase lies along it -
+    though a solo car still tracks these spots to ~0.25 m; the cars seen on the grass were
+    failures of the tracker, fixed in <code>tools/traffic.py</code>
+    (<code>WindowedTrajectoryIDMPolicy</code>), see <code>docs/reference/live-traffic.md</code>.</p>
     <h2>Layers</h2>
     <div id="layers"></div>
     <h2>Findings</h2>
@@ -338,7 +344,7 @@ _TEMPLATE = """<!doctype html>
   const sublockLayer = L.layerGroup();
   for (const s of D.sublock) {
     L.circleMarker(s.pos, {radius:9, color:'#c92a2a', fillColor:'#c92a2a', fillOpacity:0.7})
-      .bindPopup(`<b>Bend under the steering lock: r ${s.radius.toFixed(2)} m</b><br>` +
+      .bindPopup(`<b>Bend tighter than the 2.94 m lock (drawn line): r ${s.radius.toFixed(2)} m</b><br>` +
                  `${s.routes.length} route(s) &middot; ${esc(s.near)}<br>` + chains(s))
       .addTo(sublockLayer);
   }

@@ -302,3 +302,50 @@ Six things not to re-derive:
 `workspaces/junction-1/signals/signals.json` is bound to an older lane model and `convert`
 refuses it by fingerprint. Re-draw the phases in `inspection/stage-6-signal-builder.html` and
 rebuild with `--signals` - choosing signal timing is a person's job because OSM supplies none.
+
+## The two drive-time faults left after the speed profile, and the windowed policy (2026-08-28)
+
+Keith: *"the vehicle is STILL driving into oncoming traffic, and running on the grass ...
+this car making a u turn on the grass."* With the speed profile on, the drawn lines clean
+(12 m of wrong-way across all 60 routes, 0 m off-road) and every route **tracked solo to
+0.25 m** — including bends of 2.4 and 3.3 m radius — the remaining faults were only visible
+in full episodes, and both live in `TrajectoryIDMPolicy` itself:
+
+- **Whole-line projection capture.** 20 of `junction-1`'s 60 routes cross the median gap at
+  (−65, 73) and run back down the parallel carriageway ~8 m away. A car displaced a couple
+  of metres — a give-way stop, a nudge, the crossover turn — has its `local_coordinates`
+  projection captured by the *other* leg: small lateral against the wrong road, heading
+  target flipped, and the car settles into driving the median grass or the oncoming
+  carriageway. Indefinitely: `_on_route` read the same projection, so the `LOST_LATERAL_M`
+  test could not fire for exactly the cars it exists for. Measured: single cars 20+ s off
+  the road at (−64, 23) and (−58, −52), 2.2–3.0 m from their own line, entering at
+  14–31 km/h.
+- **Heading-PID integral windup.** `PIDController.get_result` returns −kp·e −ki·∫e, the
+  integral accumulates for ever, and the heading PID ships with ki = 0.1. A car creeping
+  through a tight hook at 1–3 km/h holds a heading error for hundreds of steps while barely
+  moving; the wound-up integral then stands as a steering bias that the lateral term
+  (kp 0.3, no integral) can only balance metres off the line. Measured: cars settling
+  2.5–4.9 m beside their own route for 20–30 s **while reading their lateral correctly the
+  whole time** (policy lat −4.40 at a true 4.40 m offset), drifting to the 5 m cull.
+
+The fix is `WindowedTrajectoryIDMPolicy` in `tools/traffic.py`: the reference point comes
+from `_window_reference` — nearest route point within 5 m behind / 12 m ahead of the last
+reference, progress clamped to that window, so it can neither jump a hairpin nor fall onto
+a parallel leg — and the heading PID keeps the stock gains with **zero integral**.
+`_on_route` and `_past_the_end` read the same windowed reference, so the lost test and the
+speed profile see the road the car is actually on. Three unit tests pin the capture
+geometry, the lateral sign and the zero-ki gains in `test_traffic_manager.py`.
+
+Measured after, same recorder, `junction-1` 8 episodes of 25 and `mosque` 3 of 25:
+**zero sustained (≥0.5 s) wrong-way or off-road driven events** (from 43 over 3 episodes),
+cars lost 0–2 per episode (from 1–4, and those two were culled honestly), collisions 0–3
+(from 1–4; the remainder are IDM headway contacts, a separate subject).
+
+Two traps for anyone tuning this:
+
+- **The lateral sign is right as it stands.** `get_result` negates internally, so
+  `lateral_pid.get_result(-lat)` pushes toward the line. Flipping it reads plausible and
+  was measured: 29–38 of ~45 cars driven off their lines per episode, against 0–2.
+- **The 1 m fixed preview is not the villain.** At profile speeds it tracks the tightest
+  drawn bends solo to 0.25 m; the failures above are the projection's and the integral's,
+  and both show only under interaction (queues, give-way stops, nudges).

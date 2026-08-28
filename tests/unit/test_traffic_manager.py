@@ -15,6 +15,7 @@ import math
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
@@ -396,3 +397,70 @@ def test_a_lost_car_is_not_counted_as_a_completed_route() -> None:
     body = ast.dump(after_step)
     assert "cars_lost" in body
     assert "cars_retired" in body
+
+
+def test_the_windowed_reference_cannot_fall_onto_the_parallel_leg() -> None:
+    """A U-turn route's two legs run ~8 m apart for 100 m, and the whole-line projection
+    captures a displaced car onto the wrong one - measured on `junction-1`, a car 2.3 m off
+    its line drove the median for 20+ s, unculled, because the lost test read the same
+    projection. The windowed reference must keep pointing at the leg the car is on, however
+    close the other leg is."""
+    from traffic import _window_reference
+
+    up = [(0.0, float(y)) for y in range(0, 101, 2)]
+    across = [(4.0, 102.0)]
+    down = [(8.0, float(y)) for y in range(100, -1, -2)]
+    xy = np.asarray(up + across + down, dtype=float)
+    cumulative = np.asarray(_cumulative([tuple(p) for p in xy]), dtype=float)
+
+    # A car 40 m up the first leg, displaced 5 m toward the second: past the midline, so
+    # the nearest piece of route is the OTHER leg, 3 m away and pointing the other way.
+    progress = 40.0
+    along, lateral, new_progress = _window_reference(
+        xy, cumulative, progress, (5.0, 40.0), 5.0, 12.0
+    )
+    assert abs(along - 40.0) < 2.0, "the reference must stay on the first leg"
+    assert lateral == pytest.approx(5.0, abs=0.1), "5 m right of an upward leg reads +5"
+    assert new_progress <= progress + 12.0
+
+    # The same position with the whole line as the window is exactly the capture the window
+    # exists to prevent.
+    whole = _window_reference(xy, cumulative, 0.0, (5.0, 40.0), 0.0, 1e9)
+    assert whole[0] > cumulative[len(up)], "sanity: unwindowed projection lands on leg two"
+
+
+def test_the_windowed_reference_lateral_sign_matches_metadrive() -> None:
+    """`InterpolatingLine.local_coordinates` reads lateral positive to the RIGHT of travel
+    (its lateral direction is the -90 deg rotation of the segment); `steering_control`
+    negates it. A flipped sign here reverses the lateral correction - measured: 29-38 of
+    ~45 cars driven off their lines per episode, against 0-2 with the sign right."""
+    from traffic import _window_reference
+
+    xy = np.asarray([(float(x), 0.0) for x in range(0, 40, 2)], dtype=float)
+    cumulative = np.asarray(_cumulative([tuple(p) for p in xy]), dtype=float)
+    _along, right_of, _ = _window_reference(xy, cumulative, 20.0, (20.0, -1.5), 5.0, 12.0)
+    assert right_of == pytest.approx(1.5, abs=0.05)
+    _along, left_of, _ = _window_reference(xy, cumulative, 20.0, (20.0, 1.5), 5.0, 12.0)
+    assert left_of == pytest.approx(-1.5, abs=0.05)
+
+
+def test_the_traffic_policy_heading_pid_has_no_integral() -> None:
+    """The stock heading PID's integral accumulates for ever and is never reset. A car
+    creeping through a tight hook at 1-3 km/h holds a heading error for hundreds of steps
+    while barely moving; the wound-up integral then stands as a steering bias that the
+    lateral term can only balance metres off the line - measured: cars settling 2.5-4.9 m
+    beside their own route for 20-30 s, reading their lateral correctly the whole time."""
+    source = (REPO / "tools" / "traffic.py").read_text(encoding="utf-8")
+    policy = next(
+        node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.ClassDef) and node.name == "WindowedTrajectoryIDMPolicy"
+    )
+    init = next(
+        node
+        for node in ast.walk(policy)
+        if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+    )
+    assert "PIDController(1.2, 0.0, 3.5)" in ast.unparse(init), (
+        "the heading PID must keep the stock gains with a zero integral term"
+    )

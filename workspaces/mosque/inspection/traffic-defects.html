@@ -30,8 +30,11 @@
     <h1>Traffic-line defects — mosque</h1>
     <p class="muted">Measured on <code>traffic/traffic.json</code> (seed 1, 60 routes)
     against the reviewed lane model and the sealed road surface the converter exports.
-    These are the <b>drawn</b> lines the traffic cars are asked to follow; a car tracking a
-    bend under its 2.94 m steering lock leaves the line however slowly it goes.</p>
+    These are the <b>drawn</b> lines the traffic cars are asked to follow. A bend under the
+    2.94 m steering lock is a drawing defect - no arc of the wheelbase lies along it -
+    though a solo car still tracks these spots to ~0.25 m; the cars seen on the grass were
+    failures of the tracker, fixed in <code>tools/traffic.py</code>
+    (<code>WindowedTrajectoryIDMPolicy</code>), see <code>docs/reference/live-traffic.md</code>.</p>
     <h2>Layers</h2>
     <div id="layers"></div>
     <h2>Findings</h2>
@@ -76,7 +79,7 @@
   const sublockLayer = L.layerGroup();
   for (const s of D.sublock) {
     L.circleMarker(s.pos, {radius:9, color:'#c92a2a', fillColor:'#c92a2a', fillOpacity:0.7})
-      .bindPopup(`<b>Bend under the steering lock: r ${s.radius.toFixed(2)} m</b><br>` +
+      .bindPopup(`<b>Bend tighter than the 2.94 m lock (drawn line): r ${s.radius.toFixed(2)} m</b><br>` +
                  `${s.routes.length} route(s) &middot; ${esc(s.near)}<br>` + chains(s))
       .addTo(sublockLayer);
   }
