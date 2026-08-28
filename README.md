@@ -488,10 +488,9 @@ uv run osm-scenario traffic -w workspaces/junction-1 --count 60 --seed 1
 then from inside `scripts/`:
 
 ```bash
-./drive.sh junction-1 -- --traffic live --traffic-count 25 --render 3D
+./scripts/drive.sh junction-1 -- --traffic live --traffic-count 25 --render 3D
 
-  cd scripts
-  ./drive.sh junction-1 -- --agent-policy idm --traffic live --traffic-count 25 --render 3D
+./scripts/drive.sh junction-1 -- --agent-policy idm --traffic live --traffic-count 25 --render 3D
 
 ```
 
