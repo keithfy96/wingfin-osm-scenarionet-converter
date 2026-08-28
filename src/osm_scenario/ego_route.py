@@ -304,6 +304,20 @@ BOX_SIDEWAYS_MAX_M = 6.0
 # place.
 BOX_GUIDE_SPACING_M = 4.0
 
+# A junction turn whose exit sits more than this far off the approach line crosses the
+# junction diagonally, and its trim is capped below. Everything the cap must catch measures
+# 3.3-8.3 m of sideways step; an exit lane offset only by lane geometry measures under 2.
+TURN_SIDEWAYS_MAX_M = 2.0
+
+# How much road a wide diagonal crossing may take per side, as a fraction of the junction
+# gap it spans. Swept at 0.2/0.25/0.3/0.4/0.5/0.6/0.75 over both extracts' traffic pairs:
+# wrong-way metres fall monotonically (119 m at 0.6, 41 at 0.5, 12 at 0.4, 10 at 0.3) but so
+# do the capped turns' radii, and below 0.4 `mosque`'s tightest capped turn drops from 1.70 m
+# to 1.25 m - folds forming - for 2 m of wrong-way bought. 0.4 keeps every capped right turn
+# at 4.9-10.5 m of radius, no route tighter than before, and nothing refused on either
+# extract.
+TURN_TRIM_SPANS = 0.4
+
 # How far short of a light's stop line the recorded car comes to rest. MetaDrive builds a
 # 0.25 m invisible wall across the lane at the stop point and flips its collision mask with
 # the colour, so a car recorded *on* the line is recorded inside the wall - harmless under
@@ -583,6 +597,18 @@ def _turn(
     # lanes whatever the cut lengths are, so making them equal only throws away room on the
     # side that has it - and it is the side that has none that produces the fold.
     wanted = _wanted_trim(angle=angle, sideways=sideways)
+    if crossing and sideways > TURN_SIDEWAYS_MAX_M:
+        # **A wide diagonal crossing must not borrow the room it wants from the roads either
+        # side of the junction.** `_wanted_trim` asks ~9 m per side for a right-angle turn,
+        # and where the exit sits 6-8 m off the approach line the junction is crossed
+        # diagonally: cut 9 m back into each road, the arc starts drifting across long before
+        # the junction - on the wrong side of the carriageway, because in left-hand traffic
+        # the inside of a right turn is the oncoming corner of both roads, and the inside of
+        # a left turn is the kerb corner. Measured on `junction-1`'s sixty traffic routes,
+        # six such turns carried 273 of the 285 m driven against oncoming lanes and all 84 m
+        # drawn off the road. Capped by the junction's own span those read 12 m and zero.
+        # See `TURN_TRIM_SPANS`.
+        wanted = min(wanted, TURN_TRIM_SPANS * gap)
     leaving_length = _length_of(leaving)
     trim_in = min(wanted, _spare(_length_of(arriving)))
     trim_out = min(wanted, _spare(leaving_length), max(0.0, leaving_length - reserve))

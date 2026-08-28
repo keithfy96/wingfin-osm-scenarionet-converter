@@ -294,12 +294,16 @@ def test_a_junction_turn_is_wide_enough_to_drive() -> None:
     """A 90° turn through 1.8 m of radius is tighter than a car can physically turn.
 
     That is what the connector marker asked for: 2.81 m of path at the median for the whole
-    turn. The radius here is chosen so the turn can be taken at a sensible speed, and the
-    speed profile then works out what that speed is.
+    turn. The turn is widened past what the marker drew - but not without limit. It used to
+    be, and the room was borrowed from the roads either side of the junction: this fixture's
+    exact shape on `mosque` (turn +94.0°, gap 4.26 m, sideways 3.11 m, lane `02462c6a`) drew
+    a ~9 m-radius sweep that put 17 m of the drive line off the mapped road. The bound that
+    matters is the car's own steering lock, 2.9424 m (wheelbase 2.469 / tan 40°), with room
+    to spare - not a comfort radius the junction does not have space for.
     """
     model = _corner()
     line = route_polyline(model=model, route_lanes=("n", "e"), lane_changes=())
-    assert _tightest_radius_m(line) > 5.0
+    assert _tightest_radius_m(line) > 1.2 * 2.9424
 
 
 def test_a_connector_that_retraces_its_approach_is_not_driven() -> None:
@@ -925,8 +929,14 @@ def test_the_drivability_gate_reads_the_same_at_either_rate() -> None:
     # At the default rate the window is one step, so this is the number the gate has always
     # printed - and the faster recording of the same drive has to agree with it.
     assert worst_swing(slow, TIME_STEP_S) < 30.0
+    # Relative, not absolute: at 10 Hz the 0.1 s window is one step and sits where the steps
+    # fall, while at 100 Hz it slides in tenths and finds the honest worst alignment - so the
+    # fast reading runs a shade over the slow one, by more degrees the more the drive turns
+    # per window. The corner here reads 5.9/7.0 since junction turns stopped borrowing trim
+    # past the junction span; the property pinned is that the windowed rule agrees with
+    # itself across rates where the per-step rule (below) does not.
     assert worst_swing(fast, TIME_STEP_S / 10.0) == pytest.approx(
-        worst_swing(slow, TIME_STEP_S), abs=0.5
+        worst_swing(slow, TIME_STEP_S), rel=0.25
     )
 
     # And the per-step reading, which is what a naive gate would use, disagrees with itself:
