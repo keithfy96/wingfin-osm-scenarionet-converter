@@ -72,8 +72,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # `policy_client` imports only the standard library and `geodesy` at module level, and reaches
 # for MetaDrive lazily inside the one function that needs it.
 from frame_gate import install as install_frame_gate  # noqa: E402
+from idm_driving import windowed_policy_class  # noqa: E402
 from policy_client import HEAVY_SENSORS as HEAVY_POLICY_SENSORS  # noqa: E402
 from policy_client import SENSORS as POLICY_SENSORS  # noqa: E402
+from speed_profile import profile_speeds, speed_at  # noqa: E402
 
 # Both ends of the range `base_env` accepts: it asserts the value is a power of two within
 # these bounds before handing it to `TerrainProperty`.
@@ -121,6 +123,16 @@ HEIGHT_SCALE = 1
 # replayed car, which is on the route by construction, and a real limit for anything that steers
 # itself: the IDM ego reaches a measured 4.26 m, and a human takes a different turn on purpose.
 MAX_LATERAL_DIST_M = 4.0
+
+# How much of its target speed a car regulating to one actually holds, used only to size the
+# step budget for `--agent-policy idm`. IDM has no integral: `acceleration` is
+# `1 - (v/target)^DELTA`, which is zero *at* the target, so the car settles wherever a small
+# positive command balances drag - and MetaDrive applies `setBrake(2.0)` on all four wheels
+# even at full throttle (`base_vehicle.py:498`). Measured on `junction-1`, 1044 steps to
+# `arrive_dest`: mean target 39.7 km/h against a mean actual 35.9, a ratio of 0.906, median
+# deficit 2.2 km/h. 0.85 is that with room, and it is a *budget* figure - it bounds how long
+# the run may take and changes nothing about how the car drives.
+IDM_TRACKING_RATIO = 0.85
 
 
 def _default_traffic_file(dataset: str) -> str:
@@ -347,6 +359,77 @@ def _refuse_mismatch(scenario, *, policy, lights, sim_dt, data_dt):
             f"env.step, and {rates}.\n             {fix}"
         )
     return ""
+
+
+class _EgoPace:
+    """Hands the IDM ego the speed its own route allows, and reads back what it asked for.
+
+    `--agent-policy idm` was getting MetaDrive's stock `TrajectoryIDMPolicy`, whose
+    `target_speed` is set once in `__init__` to `NORMAL_SPEED` - a flat 40 km/h - and never
+    written again, because `TrajectoryIDMPolicy.act` does not call `lane_change_policy`.
+    Nothing anywhere in `metadrive/policy/` slows a car for a corner: `acceleration` reads
+    `target_speed`, the car's speed and the gap to the car in front, and that is the whole
+    longitudinal law. So the ego arrived at every junction turn doing 40 and left the road -
+    measured before this existed as `out_of_road` at 4.26 m lateral against a 4 m limit.
+
+    This is the ego's half of what `tools/traffic.py:before_step` already does for every
+    traffic car. The geometry is the policy's own windowed route arrays, so the speed and the
+    steering are read off exactly the same line.
+    """
+
+    def __init__(self, cruise_mps: float) -> None:
+        self.cruise_mps = cruise_mps
+        self.slowest_kph = float("inf")
+        self.duration_s = 0.0
+        self._policy = None
+        self._travelled = None
+        self._speed = None
+
+    def start_episode(self, env, policy=None) -> None:
+        """`policy` for a caller driving from outside the engine - see `agent_env.IdmDriver`,
+        which holds its own instance of the same class so the action really is what moves the
+        car. Left to the engine's own ego policy otherwise."""
+        self._policy = policy if policy is not None else env.engine.get_policy(env.agent.name)
+        self.slowest_kph = float("inf")
+        route, _arc = self._policy._route_arrays()
+        self._travelled, self._speed = profile_speeds(route, cruise_mps=self.cruise_mps)
+        # How long this car's own drive takes, which is not how long the recording takes.
+        # The tape is built at `ego_route.LATERAL_ACCEL_MPS2` 8.5, which works for a car whose
+        # positions are set directly; anything that has to *steer* to them gets 4.0, and a
+        # gentler corner is a longer drive. Sizing the step budget on the recording instead
+        # cuts the run off partway - measured on `junction-1`, at 85% of the route.
+        steps = self._travelled[1:] - self._travelled[:-1]
+        pace = (self._speed[1:] + self._speed[:-1]) / 2.0
+        self.duration_s = float((steps / pace).sum())
+
+    def before_step(self, env) -> None:
+        """Set the target *before* the step, because `act` reads it during the step.
+
+        `route_coordinates` is called here and again inside `steering_control` a moment
+        later, with the car in the same place both times - the window is centred on the
+        progress this call leaves behind, still contains the same nearest vertex, and returns
+        the same `along`. Reading `_progress` from the previous step instead would be a step
+        stale into a corner, which is the fault the traffic profile is pinned against.
+        """
+        along, _lateral = self._policy.route_coordinates(env.agent.position)
+        target_kph = 3.6 * speed_at(self._travelled, self._speed, along)
+        self._policy.target_speed = target_kph
+        self.slowest_kph = min(self.slowest_kph, target_kph)
+
+
+def _recorded_cruise_mps(scenario) -> float:
+    """The fastest the recorded car goes, which is the posted limit the drive was built for.
+
+    Read off the tape rather than configured: `convert --speed-kph` may already have
+    overridden the road's own limit, and a second knob here could disagree with it.
+    """
+    sdc = (scenario.get("metadata") or {}).get("sdc_id")
+    track = ((scenario.get("tracks") or {}).get(sdc) or {}).get("state") or {}
+    velocity = track.get("velocity")
+    if velocity is None or not len(velocity):
+        return 40.0 / 3.6
+    fastest = float(max(math.hypot(float(v[0]), float(v[1])) for v in velocity))
+    return fastest if fastest > 1.0 else 40.0 / 3.6
 
 
 def _baked_stops(scenario) -> list[dict]:
@@ -1488,7 +1571,6 @@ def main() -> int:
     from metadrive.component.sensors.rgb_camera import RGBCamera
     from metadrive.envs.scenario_env import ScenarioEnv
     from metadrive.policy.env_input_policy import EnvInputPolicy
-    from metadrive.policy.idm_policy import TrajectoryIDMPolicy
     from metadrive.policy.replay_policy import ReplayEgoCarPolicy
     from metadrive.scenario.utils import get_number_of_scenarios
 
@@ -1512,7 +1594,13 @@ def main() -> int:
     # a wrong answer waiting for one.
     policy = {
         "replay": ReplayEgoCarPolicy,
-        "idm": TrajectoryIDMPolicy,
+        # `windowed_policy_class` rather than MetaDrive's own, and the difference is the
+        # whole of `docs/reference/live-traffic.md`: the stock class projects the car onto
+        # the *whole* route every step, winds up a heading integral it never resets, and
+        # latches one saturated pedal for four steps in five. A subclass is a drop-in -
+        # `agent_manager.py:49` tests `issubclass(..., TrajectoryIDMPolicy)` before it
+        # hands over `current_sdc_route`.
+        "idm": windowed_policy_class(),
         "manual": EnvInputPolicy,
         # The same class as `manual`, and that is the fact rather than a shortcut:
         # `ManualControlPolicy` subclasses `EnvInputPolicy` (`manual_control_policy.py:37`),
@@ -1911,6 +1999,8 @@ def main() -> int:
             flush=True,
         ),
     )
+    # Built on the first reset, once the scenario is loaded and the ego's route exists.
+    pace = None
     try:
         closing.install()
         for index in indices:
@@ -1969,6 +2059,11 @@ def main() -> int:
             length = env.engine.data_manager.current_scenario_length
             scenario = env.engine.data_manager.current_scenario
             scenario_id = scenario["id"]
+            if arguments.agent_policy == "idm":
+                # Per episode: the policy object is rebuilt on every reset, and so is the
+                # route it follows. The cruise speed is read off this scenario's own tape.
+                pace = _EgoPace(_recorded_cruise_mps(scenario))
+                pace.start_episode(env)
             # The two clocks. `sim_dt` is how far one `env.step` advances the simulator;
             # `data_dt` is how far one recorded frame covers. Equal only when the dataset was
             # converted at the rate this run is driving at, which is what `_refuse_mismatch`
@@ -2035,7 +2130,17 @@ def main() -> int:
                     0.0 if arguments.agent_policy == "replay" else _longest_red(scenario)
                 )
                 allowance = int(round(allowance_s / sim_dt))
-                budget = int(round(length * data_dt / sim_dt)) + allowance
+                # The longer of the two drives, never the shorter: the recording is the
+                # right bound for a replayed car, and a paced IDM one takes as long as its
+                # own speed profile says it does - divided by how much of that profile a
+                # regulator actually holds. Measured on `junction-1` before this: the ego
+                # drove the whole route and reached `arrive_dest` in 1044 steps, and was cut
+                # off at the recording's 960 and reported as "did not arrive" at 85% of the
+                # route. See `_EgoPace.duration_s` and `IDM_TRACKING_RATIO`.
+                seconds = length * data_dt
+                if pace is not None:
+                    seconds = max(seconds, pace.duration_s / IDM_TRACKING_RATIO)
+                budget = int(round(seconds / sim_dt)) + allowance
 
             # A baked stop is computed against the plan's written offsets, so it is right
             # under `--lights tape` and wrong under `--lights live`, which draws a fresh
@@ -2109,6 +2214,8 @@ def main() -> int:
                         remote.extra["modelv2"] = model.modelv2_rows(prediction)
                 if deciding and remote is not None:
                     action = remote(observation)
+                if pace is not None:
+                    pace.before_step(env)
                 observation, _, terminated, truncated, info = env.step(action)
                 if recorder is not None:
                     # The observation that *produced* the action, paired with the action the
@@ -2279,6 +2386,15 @@ def main() -> int:
                 if not closing.asked and arguments.agent_policy not in ("manual", "remote"):
                     failures += 1
 
+            if pace is not None:
+                # The two numbers that say whether the ego was ever asked to drive its
+                # own corners: without this it is handed a flat 40 km/h everywhere, which
+                # is faster than most of a junction map allows.
+                print(
+                    f"             ego paced to its route: cruise "
+                    f"{pace.cruise_mps * 3.6:.1f} km/h, slowest corner asked for "
+                    f"{pace.slowest_kph:.1f} km/h"
+                )
             cars = getattr(env.engine, "live_traffic_manager", None)
             if cars is not None:
                 print(

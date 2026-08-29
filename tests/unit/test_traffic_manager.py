@@ -450,7 +450,9 @@ def test_the_traffic_policy_heading_pid_has_no_integral() -> None:
     while barely moving; the wound-up integral then stands as a steering bias that the
     lateral term can only balance metres off the line - measured: cars settling 2.5-4.9 m
     beside their own route for 20-30 s, reading their lateral correctly the whole time."""
-    source = (REPO / "tools" / "traffic.py").read_text(encoding="utf-8")
+    # The class moved to `idm_driving` when the ego was put on the same policy; the
+    # assertion is unchanged, because the reason for it is.
+    source = (REPO / "tools" / "idm_driving.py").read_text(encoding="utf-8")
     policy = next(
         node
         for node in ast.walk(ast.parse(source))

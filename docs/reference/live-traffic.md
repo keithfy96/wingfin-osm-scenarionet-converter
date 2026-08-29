@@ -349,3 +349,128 @@ Two traps for anyone tuning this:
 - **The 1 m fixed preview is not the villain.** At profile speeds it tracks the tightest
   drawn bends solo to 0.25 m; the failures above are the projection's and the integral's,
   and both show only under interaction (queues, give-way stops, nudges).
+
+## The start-stop, and the ego finally driving the same policy (2026-08-28)
+
+Keith: *"when i try to drive with the idm policy, it also goes out of bounds because the car
+drives too fast and can't make a turn ... the other vehicles have to repeatedly start and stop
+to make a sharp turn ... why can't a vehicle just move slower to make the turn, rather than
+start and stop, that feels more natural?"*
+
+Two separate faults, and the second one is the interesting one.
+
+### 1. The ego was never on any of this
+
+`--agent-policy idm` handed the ego MetaDrive's **stock** `TrajectoryIDMPolicy`, and nothing
+in this repo ever wrote `policy.target_speed` for it. Every fix above - the curvature speed
+profile, the windowed reference, the zero-integral heading PID - lived inside
+`build_manager()` in `tools/traffic.py` and reached traffic cars only. So the ego arrived at
+every junction turn doing a flat 40 km/h and left the road, exactly as the traffic did before
+the profile existed. `SWEEP_MAX_LATERAL_M = 20.0` in `tools/step_timing.py` is a workaround
+for this same fault, written before it was understood ("the IDM rows ended `out_of_road` at
+step 44 with 24 steps measured"), and that is the identical number this run reproduced.
+
+The policy moved to `tools/idm_driving.py` behind `windowed_policy_class()`, and `drive.py`,
+`agent_env.IdmDriver` and `traffic.py` all take it from there. `tools/speed_profile.py` is a
+pure-numpy port of `ego_route.speed_profile` - `tools/` cannot import the package - and
+`tests/unit/test_speed_profile.py` asserts the two agree on real geometry so they cannot
+drift. `drive._EgoPace` writes `target_speed` before every `env.step`, off the policy's own
+windowed route arrays, so the ego's speed and its steering read the same line.
+
+| `--agent-policy idm`, `--render none` | before | after |
+|---|---|---|
+| `junction-1` | `out_of_road`, lateral **4.14 m** against 4 m; 114 of 960 steps, completion 0.112, FAILED | **`arrive_dest`**, 1044 of 1116 steps, completion 0.950, OK |
+| `mosque` | `out_of_road`, lateral **4.10 m**; 44 of 418 steps, completion 0.099, FAILED | **`arrive_dest`**, 440 of 474 steps, completion 0.950, OK |
+
+**The step budget had to move with it, and that is not a fudge.** `budget` was the
+recording's length, which is the right bound for a replayed car and the wrong one for a car
+that paces itself: the profile is built at `TRAFFIC_LATERAL_ACCEL_MPS2` 4.0 where the tape is
+built at 8.5. Measured: the ego drove the *whole* `junction-1` route to `arrive_dest` in 1044
+steps and was being cut off at 960 and reported as "did not arrive" at 85% of it. The budget
+is now `_EgoPace.duration_s / IDM_TRACKING_RATIO`, and the ratio is measured rather than
+chosen - IDM has no integral, `1 - (v/target)^DELTA` is zero *at* the target, and
+`base_vehicle.py:498` applies `setBrake(2.0)` on all four wheels even at full throttle, so a
+regulator settles below its target: **mean target 39.7 km/h against a mean actual 35.9, ratio
+0.906, median deficit 2.2 km/h** over those 1044 steps. 0.85 is that with room.
+
+### 2. Nothing in the loop was a speed tracker, so "slower" was not available
+
+The profile knew the corner allowed 8 km/h. The controller never tried to *hold* 8.
+
+`IDMPolicy.acceleration` (`idm_policy.py:307`) is `1 - (v/target)^DELTA` and MetaDrive ships
+**`DELTA = 10`**, which is a relay and not a controller: 10% over the target asks for -1.59,
+which the action clamp (`base_vehicle.py:203-208`) makes a full brake, and 10% under asks for
++0.65. There is no proportional band. Then `TrajectoryIDMPolicy.act` returns
+`self.last_action[-1]` on the four steps in five it does not run the front-object search, so
+one saturated pedal is **latched for 0.4 s at 10 Hz** - and full engine force is 4 x 800 N on
+1100 kg, about 2.9 m/s2, so a single latched decision moves the speed by ~5 km/h while the
+profile floor is `MIN_SPEED_MPS` 1.0 m/s = 3.6 km/h. *The correction is larger than the
+target.* Every excursion that drags `speed_in_heading` under `base_vehicle.py`'s 0.01 m/s
+DEADZONE then latches the brake hard until a positive throttle arrives. That is the start-stop,
+and it is structural: at corner speeds the loop cannot settle, only oscillate.
+
+Two changes in `WindowedTrajectoryIDMPolicy`, both minimal and both inside IDM:
+
+- **`DELTA = 4.0`**, which is highway-env's own figure and which MetaDrive still carries as
+  `DELTA_RANGE = [3.5, 4.5]` two lines under the 10 it ships. The same +-10% now asks for
+  -0.46 and +0.34.
+- **`act` staggers the *search*, not the *command*.** What costs is
+  `lidar.get_surrounding_objects` and the lane test in `get_find_front_back_objs_single_lane`,
+  not the arithmetic. The front object is remembered on a speed-control step and
+  `acceleration` is recomputed every step against the live speed and the live distance to it.
+  The distance is planar rather than longitudinal - the chord is within a few per cent inside
+  the 20 m `IDM_MAX_DIST` window and errs short - so the gap term is continuous instead of
+  stepping when the search runs. A cleared front object is forgotten rather than braked for.
+
+`tools/traffic_probe.py` is the harness these were measured with: `drive.py` runs one episode
+per process, so the eight- and twelve-episode tables above were built by hand each time. It
+holds one engine open across episodes, replays the ego, and **defaults `--lost-lateral off`**,
+because `LOST_LATERAL_M` culls exactly the cars that were about to crash.
+
+`junction-1`, 8 episodes of 25, cull off, 306 car-minutes:
+
+| | before | after |
+|---|---|---|
+| **stop-go cycles** | **1593 (5.22 /car-min)** | **105 (0.34)** |
+| collisions | 44 (0.14 /car-min) | **30 (0.10)** |
+| routes completed | 129 | **149** |
+| gave way | 18,122 | **15,497** |
+| mean speed | 18.7 km/h | **21.8 km/h** |
+| worst distance off the road | 25.22 m | **6.84 m** |
+
+`mosque`, 3 episodes of 25: stop-go **200 (4.00 /car-min) -> 2 (0.04)**, routes completed
+11 -> 14, mean speed 20.5 -> 22.9 km/h, collisions 0 -> 1.
+
+**The count of cars that ever touch off-surface does not move, and that was checked rather
+than glossed.** Over four `junction-1` episodes it is 54 before against 58 after - while more
+cars complete more route, so more car-metres are driven - but every measure of *how far* off
+halves: median excursion 0.00 m either way, p90 **1.90 -> 1.02 m**, worst **3.33 -> 1.88 m**,
+excursions past a metre **12 -> 6**. The count is dominated by cars clipping the boundary by
+nothing.
+
+Four things not to re-derive:
+
+- **The cost is not in the arithmetic.** `tools/step_timing.py` row 6 (`--render none`, idm,
+  no camera) measures `policy_ms_median` **0.2438 ms before against 0.2440 after**, and
+  ms/step 1.360 -> 1.344 with the real-time factor 60.7 -> 61.6. Recomputing the free term
+  every step is free; it is the lidar sweep that costs, and that is still staggered.
+- **The gap term's units are still MetaDrive's and still wrong.** `desired_gap`
+  (`idm_policy.py:315-321`) computes `d0 + speed_km_h * TIME_WANTED` and calls the result
+  metres, giving ~40 m of wanted gap at 20 km/h while `IDM_MAX_DIST` only looks 20 m ahead -
+  so the following term still saturates the brake whenever anything is detected, and on a bend
+  the leader's box drifts on and off the follower's polyline. **This is the largest remaining
+  start-stop source in a queue** and was deliberately left, being a change to following
+  distances everywhere. It is also **the one combination that still does not complete**:
+  `--agent-policy idm --traffic live --traffic-count 25` on `junction-1` goes from 114 steps
+  and completion 0.112 (`out_of_road`, 4.14 m) to 1116 steps and completion **0.550** with no
+  departure at all - the ego now stays on the road for the whole run and spends it queueing,
+  because every car that comes within 20 m of it is a full brake. Solo it reaches 0.950. The
+  ego alone in traffic is the case to re-measure if this ever gets fixed.
+- **`DELTA` is not a comfort knob.** It is the exponent of the velocity term, so lowering it
+  widens the proportional band *and* lowers the throttle asked for below target. Raising it
+  back gives the relay straight back.
+- **`speed_limit_kmh` is written and read by nobody.** `conversion.py:622/757/833` puts it in
+  the dataset, `ScenarioLane` loads it onto the lane, and no policy in `metadrive/policy/`
+  consults `lane.speed_limit` - only a tollgate reward does. There is no curvature-aware speed
+  limiting anywhere in MetaDrive. Every corner speed in this repo comes from
+  `speed_profile`.

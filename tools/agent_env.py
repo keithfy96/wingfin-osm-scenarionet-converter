@@ -58,8 +58,10 @@ from drive import (  # noqa: E402
     HEIGHT_SCALE,
     LINE_INTERVAL_M,
     LINE_WIDTH_M,
+    _EgoPace,
     _keep_line_ends,
     _max_texture_dimension,
+    _recorded_cruise_mps,
     _region_for,
     _set_line_width,
     _set_semantic_detail,
@@ -68,6 +70,7 @@ from drive import (  # noqa: E402
     step_config,
 )
 from gpu_frames import to_host  # noqa: E402
+from idm_driving import windowed_policy_class  # noqa: E402
 
 # Re-exported rather than re-derived, so `drive.py`, `sensor_survey.py` and anything built on
 # `make_env` share one definition of the two clocks. `step_config` returns MetaDrive config
@@ -191,19 +194,26 @@ class IdmDriver:
     def __init__(self, env):
         self._env = env
         self._policy = None
+        self._pace = None
 
     def _build(self):
-        from metadrive.policy.idm_policy import TrajectoryIDMPolicy
-
-        # The same three arguments `agent_manager.py:48-50` passes when it builds this policy
-        # itself, `current_sdc_route` included.
-        self._policy = TrajectoryIDMPolicy(
+        # `windowed_policy_class()` and not MetaDrive's own, because `drive.py --agent-policy
+        # idm` drives that one: this class exists to be the *same* drive from outside, and two
+        # different policies would make any difference between them unreadable.
+        self._policy = windowed_policy_class()(
+            # The same three arguments `agent_manager.py:48-50` passes when it builds this
+            # policy itself, `current_sdc_route` included.
             self._env.agent, 0, self._env.engine.map_manager.current_sdc_route
         )
+        # And the same pacing, for the same reason. Without it the ego is handed a flat
+        # 40 km/h everywhere and runs wide of every junction turn.
+        self._pace = _EgoPace(_recorded_cruise_mps(self._env.engine.data_manager.current_scenario))
+        self._pace.start_episode(self._env, policy=self._policy)
 
     def __call__(self, observation=None):
         if self._policy is None or self._policy.control_object is not self._env.agent:
             self._build()
+        self._pace.before_step(self._env)
         # `act`'s first parameter is `do_speed_control`; the agent manager passes the agent id
         # there (`policy.act(agent_id)`), which is a non-empty string and so always true. True
         # is the same thing said honestly.

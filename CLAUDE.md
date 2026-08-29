@@ -396,10 +396,16 @@ These describe *what runs*, and are deliberately distinct from `docs/implementat
   uuid per process, so the run stops being repeatable. Use the spawn ordinal.
 - **`LOST_LATERAL_M` confounds any collision measurement** taken with it on: it culls
   exactly the cars that were about to crash. Isolate it before comparing anything.
-- **Traffic cars steer by `WindowedTrajectoryIDMPolicy`, not the stock policy.** The stock
-  whole-line projection is captured by a U-turn route's parallel leg and the stock heading
-  PID winds up its integral in queues - both put cars on the median for 20+ s. Do not
-  "simplify" it back.
+- **Every car here drives `idm_driving.windowed_policy_class()`, never MetaDrive's stock
+  policy** — traffic and the `--agent-policy idm` ego alike, and the ego not being on it is
+  what drove it off the road at every junction turn. Four differences, each measured:
+  windowed reference, zero-integral heading PID, `DELTA` 4 rather than 10, and a
+  front-object search that is staggered while the command is not. Do not "simplify" any of
+  them back.
+- **Nothing in MetaDrive slows a car for a corner** — no policy reads `lane.speed_limit` and
+  there is no curvature term anywhere in `metadrive/policy/`. Every corner speed comes from
+  `speed_profile`, written into `target_speed` from outside; `tools/`' copy of it is a port
+  of the package's, pinned by a test because `tools/` cannot import the package.
 
 ### Lane markings and road surfaces at export
 → `docs/reference/lane-markings-and-surfaces.md`

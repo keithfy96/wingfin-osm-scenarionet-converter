@@ -287,7 +287,24 @@ assert the same numbers on purpose.
 ego (`agent_manager.py:49` hands it `current_sdc_route`) and which inherits
 `IDMPolicy`'s light check. `ReplayEgoCarPolicy` sets position directly and drives
 through anything. Measured on `junction-1` with a light on the route: the ego stops
-**5.7 m short** of the red and moves off when it goes green. It also ends early with
-`out_of_road` at 4.26 m lateral against `max_lateral_dist=4` — the IDM's lateral
-controller losing the reference line, which says nothing about the data and does not
-happen under replay.
+**5.7 m short** of the red and moves off when it goes green.
+
+**It used to end early with `out_of_road`, and that was ours rather than MetaDrive's**
+(fixed 2026-08-28). Measured at 4.26 m lateral against `max_lateral_dist=4`, and again
+at 4.14 m on a later model, 114 of 960 steps. The cause was not the lateral controller:
+`--agent-policy idm` was handed MetaDrive's **stock** `TrajectoryIDMPolicy`, whose
+`target_speed` is written once in `__init__` to a flat 40 km/h and never again — while
+23% of `junction-1`'s own drive line allows less than that on curvature alone, and every
+one of the three fixes that already existed for traffic (the speed profile, the windowed
+reference, the zero-integral heading PID) lived inside `tools/traffic.py` where the ego
+could not reach them. It now drives `windowed_policy_class()` and is paced by
+`drive._EgoPace` off its own route: **`arrive_dest`, 1044 of 1116 steps, completion
+0.950** on `junction-1`, and 440 of 474 on `mosque`. The whole account, both maps and
+the traffic half of it, is in `docs/reference/live-traffic.md`.
+
+**A car that paces itself needs a bigger step budget than the recording has**, and that
+is not slack: the tape is built at `LATERAL_ACCEL_MPS2` 8.5, which works because a
+replayed car's positions are set directly and nothing has to steer to them, while
+anything that steers gets 4.0. `budget` for `idm` is now `_EgoPace.duration_s /
+IDM_TRACKING_RATIO` rather than the recording's length — see `drive.IDM_TRACKING_RATIO`
+for why a regulator with no integral sits 9% under its own target.

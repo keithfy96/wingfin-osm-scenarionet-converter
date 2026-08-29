@@ -42,6 +42,10 @@ import random
 
 import numpy as np
 
+# `_window_reference` is re-exported: it moved to `idm_driving` with the policy that
+# uses it, and `tests/unit/test_traffic_manager.py` pins its sign convention from here.
+from idm_driving import _window_reference, windowed_policy_class  # noqa: F401
+
 TRAFFIC_VERSION = 2
 
 DEFAULT_COUNT = 25
@@ -286,40 +290,6 @@ def _yield_brake(speed, distance_to_conflict):
     return -min(1.0, (speed * speed) / (2.0 * room) / YIELD_BRAKE_MPS2)
 
 
-def _window_reference(xy, cumulative, progress, position, back_m, ahead_m):
-    """(along, lateral, new_progress) of `position` against the windowed route reference.
-
-    The window is `[progress - back_m, progress + ahead_m]` of arc, so the reference can
-    advance along the route but can neither jump a hairpin nor fall onto a parallel leg -
-    which the whole-line projection does: 20 of `junction-1`'s routes cross the median gap
-    and run back down the opposite carriageway ~8 m away, and a car displaced a couple of
-    metres was captured by the wrong leg and drove the median for 20+ s, unculled, because
-    the lost test read the same projection. Lateral is positive to the RIGHT of travel,
-    matching `InterpolatingLine.local_coordinates` (its lateral direction is the -90 deg
-    rotation of the segment), so `steering_control`'s `-lateral` keeps its sign.
-    """
-    p = np.asarray(position[:2], dtype=float)
-    lo = max(int(np.searchsorted(cumulative, progress - back_m)) - 1, 0)
-    hi = min(int(np.searchsorted(cumulative, progress + ahead_m)) + 1, len(xy) - 1)
-    window = xy[lo:hi + 1]
-    offsets = window - p
-    j = lo + int(np.argmin(np.einsum("ij,ij->i", offsets, offsets)))
-    a = xy[max(j - 1, 0)]
-    b = xy[min(j + 1, len(xy) - 1)]
-    direction = b - a
-    length = float(math.hypot(direction[0], direction[1]))
-    if length < 1e-9:
-        return progress, 0.0, progress
-    direction = direction / length
-    offset = p - xy[j]
-    along = float(cumulative[j] + direction[0] * offset[0] + direction[1] * offset[1])
-    lateral = float(offset[0] * direction[1] - offset[1] * direction[0])
-    # Monotone but for a metre of slack: a car nudged backwards must not drag the window
-    # with it far enough to reach anything but its own road.
-    new_progress = float(np.clip(along, progress - 1.0, progress + ahead_m))
-    return along, lateral, new_progress
-
-
 def build_manager(plan, count=DEFAULT_COUNT, seed=0, give_way=True, follow_speed_profile=True):
     """A `BaseManager` subclass that keeps `count` cars on the roads in `plan`.
 
@@ -331,66 +301,13 @@ def build_manager(plan, count=DEFAULT_COUNT, seed=0, give_way=True, follow_speed
     from metadrive.manager.base_manager import BaseManager
     from metadrive.manager.scenario_traffic_manager import ScenarioTrafficManager
     from metadrive.policy.idm_policy import TrajectoryIDMPolicy
-    from metadrive.utils.math import wrap_to_pi
 
-    class WindowedTrajectoryIDMPolicy(TrajectoryIDMPolicy):
-        """`TrajectoryIDMPolicy` whose reference point can only move along the route.
-
-        The stock policy projects the car onto the WHOLE trajectory every step
-        (`InterpolatingLine.local_coordinates`), and 20 of `junction-1`'s 60 traffic routes
-        cross the median gap at (-65, 73) and then run back down the parallel carriageway
-        ~8 m away. A car displaced a couple of metres sideways - a give-way stop, a nudge,
-        the crossover turn itself - is then captured by the *other* leg: the projection
-        reads a small lateral against the wrong piece of road, the heading target flips,
-        and the car settles into driving the median grass or the oncoming carriageway.
-        Indefinitely: the lost-car test reads the same projection, so it never fires.
-        Measured on three recorded 25-car episodes: single cars 20+ s off the road at
-        (-64, 23) and (-58, -52), 2.2-3.0 m from their own line, entering at 14-31 km/h.
-        Driven solo with the reference windowed, the same routes track their tightest
-        bends - 2.4 and 3.3 m of radius - to 0.25 m.
-
-        The reference is the nearest route point within `BACK_M` behind and `AHEAD_M`
-        ahead of the last reference, and progress is clamped to that window, so it can
-        neither jump a hairpin nor fall onto a parallel leg. `steering_control` is
-        otherwise the stock arithmetic - same PIDs, same 1 m lookahead.
-        """
-
-        BACK_M = 5.0
-        AHEAD_M = 12.0
-
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            # Same gains, no integral. `PIDController` accumulates `i_error` forever and
-            # never resets it, and a car creeping through a tight hook at 1-3 km/h holds a
-            # heading error for hundreds of steps while barely moving - the integral winds
-            # up into a standing steering bias that the lateral term (kp 0.3, no integral of
-            # its own) can only balance at a constant offset. Measured: cars settling 2.5-4.9 m
-            # beside their own line for 20-30 s, lateral read correctly the whole time.
-            from metadrive.component.vehicle.PID_controller import PIDController
-
-            self.heading_pid = PIDController(1.2, 0.0, 3.5)
-
-        def prime(self, xy, cumulative, start_arc):
-            """Give the policy its route as arrays, and tell it where the car starts."""
-            self._route_xy = xy
-            self._route_arc = cumulative
-            self._progress = float(start_arc)
-
-        def route_coordinates(self, position):
-            """(along, lateral) against the windowed reference. See `_window_reference`."""
-            along, lateral, self._progress = _window_reference(
-                self._route_xy, self._route_arc, self._progress, position,
-                self.BACK_M, self.AHEAD_M,
-            )
-            return along, lateral
-
-        def steering_control(self, target_lane) -> float:
-            ego = self.control_object
-            along, lateral = self.route_coordinates(ego.position)
-            lane_heading = target_lane.heading_theta_at(along + 1)
-            steering = self.heading_pid.get_result(-wrap_to_pi(lane_heading - ego.heading_theta))
-            steering += self.lateral_pid.get_result(-lateral)
-            return float(steering)
+    # The policy itself lives in `idm_driving` because the ego needs the same one:
+    # `--agent-policy idm` was getting MetaDrive's stock `TrajectoryIDMPolicy`, which is
+    # a different car - flat 40 km/h, the whole-line projection, and a heading PID that
+    # winds up. A factory rather than a module-level class for the same reason the
+    # imports above are in here: this file must be readable without panda3d.
+    WindowedTrajectoryIDMPolicy = windowed_policy_class()
 
     # In the file's frame. The simulator's frame is this one moved by the ego's start
     # position, and `after_reset` is where that is applied - see `_episode_shift`.
