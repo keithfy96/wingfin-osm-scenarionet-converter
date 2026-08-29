@@ -1,0 +1,42 @@
+{
+  "signals_version": 1,
+  "identity": {
+    "generation_fingerprint": "57dcd345d17e5a862f9f38c97916fefe1799873c72b1e280407bb69b2e1da42c",
+    "reviewed_lane_model_sha256": "fc205bca2305a0cc3cb68e7a7ee83b5c8d8a200622d6a1749dde0b258cab65fb"
+  },
+  "cycle_seconds": 60,
+  "groups": [
+    {
+      "name": "phase-a",
+      "lanes": [
+        "9f83d567b07605dc",
+        "bf35774542bb44d6",
+        "d20282ae0fe3c37e"
+      ],
+      "green_seconds": 27,
+      "yellow_seconds": 3,
+      "offset_seconds": 0
+    },
+    {
+      "name": "phase-b",
+      "lanes": [
+        "0b0e7cdbfeb471c7",
+        "c388e30ffb2cf461",
+        "7c442504fa5d1766"
+      ],
+      "green_seconds": 27,
+      "yellow_seconds": 3,
+      "offset_seconds": 30
+    },
+    {
+      "name": "phase-c",
+      "lanes": [
+        "027a3ef89e3e7b88",
+        "1831f85bcfe6bd84"
+      ],
+      "green_seconds": 27,
+      "yellow_seconds": 3,
+      "offset_seconds": 40
+    }
+  ]
+}

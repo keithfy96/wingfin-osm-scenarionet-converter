@@ -12,6 +12,7 @@
 import { findConflicts, type Conflict } from "./conflicts.js";
 import { colourAt, phaseStripCss } from "./phase.js";
 import { nameProblem, parseSignals, SignalsFileError, serializeSignals, timingProblem } from "./plan-file.js";
+import { stopMarkerStyle, stopPoint } from "./stop-marker.js";
 import type { PhaseGroup, SignalBuilderPayload, SignalLane } from "./types.js";
 import type { LeafletLayer, LeafletMap } from "../types-dom.js";
 
@@ -82,28 +83,35 @@ function boot(): void {
   // once, which is the only way to see whether two arms are green together.
   let previewSeconds = 0;
 
+  function popupFor(lane: SignalLane): HTMLElement {
+    const box = element("div");
+    box.append(element("div", undefined, lane.label));
+    box.append(element("code", undefined, lane.id));
+    if (surveyedLanes.has(lane.id)) {
+      box.append(
+        element(
+          "p",
+          "caption",
+          "OSM records a traffic signal associated with this lane. It carries no timing.",
+        ),
+      );
+    }
+    return box;
+  }
+
   const layers = new Map<string, LeafletLayer>();
   for (const lane of payload.lanes) {
     const line = L.polyline(lane.line, { ...IDLE, renderer });
     line.on("click", () => pick(lane));
-    line.bindPopup?.(() => {
-      const box = element("div");
-      box.append(element("div", undefined, lane.label));
-      box.append(element("code", undefined, lane.id));
-      if (surveyedLanes.has(lane.id)) {
-        box.append(
-          element(
-            "p",
-            "caption",
-            "OSM records a traffic signal associated with this lane. It carries no timing.",
-          ),
-        );
-      }
-      return box;
-    });
+    line.bindPopup?.(() => popupFor(lane));
     line.addTo(map);
     layers.set(lane.id, line);
   }
+
+  // One dot per signalled lane, at the point the wall actually goes. Kept in step with the
+  // groups rather than built once: a dot on every lane in the payload would be noise on the
+  // one view whose job is comparing two arms at a single moment in the cycle.
+  const stopMarkers = new Map<string, LeafletLayer>();
 
   // --- panel ------------------------------------------------------------------------
   const status = element("p", "verdict");
@@ -176,6 +184,48 @@ function boot(): void {
 
   function redraw(): void {
     for (const [laneId, layer] of layers) layer.setStyle?.({ ...styleFor(laneId) });
+    syncStopMarkers();
+  }
+
+  /** Draw, restyle and remove the lights, following the groups.
+   *
+   * The lane is coloured along its whole length because that is what has to be legible from
+   * across the junction; the dot is where the light *is*. MetaDrive builds a 0.25 m wall at
+   * `signal_plan.stop_points` - the lane's downstream end - and nothing on this page said
+   * where that was.
+   */
+  function syncStopMarkers(): void {
+    const drawn = new Set<string>();
+    for (const [index, group] of groups.entries()) {
+      const colour = colourAt(previewSeconds, group, cycleSeconds);
+      for (const laneId of group.lanes) {
+        const lane = byId.get(laneId);
+        const point = lane ? stopPoint(lane) : null;
+        if (!lane || !point) continue;
+        drawn.add(laneId);
+        const style = stopMarkerStyle(colour, index === active);
+        const existing = stopMarkers.get(laneId);
+        if (existing) {
+          existing.setStyle?.(style);
+          existing.bringToFront?.();
+          continue;
+        }
+        const marker = L.circleMarker(point, { ...style, renderer });
+        // The dot sits on top of the line it belongs to, so it has to answer a click the same
+        // way - otherwise the one place you would aim to remove a light is the one place that
+        // cannot.
+        marker.on("click", () => pick(lane));
+        marker.bindPopup?.(() => popupFor(lane));
+        marker.addTo(map);
+        marker.bringToFront?.();
+        stopMarkers.set(laneId, marker);
+      }
+    }
+    for (const [laneId, marker] of stopMarkers) {
+      if (drawn.has(laneId)) continue;
+      marker.remove?.();
+      stopMarkers.delete(laneId);
+    }
   }
 
   function refreshStatus(): void {
@@ -198,7 +248,8 @@ function boot(): void {
     }, ${signalled} in the plan.`;
     detail.textContent =
       "Click a lane to signal it; click it again to take the light away. A light stops " +
-      "traffic leaving the lane, so it sits at that lane's far end.";
+      "traffic leaving the lane, so it sits at that lane's far end - the circle is where " +
+      "the stop line goes.";
   }
 
   function renderConflicts(): void {

@@ -65,6 +65,7 @@ _TEMPLATE = """<!doctype html>
   .verdict{font-size:15px;font-weight:600;padding:6px 10px;border-radius:3px;margin:0 0 4px;background:#d0ebff;color:#1864ab}
   .key{display:flex;align-items:center;gap:8px;margin:3px 0}
   .sw{width:22px;height:0;border-top-width:4px;border-top-style:solid;flex:none}
+  .dot{width:14px;height:14px;border-radius:50%%;border:2px solid #fff;box-shadow:0 0 0 1px #adb5bd;flex:none;margin-left:4px}
   button{padding:6px 10px;font:inherit;cursor:pointer;border:1px solid #ced4da;background:#fff;color:#495057;border-radius:3px}
   button.primary{background:#1c7ed6;border-color:#1c7ed6;color:#fff;width:100%%;margin-bottom:6px}
   button:disabled{opacity:.45;cursor:not-allowed}
@@ -106,6 +107,8 @@ at one moment in the cycle.</p>
 <div class='key'><span class='sw' style='border-top-color:#c92a2a'></span> red</div>
 <div class='key'><span class='sw' style='border-top-color:#7048e8;border-top-style:dashed'></span> a signal OSM records, with no timing</div>
 <div class='key'><span class='sw' style='border-top-color:#343a40'></span> an unsignalled lane</div>
+<div class='key'><span class='dot' style='background:#2f9e44'></span> where the light is - the
+stop line at the lane's downstream end, which is where the converter puts the wall</div>
 <h2>Then run</h2>
 <pre>osm-scenario convert -w %(workspace)s \\
   --config config/default.yaml \\
