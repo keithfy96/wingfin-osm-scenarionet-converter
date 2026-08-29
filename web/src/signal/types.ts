@@ -65,4 +65,35 @@ export interface SignalsFile {
   identity: SignalIdentity;
   cycle_seconds: number;
   groups: PhaseGroup[];
+  /** Where each signalled lane's light was drawn, as [lat, lon].
+   *
+   * Provenance for the browser, and nothing else reads it - `signal_plan.read_signal_plan`
+   * takes only the keys it names, so this rides along in a version 1 file in both
+   * directions. It is what lets a plan loaded onto a later generation of the map report
+   * "this light has moved 4.2 m" rather than only "the map changed"; without it a stale
+   * plan can be checked for lanes that still exist and not for lanes that still sit where
+   * they did. Optional, because every file written before it existed has none.
+   */
+  drawn_at?: Record<string, [number, number]>;
+}
+
+/** One way the file's identity differs from the page's. */
+export interface IdentityProblem {
+  field: string;
+  was: string;
+  now: string;
+  message: string;
+}
+
+/** What a plan would do on *this* map, so a person can decide whether to adopt it. */
+export interface SignalsInspection {
+  plan: { cycleSeconds: number; groups: PhaseGroup[] };
+  identityProblems: IdentityProblem[];
+  missingLanes: { group: string; lane: string }[];
+  movedLanes: { lane: string; metres: number }[];
+  /** Groups every one of whose lanes is gone, so nothing is left to signal. */
+  droppedGroups: string[];
+  /** Whether the file carried `drawn_at`. Without it an empty `movedLanes` means "cannot
+   *  tell", not "nothing moved", and the page must not say the reassuring one. */
+  records: boolean;
 }

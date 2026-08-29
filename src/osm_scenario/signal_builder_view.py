@@ -90,8 +90,11 @@ _TEMPLATE = """<!doctype html>
   .crow.bad .n{color:#c92a2a}
   p.ok{color:#2b8a3e;font-weight:600;margin:0 0 4px}
   p.bad{color:#c92a2a;font-weight:600;margin:0 0 4px}
-  .loadbtn{display:block;font-size:11px;color:#1c7ed6;cursor:pointer;text-decoration:underline}
+  .loadbtn{display:block;text-align:center;padding:6px 10px;font:inherit;cursor:pointer;border:1px solid #1c7ed6;background:#fff;color:#1c7ed6;border-radius:3px}
   .loadbtn input{display:none}
+  .report{border:1px solid #ffc9c9;background:#fff5f5;border-radius:3px;padding:8px;margin:8px 0}
+  .report .row{margin-top:8px}
+  .warn{color:#e8590c}
 </style>
 </head>
 <body>
@@ -117,6 +120,13 @@ stop line at the lane's downstream end, which is where the converter puts the wa
 <p class='caption'>MetaDrive never reads <code>signals.json</code>. The converter expands it into
 one colour per 0.1 s step per lane, which is the only form MetaDrive understands - it has no
 traffic-light controller of its own.</p>
+<h2>Reusing a plan you already drew</h2>
+<p class='caption'>Load one with the button above. A plan drawn on an earlier generation of this
+map is not refused outright: the page says which lanes are gone and which lights have moved, and
+takes it only if you say so. Downloading afterwards re-stamps it for this map, which is what
+<code>convert --signals</code> checks. The fingerprint moves on <em>every</em> Stage 1 rerun, even
+over an unchanged <code>map.osm</code>, so a plan usually needs re-stamping rather than
+redrawing.</p>
 <h2>The timing is yours, and says so</h2>
 <p class='caption'>OSM records that a signal exists and nothing about how it runs. Every number
 here is one you chose, and the dataset marks the plan <code>synthesised</code> so it can never be

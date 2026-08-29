@@ -308,3 +308,52 @@ replayed car's positions are set directly and nothing has to steer to them, whil
 anything that steers gets 4.0. `budget` for `idm` is now `_EgoPace.duration_s /
 IDM_TRACKING_RATIO` rather than the recording's length — see `drive.IDM_TRACKING_RATIO`
 for why a regulator with no integral sits 9% under its own target.
+
+### Reusing a signal plan: the fingerprint moves far more often than the map does (2026-08-30)
+
+`signals.json` carries an identity block, and both the page and `read_signal_plan` refused a
+plan whose `generation_fingerprint` or `reviewed_lane_model_sha256` had moved. **That refusal
+fires routinely for reasons that have nothing to do with the map changing.** A full Stage 1→3
+run mints a new fingerprint even over a byte-identical `source/map.osm`, because osmnx stamps a
+build timestamp into `road-network-local.graphml` and that checksum is a fingerprint input — the
+same mechanism that invalidates a Stage 3 review, recorded in `CLAUDE.md` under `--skip-fetch`.
+So the page demanded every light be placed again after a rebuild that changed nothing.
+
+**The hazard the check exists for is real and the check has not been weakened.** A lane id is
+`deterministic_id("lane", *way_ids, u, v, key, lane_index)` (`generation.py:2996`) and carries
+**no `lane_count` and no geometry**. A re-review that turns a two-lane road into three keeps
+`idx0` and `idx1` under the same ids while moving them across the carriageway, so a stale plan
+can put a red light across a lane nobody signalled — and nothing downstream says so, because
+MetaDrive's `skip_missing_light` defaults to True and a light that *resolves* is never
+questioned.
+
+What changed is only who decides:
+
+- **`parseSignals` still throws, unchanged**, and `read_signal_plan` is untouched. The six
+  existing assertions in `web/test/signal/plan-file.test.ts` pass verbatim, which is the
+  evidence the strict path was not loosened.
+- **`inspectSignals` is the new path the page calls.** It splits the identity check off the
+  structural one and reports: which identity fields differ, which named lanes are gone, which
+  groups lost every lane, and which lights have moved. What is fatal on *any* map — unreadable
+  JSON, an unread `signals_version`, a group with no name, one lane in two groups, a green
+  longer than the cycle — still throws and is never adoptable.
+- **A plan that belongs to this map loads on one click with no report**, exactly as before.
+- **Adopting a reported plan is a second, explicit click**, and leaves a standing warning until
+  the next download. The download re-stamps the file with *this* map's identity, which is what
+  makes `convert --signals` accept it. **That round trip is the whole design**: the page is
+  where the judgement is made, the converter is where it is enforced, and the converter's
+  guarantee is unchanged.
+
+**`drawn_at` is what makes the report worth reading.** `serializeSignals` now writes, per
+signalled lane, the point its light was drawn at — the same `line[-1]` the stop marker sits on.
+Measured on `junction-1`: the recorded points and `signal_plan.stop_points` agree to **0.000000 m**
+across all 8 lights, because both are `centerline[-1]` and the payload's `line` is that
+centreline vertex-for-vertex. Without it an empty `movedLanes` means "cannot tell", not "nothing
+moved", so `SignalsInspection.records` exists and the page says the honest one. `MOVED_M` is
+0.5 m, below which the difference is projection wobble rather than a lane in a new place.
+
+**`signals_version` stays 1 on purpose.** `read_signal_plan` and `_read_group` take only the keys
+they name (`signal_plan.py:152`, `:207`), so `drawn_at` rides along in a version 1 file in both
+directions. Bumping the version would have made every plan written before it unreadable by this
+converter — the opposite of the point. Two tests in `tests/unit/test_signal_plan.py` pin that a
+plan carrying it reads identically to one without, and that one without it still reads.

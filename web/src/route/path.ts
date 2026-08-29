@@ -10,7 +10,10 @@
 // lane it leads into, and a lane change costs half that plus a fixed penalty, because a
 // change lands mid-way along the neighbour rather than at its start.
 
+import { metresBetween } from "../geo.js";
 import type { RouteLane } from "./types.js";
+
+export { metresBetween };
 
 /** Matches `ego_route.LANE_CHANGE_COST_M`. */
 export const LANE_CHANGE_COST_M = 5;
@@ -25,23 +28,6 @@ export interface FoundRoute {
   lanes: string[];
   /** Indices into `lanes` reached by moving sideways rather than through a junction. */
   laneChanges: number[];
-}
-
-const EARTH_RADIUS_M = 6_371_000;
-
-/** Great-circle distance, which is what the payload's [lat, lon] pairs support.
- *
- * The lane model holds metres in a local projection, but the page is handed the WGS84
- * projection of it for Leaflet. Over a network 800 m across the difference between the two
- * is far below the lane-change penalty, so it cannot change which route wins - and the
- * distance actually reported to the user comes from Python anyway.
- */
-export function metresBetween(a: [number, number], b: [number, number]): number {
-  const toRad = Math.PI / 180;
-  const meanLat = ((a[0] + b[0]) / 2) * toRad;
-  const dLat = (b[0] - a[0]) * toRad;
-  const dLon = (b[1] - a[1]) * toRad * Math.cos(meanLat);
-  return Math.hypot(dLat, dLon) * EARTH_RADIUS_M;
 }
 
 /** One key for a junction, so the two places that build it cannot disagree.

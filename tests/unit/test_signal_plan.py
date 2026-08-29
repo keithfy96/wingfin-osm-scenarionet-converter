@@ -360,3 +360,30 @@ def test_plan_metadata_holds_no_arrays() -> None:
                 walk(item)
 
     walk(metadata)
+
+
+# --- drawn_at, which only the browser reads ---------------------------------------------------
+
+
+def test_a_plan_carrying_where_its_lights_were_drawn_reads_the_same_as_one_without() -> None:
+    """`drawn_at` is the signal builder's own provenance and nothing here consults it.
+
+    It is what lets the page load a plan onto a later generation of the map and report "this
+    light has moved 4.2 m" instead of only "the map changed" - a lane id is
+    `deterministic_id("lane", *ways, u, v, key, lane_index)` and carries no `lane_count`, so an
+    id can outlive the position it named. It rides in a `signals_version` 1 file because
+    `read_signal_plan` and `_read_group` take only the keys they name; bumping the version
+    instead would have made every file written before it unreadable by this converter.
+    """
+    plain = _read()
+    annotated = _read(
+        drawn_at={"a": [3.1848, 101.6122], "b": [3.1852, 101.6130]},
+    )
+    assert annotated == plain
+
+
+def test_a_plan_without_drawn_at_is_still_read() -> None:
+    """The guard against `drawn_at` quietly becoming required: every plan Keith drew before it
+    existed has none, and those must keep converting."""
+    assert "drawn_at" not in _raw()
+    assert _read().lanes

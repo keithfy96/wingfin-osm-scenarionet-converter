@@ -11,9 +11,20 @@
 
 import { findConflicts, type Conflict } from "./conflicts.js";
 import { colourAt, phaseStripCss } from "./phase.js";
-import { nameProblem, parseSignals, SignalsFileError, serializeSignals, timingProblem } from "./plan-file.js";
+import {
+  inspectSignals,
+  nameProblem,
+  SignalsFileError,
+  serializeSignals,
+  timingProblem,
+} from "./plan-file.js";
 import { stopMarkerStyle, stopPoint } from "./stop-marker.js";
-import type { PhaseGroup, SignalBuilderPayload, SignalLane } from "./types.js";
+import type {
+  PhaseGroup,
+  SignalBuilderPayload,
+  SignalLane,
+  SignalsInspection,
+} from "./types.js";
 import type { LeafletLayer, LeafletMap } from "../types-dom.js";
 
 const IDLE = { color: "#343a40", weight: 3, opacity: 0.75 };
@@ -64,7 +75,6 @@ function boot(): void {
   const payload: SignalBuilderPayload = supplied;
 
   const byId = new Map(payload.lanes.map((lane) => [lane.id, lane]));
-  const knownLanes = new Set(byId.keys());
   const surveyedLanes = new Set(payload.surveyed.flatMap((signal) => signal.lanes));
 
   const renderer = L.canvas({ tolerance: 10 });
@@ -113,6 +123,12 @@ function boot(): void {
   // one view whose job is comparing two arms at a single moment in the cycle.
   const stopMarkers = new Map<string, LeafletLayer>();
 
+  // Where every lane's light would go, handed to `inspectSignals` so it can say which of a
+  // loaded plan's lights have moved since that plan was drawn.
+  const stopPoints = new Map<string, [number, number] | null>(
+    payload.lanes.map((lane) => [lane.id, stopPoint(lane)]),
+  );
+
   // --- panel ------------------------------------------------------------------------
   const status = element("p", "verdict");
   const detail = element("p", "muted");
@@ -133,12 +149,19 @@ function boot(): void {
   const groupList = element("div", "groups");
   const conflictBox = element("div", "conflicts");
   const saveButton = element("button", "primary", "Download signals.json");
-  const loadLabel = element("label", "loadbtn", "Load an existing signals.json");
+  // A button rather than the small underlined link this was: it is the other half of the
+  // pair with Download, and read as a footnote for as long as it looked like one.
+  const loadLabel = element("label", "loadbtn", "Load a signals.json");
   const loadInput = element("input");
   loadInput.type = "file";
   loadInput.accept = "application/json,.json";
   loadLabel.append(loadInput);
   const loadNote = element("p", "caption");
+  const loadReport = element("div", "report");
+  // Stays visible after a plan drawn on another generation is adopted, until the next
+  // download re-stamps it. Clearing it on the click that accepted it would hide the one
+  // thing the person then has to check.
+  const adoptedNote = element("p", "caption warn");
 
   document
     .getElementById("panel")
@@ -155,7 +178,9 @@ function boot(): void {
       conflictBox,
       saveButton,
       loadLabel,
+      loadReport,
       loadNote,
+      adoptedNote,
     );
 
   function groupOf(laneId: string): number {
@@ -456,26 +481,146 @@ function boot(): void {
     redraw();
   });
 
+  /** Where every signalled lane's light currently sits, for the file to carry. */
+  function drawnAt(): Record<string, [number, number]> {
+    const points: Record<string, [number, number]> = {};
+    for (const group of groups) {
+      for (const laneId of group.lanes) {
+        const lane = byId.get(laneId);
+        const point = lane ? stopPoint(lane) : null;
+        if (point) points[laneId] = point;
+      }
+    }
+    return points;
+  }
+
   saveButton.addEventListener("click", () => {
     download(
       payload.suggested_filename,
-      serializeSignals(payload.identity, cycleSeconds, groups, payload.signals_version),
+      serializeSignals(
+        payload.identity,
+        cycleSeconds,
+        groups,
+        payload.signals_version,
+        drawnAt(),
+      ),
     );
+    // The download carries *this* map's identity, so a plan adopted from an earlier
+    // generation is now one `convert --signals` accepts. That re-stamping is the whole
+    // point of the round trip, and it is what the standing warning was waiting for.
+    adoptedNote.textContent = "";
   });
+
+  /** Adopt an inspected plan, whatever the report said about it. */
+  function adopt(inspection: SignalsInspection): void {
+    cycleSeconds = inspection.plan.cycleSeconds;
+    cycleInput.value = String(cycleSeconds);
+    groups.splice(0, groups.length, ...inspection.plan.groups);
+    active = groups.length > 0 ? 0 : -1;
+    loadNote.textContent = "";
+    loadReport.replaceChildren();
+    const drawnOn = inspection.identityProblems.find((p) => p.field === "generation");
+    adoptedNote.textContent = drawnOn
+      ? `Adopted from generation ${drawnOn.was.slice(0, 8)}. Check every light against the ` +
+        "circles, then download to re-stamp it for this map."
+      : "";
+    renderAll();
+  }
+
+  /** What the file would do on this map, and the choice about whether to take it. */
+  function renderReport(inspection: SignalsInspection): void {
+    loadReport.replaceChildren();
+    const signalled = inspection.plan.groups.reduce((n, g) => n + g.lanes.length, 0);
+    const total = signalled + inspection.missingLanes.length;
+
+    loadReport.append(element("p", "bad", "This plan was not drawn on this map."));
+    for (const problem of inspection.identityProblems) {
+      const row = element("div", "crow");
+      row.append(
+        element("div", undefined, problem.field),
+        element("div", "n", `${problem.was.slice(0, 8)} \u2192 ${problem.now.slice(0, 8)}`),
+      );
+      loadReport.append(row);
+    }
+    loadReport.append(
+      element("p", "caption", `${signalled} of ${total} lanes it names are still on this map.`),
+    );
+    for (const { group, lane } of inspection.missingLanes) {
+      const row = element("div", "crow bad");
+      row.append(element("div", undefined, `${lane} is not on this map`), element("div", "n", group));
+      loadReport.append(row);
+    }
+    if (inspection.droppedGroups.length > 0) {
+      loadReport.append(
+        element(
+          "p",
+          "bad",
+          `Dropped, having no lanes left: ${inspection.droppedGroups.join(", ")}.`,
+        ),
+      );
+    }
+    // The check that actually distinguishes a moved map from a re-stamped one. A lane id
+    // carries no lane_count, so an id can survive while the lane it names sits somewhere
+    // else across the carriageway - this is the only thing that would say so.
+    for (const { lane, metres } of inspection.movedLanes) {
+      const row = element("div", "crow bad");
+      row.append(
+        element("div", undefined, `${lane} has moved`),
+        element("div", "n", `${metres.toFixed(1)} m`),
+      );
+      loadReport.append(row);
+    }
+    loadReport.append(
+      element(
+        "p",
+        "caption",
+        inspection.movedLanes.length > 0
+          ? "A light that has moved is on a lane that kept its id but not its place. Check " +
+            "those against the circles before taking this plan."
+          : inspection.records
+            ? "No light has moved since this plan was drawn."
+            : "This file predates the record of where its lights were drawn, so nothing " +
+              "here can say whether they have moved. Check them against the circles.",
+      ),
+    );
+
+    const buttons = element("div", "row");
+    const yes = element("button", undefined, "Load it anyway");
+    const no = element("button", undefined, "Cancel");
+    yes.addEventListener("click", () => adopt(inspection));
+    no.addEventListener("click", () => {
+      loadReport.replaceChildren();
+      loadNote.textContent = "Left as it was.";
+    });
+    buttons.append(yes, no);
+    loadReport.append(buttons);
+  }
 
   loadInput.addEventListener("change", () => {
     const file = loadInput.files?.[0];
     if (!file) return;
     void file.text().then((raw) => {
       try {
-        const loaded = parseSignals(raw, payload.identity, payload.signals_version, knownLanes);
-        cycleSeconds = loaded.cycleSeconds;
-        cycleInput.value = String(cycleSeconds);
-        groups.splice(0, groups.length, ...loaded.groups);
-        active = groups.length > 0 ? 0 : -1;
-        loadNote.textContent = "";
-        renderAll();
+        const inspection = inspectSignals(
+          raw,
+          payload.identity,
+          payload.signals_version,
+          stopPoints,
+        );
+        const clean =
+          inspection.identityProblems.length === 0 &&
+          inspection.missingLanes.length === 0 &&
+          inspection.movedLanes.length === 0;
+        // A plan that belongs to this map loads on the one click it always did. Only a plan
+        // that does not gets the report and the second click.
+        if (clean) {
+          adopt(inspection);
+        } else {
+          loadNote.textContent = "";
+          renderReport(inspection);
+        }
       } catch (error) {
+        loadReport.replaceChildren();
         loadNote.textContent =
           error instanceof SignalsFileError ? error.message : "Could not read that file.";
       }
