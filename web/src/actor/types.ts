@@ -75,8 +75,20 @@ export interface ActorBuilderPayload {
   };
 }
 
+/** What the Randomise button did, recorded so a scene can be traced back to it.
+ *
+ * `seed` and `objects` are the whole of what a press decides, so together with the densities
+ * they are enough to ask for the same scene again. Absent on a file drawn entirely by hand,
+ * and ignored by `osm_scenario/actors.py`, which reads the keys it wants by name.
+ */
+export interface GeneratedNote {
+  seed: number;
+  objects: number;
+}
+
 export interface ActorsFile {
   actors_version: number;
   identity: ActorIdentity;
+  generated?: GeneratedNote;
   actors: DrawnActor[];
 }

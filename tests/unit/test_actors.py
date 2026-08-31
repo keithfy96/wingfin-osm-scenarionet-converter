@@ -128,6 +128,18 @@ def test_a_plan_from_another_version_is_refused() -> None:
         _read(actors_version=ACTORS_VERSION + 1)
 
 
+def test_the_builders_generated_block_is_carried_without_complaint() -> None:
+    """The page records which seed and how many objects produced a scene.
+
+    It is provenance for the person, and nothing here reads it - which is exactly why it must
+    not need a version bump to appear. This pins that: a plan carrying the block converts the
+    same as one without, so an older converter meeting a newer file is not a failure.
+    """
+    plan = _read(generated={"seed": 835819, "objects": 430})
+    assert len(plan.actors) == 1
+    assert plan.actors[0].name == "p1"
+
+
 def test_a_plan_drawn_on_another_map_is_refused() -> None:
     """The only check available. An actor path names nothing that could be found missing, so a
     stale plan would silently put a pedestrian somewhere else - quite possibly in a

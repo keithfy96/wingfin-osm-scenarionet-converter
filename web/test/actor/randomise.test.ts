@@ -23,6 +23,7 @@ import {
   PER_KM,
   VERGE_M,
   WHOLE_MAP_CAP,
+  apportion,
   corridorLengthM,
   countFor,
   generateActors,
@@ -290,81 +291,82 @@ describe("when a walker is there", () => {
   });
 });
 
-describe("the whole-map press", () => {
-  it("is capped, and keeps the mix it was asked for", () => {
-    // 405 lanes is `mosque`; "dense" over all of them is thousands of actors and a file
-    // nobody can edit, which is the outcome this feature exists to avoid.
-    const corridor = Array.from({ length: 200 }, (_, index) =>
-      eastward(`l${index}`, 200, offsetMetres([LAT, LON], 0, index * 50)),
-    );
-    const densities = { pedestrian: "dense", cyclist: "dense", cone: "dense", barrier: "dense" } as
-      Record<ActorKind, Density>;
-    const uncapped = generateActors(options({ corridor, densities, egoMps: null }));
-    expect(uncapped.length).toBeGreaterThan(WHOLE_MAP_CAP);
-
-    const capped = generateActors(
-      options({ corridor, densities, egoMps: null, cap: WHOLE_MAP_CAP }),
-    );
-    expect(capped.length).toBeLessThanOrEqual(WHOLE_MAP_CAP);
-    for (const kind of KINDS) {
-      expect(capped.some((actor) => actor.kind === kind)).toBe(true);
+describe("apportion", () => {
+  it("hits the asked-for number exactly", () => {
+    // 149 rather than 150 is what independent flooring gave, and a box saying "exactly 150"
+    // that returns 149 is the sort of thing that gets a feature distrusted.
+    for (const target of [1, 2, 7, 20, 150, 431, 1000]) {
+      const out = apportion([93, 75, 187, 75], target);
+      expect(out.reduce((sum, one) => sum + one, 0)).toBe(target);
     }
   });
 
-  // The half of the answer that raising the cap actually buys. It withholds; it never
-  // creates - so with the ceiling above what the densities asked for, the press is the
-  // uncapped one exactly, and past that point the knob is the densities.
-  it("places every actor the densities asked for once the cap is above them", () => {
-    const corridor = Array.from({ length: 200 }, (_, index) =>
-      eastward(`l${index}`, 200, offsetMetres([LAT, LON], 0, index * 50)),
-    );
-    const densities = { pedestrian: "dense", cyclist: "dense", cone: "dense", barrier: "dense" } as
-      Record<ActorKind, Density>;
-    const uncapped = generateActors(options({ corridor, densities, egoMps: null }));
-
-    const metres = corridorLengthM(corridor);
-    const asked = KINDS.reduce((sum, kind) => sum + countFor(kind, densities[kind], metres), 0);
-    // What the panel prints as "these densities asked for N" has to be the number that comes
-    // out, or the note reports a shortfall that never happened.
-    expect(uncapped).toHaveLength(asked);
-
-    const roomy = generateActors(
-      options({ corridor, densities, egoMps: null, cap: asked + 1000 }),
-    );
-    expect(roomy).toEqual(uncapped);
+  it("keeps the proportions it was given", () => {
+    // Exactly half of 430. Every share lands on a .5, so every remainder ties and the two
+    // spare actors go to the lowest indices - which is what the index tie-break is for.
+    const out = apportion([93, 75, 187, 75], 215);
+    expect(out).toEqual([47, 38, 93, 37]);
+    expect(out.reduce((sum, one) => sum + one, 0)).toBe(215);
   });
 
-  it("trims to whatever ceiling it is given, not to a constant", () => {
-    const corridor = Array.from({ length: 200 }, (_, index) =>
-      eastward(`l${index}`, 200, offsetMetres([LAT, LON], 0, index * 50)),
-    );
-    const densities = { pedestrian: "dense", cyclist: "dense", cone: "dense", barrier: "dense" } as
-      Record<ActorKind, Density>;
-    for (const cap of [20, 60, 300, 500]) {
-      const made = generateActors(options({ corridor, densities, egoMps: null, cap }));
-      expect(made.length).toBeLessThanOrEqual(cap);
-      for (const kind of KINDS) expect(made.some((actor) => actor.kind === kind)).toBe(true);
-    }
-    // Strictly more actors for a strictly higher ceiling, which is the whole request.
-    const small = generateActors(options({ corridor, densities, egoMps: null, cap: 150 }));
-    const large = generateActors(options({ corridor, densities, egoMps: null, cap: 500 }));
-    expect(large.length).toBeGreaterThan(small.length);
+  it("scales up as readily as down", () => {
+    const out = apportion([10, 5], 60);
+    expect(out).toEqual([40, 20]);
+  });
+
+  it("leaves a kind on none at none, however large the number", () => {
+    expect(apportion([10, 0, 5], 3000)[1]).toBe(0);
+  });
+
+  it("apportions the same way twice", () => {
+    expect(apportion([93, 75, 187, 75], 137)).toEqual(apportion([93, 75, 187, 75], 137));
   });
 });
 
-describe("corridorLengthM", () => {
-  it("measures the road, and only the part something can stand on", () => {
-    expect(corridorLengthM([eastward("a", 400)])).toBeCloseTo(400, 0);
-    expect(corridorLengthM([eastward("a", 400), eastward("b", 250)])).toBeCloseTo(650, 0);
+describe("the whole-map press", () => {
+  /** 200 lanes of 200 m, which is `mosque`-sized: dense over all of it is hundreds of actors. */
+  function wholeMap(): PlacementLane[] {
+    return Array.from({ length: 200 }, (_, index) =>
+      eastward(`l${index}`, 200, offsetMetres([LAT, LON], 0, index * 50)),
+    );
+  }
+  const DENSE = { pedestrian: "dense", cyclist: "dense", cone: "dense", barrier: "dense" } as
+    Record<ActorKind, Density>;
+
+  it("places exactly the number it was asked for, and keeps the mix", () => {
+    const corridor = wholeMap();
+    for (const objects of [20, 60, WHOLE_MAP_CAP, 500]) {
+      const made = generateActors(options({ corridor, densities: DENSE, egoMps: null, objects }));
+      expect(made).toHaveLength(objects);
+      for (const kind of KINDS) expect(made.some((actor) => actor.kind === kind)).toBe(true);
+    }
   });
 
-  it("leaves out the junction stubs placement itself leaves out", () => {
-    // Placement drops anything under MIN_LANE_M, so counting it here would have the panel
-    // report a press wanting more actors than the press can place.
-    const withStub = [eastward("a", 400), eastward("stub", 3)];
-    expect(corridorLengthM(withStub)).toBeCloseTo(400, 0);
-    expect(generateActors(options({ corridor: withStub, densities: { ...NONE, cone: "dense" } })))
-      .toHaveLength(countFor("cone", "dense", corridorLengthM(withStub)));
+  it("places more for a larger number - in both directions from the densities' own", () => {
+    const corridor = wholeMap();
+    const uncapped = generateActors(options({ corridor, densities: DENSE, egoMps: null }));
+    const metres = corridorLengthM(corridor);
+    const asked = KINDS.reduce((sum, kind) => sum + countFor(kind, DENSE[kind], metres), 0);
+    // What the panel prints as "these densities place N" has to be what comes out, or the
+    // note reports a shortfall that never happened.
+    expect(uncapped).toHaveLength(asked);
+
+    // The half the old cap could not do: asking for more than the densities wanted.
+    const more = generateActors(
+      options({ corridor, densities: DENSE, egoMps: null, objects: asked * 2 }),
+    );
+    expect(more).toHaveLength(asked * 2);
+    const fewer = generateActors(
+      options({ corridor, densities: DENSE, egoMps: null, objects: 30 }),
+    );
+    expect(fewer).toHaveLength(30);
+  });
+
+  it("treats no number, and zero, as however many the densities ask for", () => {
+    const corridor = wholeMap();
+    const plain = generateActors(options({ corridor, densities: DENSE, egoMps: null }));
+    const zero = generateActors(options({ corridor, densities: DENSE, egoMps: null, objects: 0 }));
+    expect(zero).toEqual(plain);
   });
 });
 

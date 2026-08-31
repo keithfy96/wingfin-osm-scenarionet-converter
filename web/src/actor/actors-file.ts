@@ -10,7 +10,13 @@
 // being told which actor is wrong while it is still on screen, and being told at convert
 // time with nothing to click on.
 
-import type { ActorIdentity, ActorKind, ActorsFile, DrawnActor } from "./types.js";
+import type {
+  ActorIdentity,
+  ActorKind,
+  ActorsFile,
+  DrawnActor,
+  GeneratedNote,
+} from "./types.js";
 
 export class ActorsFileError extends Error {}
 
@@ -44,9 +50,38 @@ export function serializeActors(
   identity: ActorIdentity,
   actors: DrawnActor[],
   version: number,
+  generated?: GeneratedNote | null,
 ): string {
-  const file: ActorsFile = { actors_version: version, identity, actors };
+  // Before `actors`, so a person opening the file sees what made it without scrolling past
+  // four hundred entries to find out.
+  const file: ActorsFile = {
+    actors_version: version,
+    identity,
+    ...(generated ? { generated } : {}),
+    actors,
+  };
   return `${JSON.stringify(file, null, 2)}\n`;
+}
+
+/** The `generated` block, or null when the file has none or it is malformed.
+ *
+ * Read separately from `parseActors` and never allowed to fail the load: this is provenance,
+ * not content. A file whose note is missing or damaged still holds perfectly good actors,
+ * and refusing it over a number nothing downstream reads would be the wrong trade.
+ */
+export function parseGenerated(raw: string): GeneratedNote | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const found = (parsed as { generated?: unknown } | null)?.generated;
+  if (!found || typeof found !== "object") return null;
+  const { seed, objects } = found as { seed?: unknown; objects?: unknown };
+  if (typeof seed !== "number" || !Number.isFinite(seed)) return null;
+  if (typeof objects !== "number" || !Number.isFinite(objects)) return null;
+  return { seed, objects };
 }
 
 function isPair(value: unknown): value is [number, number] {

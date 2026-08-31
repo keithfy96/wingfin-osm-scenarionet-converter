@@ -116,11 +116,19 @@ arrangement of exactly the same number - which is why pressing <em>Generate</em>
 same settings gives the same file byte for byte. <em>new seed</em> rolls a fresh one into the
 box and regenerates, so a different scene is one click, and because the number that produced
 it stays on screen you can type it back to get that scene again.</p>
-<p class='caption'>To change how many, move the densities or raise <em>at most</em>. That box
-is a ceiling and only a ceiling: it withholds actors, it never invents them. On
-<code>junction-1</code>'s whole map - 9.3&nbsp;km of usable lane - every kind at
-<em>medium</em> asks for 168 and every kind at <em>dense</em> asks for 430, so a press
-trimmed to 150 was throwing most of them away. Set it to 0 to keep the lot.</p>
+<p class='caption'>To change how many, use <em>exactly N objects</em>. It is a target, not a
+ceiling - it scales the densities in both directions, so a number above what they asked for
+places more rather than being ignored, and you get exactly the number you typed. The mix
+stays whatever the densities say: ask for half as many and you get half of each kind, not all
+the cones and no pedestrians. The line under the box says what the densities come to on their
+own, and 0 places that many. On <code>junction-1</code>'s whole map - 9.3&nbsp;km of usable
+lane - that is 168 at <em>medium</em> and 430 at <em>dense</em>.</p>
+<p class='caption'>The seed and the number are written into the downloaded
+<code>actors.json</code>, and shown again when you load one back:
+<em>Loaded file seed = 835819, no of objects = 430</em>. It is <strong>reported, never
+applied</strong> - the boxes above are what the next press will do, so loading a file never
+overwrites what you were setting up. The converter ignores the block, so a file carrying it
+opens anywhere.</p>
 <h2>Cones and barriers close a lane</h2>
 <p class='caption'>One on its own reads as litter, so they arrive as lines: a cone run
 tapering from just inside the kerb across to the middle of the nearside lane, a barrier line
@@ -135,9 +143,9 @@ car goes past on the inside; where the route is already in the nearside lane - a
 single-lane road - it closes the car's own lane and stops it. Drag one out to the kerb if
 you want roadworks that nothing has to drive around.</p></p>
 <h2>Load a route first</h2>
-<p class='caption'>Without one, actors are scattered over the whole map - trimmed to
-<em>at most</em>, which starts at 150 because every lane at <em>dense</em> runs to hundreds of
-them - and most will be nowhere near the car.
+<p class='caption'>Without one, actors are scattered over the whole map - as many as
+<em>exactly N objects</em> says, which starts at 150 because every lane at <em>dense</em> runs
+to hundreds of them - and most will be nowhere near the car.
 Load the same <code>routes.json</code> you convert with and the route is drawn in blue, every
 actor is placed on or beside a lane it actually drives, and each walker is timed to be
 standing at the kerb as the car arrives. That timing is an <em>estimate</em>: the page works

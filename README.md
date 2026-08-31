@@ -245,7 +245,8 @@ took it from finishing the route to 35% of it. Which lane closes follows from th
 geometry with no special case for the ego — where the route has an inner lane the car
 goes past on the inside; where it is already in the nearside lane, or the road has only
 one, the car stops. Without a route they are scattered over the whole
-map, trimmed to the **at most** box, and most will be nowhere near the drive. That is not hypothetical:
+map, as many as the **exactly N objects** box says, and most will be nowhere near the
+drive. That is not hypothetical:
 a pedestrian placed by hand on `junction-1` sat 137 m off the route the entire time it
 existed, and nothing but a measurement of the pickle said so.
 
@@ -256,17 +257,25 @@ byte, which is what makes a scene reproducible. **new seed** rolls a fresh one i
 box and regenerates, so a different scene is one click and the number that produced it
 stays on screen.
 
-To change *how many*, move the densities or raise **at most**. That box is a ceiling and
-only a ceiling — it withholds actors, it never invents them, and when it bites the panel
-says what it dropped. On `junction-1`'s whole map, 9.3 km of usable lane:
+To change *how many*, use **exactly N objects**. It is a target, not a ceiling: it scales
+the densities in both directions, so a number above what they asked for places more rather
+than being ignored, and you get exactly the number you typed — 150 means 150, not 149.
+The mix stays whatever the densities say, so asking for half gives you half of each kind.
+The line under the box says what the densities come to on their own, and 0 places that
+many. On `junction-1`'s whole map, 9.3 km of usable lane, that is 46 at `low`, 168 at
+`medium` and 430 at `dense`.
 
-| every kind at | wanted | kept at the old fixed 150 |
-|---|---|---|
-| low | 46 | 46 |
-| medium | 168 | 150 |
-| dense | 430 | 150 |
+**The seed and the number are saved into `actors.json`** and shown again when you load one:
 
-Set it to 0 to keep the lot. Past `dense` the knob is the density table, not the cap.
+```
+Loaded file seed = 835819, no of objects = 430 (430 in the file).
+The boxes above are unchanged.
+```
+
+Reported, never applied — the boxes are what the *next* press will do, so loading a file
+never overwrites what you were setting up. The block is `{"generated": {"seed", "objects"}}`
+alongside `identity`; `actors.py` reads the keys it wants by name and ignores it, so it
+needed no `actors_version` bump and a file carrying it opens in any version.
 
 The timing is an **estimate** — the page works out
 when the car arrives from the distance along the route and the average speed in the box,

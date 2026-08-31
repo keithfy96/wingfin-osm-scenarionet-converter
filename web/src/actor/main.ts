@@ -15,6 +15,7 @@ import {
   MOVING,
   nameProblem,
   parseActors,
+  parseGenerated,
   pathLengthM,
   serializeActors,
 } from "./actors-file.js";
@@ -27,7 +28,14 @@ import {
   lineLengthM,
   type Density,
 } from "./randomise.js";
-import type { ActorBuilderPayload, ActorKind, ActorLane, ActorWait, DrawnActor } from "./types.js";
+import type {
+  ActorBuilderPayload,
+  ActorKind,
+  ActorLane,
+  ActorWait,
+  DrawnActor,
+  GeneratedNote,
+} from "./types.js";
 import { RouteGraph } from "../route/path.js";
 import { RoutesFileError, parseRoutes } from "../route/routes-file.js";
 import type { ChosenRoute } from "../route/types.js";
@@ -189,6 +197,7 @@ function boot(): void {
     select.value = densities[kind];
     select.addEventListener("change", () => {
       densities[kind] = select.value as Density;
+      describeCount();
     });
     const row = element("div", "row");
     row.append(element("label", undefined, kind), select);
@@ -225,17 +234,35 @@ function boot(): void {
     element("label", undefined, "ego averages km/h"),
     paceInput,
   );
-  // The ceiling, on screen rather than in the source. It applies to a route press as well as
-  // a whole-map one - one number is easier to reason about than two, and on a route it binds
-  // only if it is lowered, because the densities over `junction-1`'s route-1 want about 50.
-  const capInput = numberInput(WHOLE_MAP_CAP, "1", "72px");
-  const capRow = element("div", "row");
-  capRow.append(element("label", undefined, "at most"), capInput, element("label", undefined, "actors"));
-  const capNote = element("p", "caption");
-  capNote.textContent =
-    "The seed decides where actors go, never how many - that is the densities times the " +
-    "length of road, so a new seed rearranges a scene of exactly the same size. Raise " +
-    "\"at most\" to keep more of what the densities asked for; 0 keeps all of them.";
+  // How many to place, exactly - a target rather than a ceiling, so it scales the densities
+  // both ways. One number for a route press and a whole-map one alike.
+  const countInput = numberInput(WHOLE_MAP_CAP, "1", "72px");
+  const countRow = element("div", "row");
+  countRow.append(
+    element("label", undefined, "exactly"),
+    countInput,
+    element("label", undefined, "objects"),
+  );
+  // What the densities alone come to on whatever is loaded. Recomputed rather than
+  // remembered, because it moves when a density or the route does.
+  const countNote = element("p", "caption");
+  // Provenance of a loaded file. Its own line, and it never writes into the boxes above:
+  // reading what made a file is not the same as asking to make another one like it.
+  const loadedNote = element("p", "caption");
+
+  function askedFor(): number {
+    const metres = corridorLengthM(corridor !== null && corridor.length > 0 ? corridor : payload.lanes);
+    return KINDS.reduce((sum, kind) => sum + countFor(kind, densities[kind], metres), 0);
+  }
+
+  function describeCount(): void {
+    countNote.textContent =
+      `These densities come to ${askedFor()} objects on ` +
+      (corridor !== null && corridor.length > 0 ? "the loaded route" : "the whole map") +
+      ". Set a number to place exactly that many - more or fewer - split between the kinds " +
+      "in the same proportions. 0 places however many the densities ask for. The seed only " +
+      "decides where they go, never how many.";
+  }
   const zebraCheck = element("input");
   zebraCheck.type = "checkbox";
   const zebraRow = element("div", "row");
@@ -251,6 +278,9 @@ function boot(): void {
   // Which entries in `actors` this button put there, so pressing it again replaces its own
   // work and leaves anything drawn by hand alone.
   const generated = new Set<string>();
+  // What the last press decided, written into the downloaded file. Adopted from a loaded
+  // file so that opening one and saving it straight back does not lose its provenance.
+  let lastGenerated: GeneratedNote | null = null;
   const byId = new Map(payload.lanes.map((lane) => [lane.id, lane]));
   const graph = new RouteGraph(payload.lanes);
 
@@ -276,8 +306,9 @@ function boot(): void {
       routeRow,
       routeNote,
       seedRow,
-      capRow,
-      capNote,
+      countRow,
+      countNote,
+      loadedNote,
       zebraRow,
       generateButton,
       generateNote,
@@ -432,16 +463,20 @@ function boot(): void {
    */
   function chooseRoute(): void {
     corridor = null;
+    // The corridor decides what the densities come to, so every path out of here refreshes
+    // the count note - including the two that leave the corridor null.
     const chosen = loadedRoutes[routeSelect.selectedIndex];
     if (!chosen) {
       routeNote.textContent = NO_ROUTE;
       redrawCorridor();
+      describeCount();
       return;
     }
     const found = graph.find(chosen.start_lane, chosen.end_lane);
     if (!found) {
       routeNote.textContent = `No drive from ${chosen.name}'s start to its end on this map. ${NO_ROUTE}`;
       redrawCorridor();
+      describeCount();
       return;
     }
     const lanes = found.lanes
@@ -453,6 +488,7 @@ function boot(): void {
       `route ${chosen.name} · ${lanes.length} lanes · about ${metres.toFixed(0)} m. ` +
       "Actors will be placed along it, so the car meets all of them.";
     redrawCorridor();
+    describeCount();
   }
 
   routeInput.addEventListener("change", () => {
@@ -501,16 +537,16 @@ function boot(): void {
     const onRoute = route !== null;
     const pace = Number(paceInput.value);
     const lanes = route ?? payload.lanes;
-    const ceiling = Math.trunc(Number(capInput.value)) || 0;
-    // What the densities asked for before any trimming, so the note can say what was lost.
+    const seed = Math.trunc(Number(seedInput.value)) || 0;
+    const objects = Math.trunc(Number(countInput.value)) || 0;
+    // What the densities alone come to, so the note can say when the number overrode them.
     // `corridorLengthM` and not a length summed here: placement drops lanes under
     // `MIN_LANE_M`, and counting road it will not use would over-report every press.
-    const metres = corridorLengthM(lanes);
-    const asked = KINDS.reduce((sum, kind) => sum + countFor(kind, densities[kind], metres), 0);
+    const asked = askedFor();
     const made = generateActors({
       corridor: lanes,
       densities,
-      seed: Math.trunc(Number(seedInput.value)) || 0,
+      seed,
       taken: actors.map((actor) => actor.name),
       speeds: {
         pedestrian_mps: payload.defaults.pedestrian_mps,
@@ -519,12 +555,15 @@ function boot(): void {
       egoMps: onRoute && pace > 0 ? pace / 3.6 : null,
       crossings: zebraCheck.checked,
       crossingWidthM: payload.defaults.crossing_width_m,
-      cap: ceiling > 0 ? ceiling : undefined,
+      objects: objects > 0 ? objects : undefined,
     });
     for (const actor of made) {
       generated.add(actor.name);
       actors.push(actor);
     }
+    // Recorded so the file can say what made it. `made.length` and not the box: they agree
+    // whenever anything was placed, and the file should carry what happened.
+    lastGenerated = made.length ? { seed, objects: made.length } : null;
     generateNote.textContent = made.length
       ? `${made.length} actor${made.length === 1 ? "" : "s"} placed ` +
         (onRoute
@@ -534,12 +573,15 @@ function boot(): void {
             "drives.") +
         // Said, rather than left to be noticed. A press that quietly dropped 280 of the 430
         // it placed looked exactly like a press that had nothing more to place.
-        (asked > made.length
-          ? ` These densities asked for ${asked}; the rest were trimmed to the "at most" ` +
-            `number. Raise it for more.`
-          : "") +
-        " Generate again to replace them; anything you drew by hand is left alone."
+        // Said, rather than left to be noticed. A press that quietly dropped 280 of the 430
+        // it would have placed looked exactly like one with nothing more to place.
+        (made.length === asked
+          ? ""
+          : ` The densities on their own come to ${asked}; this number ` +
+            `${made.length > asked ? "scaled them up" : "scaled them down"}.`) +
+        ` Seed ${seed}. Generate again to replace them; anything you drew by hand is left alone.`
       : "Nothing to place: every kind is set to none.";
+    describeCount();
     renderList();
   }
 
@@ -639,7 +681,7 @@ function boot(): void {
   saveButton.addEventListener("click", () => {
     download(
       payload.suggested_filename,
-      serializeActors(payload.identity, actors, payload.actors_version),
+      serializeActors(payload.identity, actors, payload.actors_version, lastGenerated),
     );
   });
 
@@ -653,6 +695,15 @@ function boot(): void {
         // A loaded file replaces the list, so nothing in it is this button's to replace -
         // otherwise a loaded actor sharing a generated name would vanish on the next press.
         generated.clear();
+        // Reported, never applied. The boxes above are what the *next* press will do, and
+        // silently overwriting them with a loaded file's settings would lose whatever was
+        // being set up - so this says what made the file and leaves the controls alone.
+        lastGenerated = parseGenerated(raw);
+        loadedNote.textContent = lastGenerated
+          ? `Loaded file seed = ${lastGenerated.seed}, no of objects = ${lastGenerated.objects}` +
+            ` (${loaded.length} in the file). The boxes above are unchanged.`
+          : `Loaded ${loaded.length} actor${loaded.length === 1 ? "" : "s"}; the file records ` +
+            "no seed, so it was drawn by hand or written before seeds were saved.";
         listNote.textContent = "";
         selected = -1;
         renderList();
@@ -664,6 +715,7 @@ function boot(): void {
     });
   });
 
+  describeCount();
   renderWaits();
   renderList();
   refresh();

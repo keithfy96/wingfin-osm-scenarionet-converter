@@ -7,6 +7,7 @@ import {
   ActorsFileError,
   nameProblem,
   parseActors,
+  parseGenerated,
   pathLengthM,
   serializeActors,
 } from "../../src/actor/actors-file.js";
@@ -130,5 +131,36 @@ describe("pathLengthM", () => {
 
   it("is zero for a path with nothing in it", () => {
     expect(pathLengthM([])).toBe(0);
+  });
+});
+
+// What made a file, carried in the file. `osm_scenario/actors.py` reads the keys it wants by
+// name and ignores this one, so it needed no version bump - `tests/unit/test_actors.py` pins
+// that the converter still accepts a file carrying it.
+describe("the generated block", () => {
+  it("is written when there is one, and read back", () => {
+    const raw = serializeActors(IDENTITY, [WALKER], 1, { seed: 835819, objects: 430 });
+    expect(JSON.parse(raw).generated).toEqual({ seed: 835819, objects: 430 });
+    expect(parseGenerated(raw)).toEqual({ seed: 835819, objects: 430 });
+  });
+
+  it("is left out of a file that was drawn by hand", () => {
+    const raw = serializeActors(IDENTITY, [WALKER], 1, null);
+    expect("generated" in JSON.parse(raw)).toBe(false);
+    expect(parseGenerated(raw)).toBeNull();
+  });
+
+  it("never fails a load, whatever shape it is in", () => {
+    // Provenance, not content: a file whose note is damaged still holds good actors, and
+    // refusing it over a number nothing downstream reads would be the wrong trade.
+    for (const bad of ["{}", "not json", '{"generated":3}', '{"generated":{"seed":"1"}}',
+      '{"generated":{"seed":1}}', '{"generated":{"seed":1,"objects":null}}']) {
+      expect(parseGenerated(bad)).toBeNull();
+    }
+  });
+
+  it("does not stop the actors themselves being read", () => {
+    const raw = serializeActors(IDENTITY, [WALKER, CONE], 1, { seed: 7, objects: 2 });
+    expect(parseActors(raw, IDENTITY, 1)).toHaveLength(2);
   });
 });

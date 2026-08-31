@@ -2,8 +2,8 @@
   "artifacts": {
     "actor_builder_html": {
       "path": "inspection/stage-6-actor-builder.html",
-      "sha256": "74a70bec228cb2f29d718005ccfea04f27b7110f70c175f7991379e0b52ab488",
-      "size_bytes": 135231
+      "sha256": "884ce7cd14d66ffb3df61ab0dd4231f2c27c8a45540fe4b6a9ec3947e019a059",
+      "size_bytes": 138824
     },
     "dataset_mapping": {
       "path": "scenarionet-10hz/dataset_mapping.pkl",
@@ -12,8 +12,8 @@
     },
     "dataset_summary": {
       "path": "scenarionet-10hz/dataset_summary.pkl",
-      "sha256": "ce767055452ca78f02345e3c349761a523207880a0c99f89300d69b59154bff1",
-      "size_bytes": 6296
+      "sha256": "c250b2047a3ec8cbee5354eb8b27ff522d72233a43694f1488728b1edb323136",
+      "size_bytes": 6297
     },
     "reachability_html": {
       "path": "inspection/stage-6-reachability.html",
@@ -27,8 +27,8 @@
     },
     "scenario:junction-1-57dcd345d17e5a86-route-1": {
       "path": "scenarionet-10hz/sd_osm-scenario_v1_junction-1-57dcd345d17e5a86-route-1.pkl",
-      "sha256": "86e72b3014dab2ad0399b30da776234d10c73730be23064962d8c1bb6386d702",
-      "size_bytes": 4969307
+      "sha256": "7b6d9bb61e38d03f47655e6a65889836261e17b9fc16e559ceba56767597ab32",
+      "size_bytes": 10583501
     },
     "signal_builder_html": {
       "path": "inspection/stage-6-signal-builder.html",
@@ -37,7 +37,7 @@
     }
   },
   "converted": {
-    "actors": 149,
+    "actors": 300,
     "connectors_active": 82,
     "connectors_total": 116,
     "crosswalks": 0,
@@ -51,7 +51,7 @@
     "stop_lines": 0
   },
   "dataset_dir": "scenarionet-10hz",
-  "generated_at": "2026-08-31T08:39:05.746849+00:00",
+  "generated_at": "2026-08-31T09:44:28.722863+00:00",
   "inputs": {
     "actors": "actors.json",
     "reviewed_lane_model": "lane-model/reviewed.json",

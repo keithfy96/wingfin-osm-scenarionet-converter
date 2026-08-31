@@ -35,14 +35,15 @@ export const PER_KM: Record<ActorKind, Record<Exclude<Density, "none">, number>>
   barrier: { low: 1, medium: 3, dense: 8 },
 };
 
-/** What the panel's "at most" box starts at - a default, no longer a ceiling in the source.
+/** What the panel's "exactly N objects" box starts at - a default, not a ceiling.
  *
  * Without a route the rates run over every lane in the model, which on `mosque` is 405 of
  * them - "dense" there is thousands of actors and a file nobody can edit, which is the one
- * outcome this feature exists to avoid. So a press still arrives trimmed, but to a number
- * that is on screen and editable rather than to this constant: on `junction-1`'s 9,343 m of
- * usable lane, all-medium wants 168 actors and all-dense wants 430, and being handed 150 of
- * them with no way to ask for the rest is what made every press look identical.
+ * outcome this feature exists to avoid. So a press still arrives at a manageable size, but
+ * at a number that is on screen and editable in both directions rather than at this
+ * constant: on `junction-1`'s 9,343 m of usable lane the densities want 168 actors at
+ * all-medium and 430 at all-dense, and being handed 150 with no way to ask for the rest is
+ * what made every press look identical.
  */
 export const WHOLE_MAP_CAP = 150;
 
@@ -138,7 +139,46 @@ export interface RandomiseOptions {
   /** Paint a zebra for each generated pedestrian. */
   crossings: boolean;
   crossingWidthM: number;
-  cap?: number;
+  /** Exactly how many actors to place, or undefined for as many as the densities ask for.
+   *
+   * A target, not a ceiling: it scales the densities' own numbers **both ways**, so asking
+   * for more than they wanted places more rather than being quietly ignored. The mix is what
+   * the densities decide and this number never changes it - ask for half as many and you get
+   * half of each kind, not all the cones and no pedestrians.
+   */
+  objects?: number;
+}
+
+/** `counts` rescaled to sum to exactly `target`, keeping their proportions.
+ *
+ * Largest remainder, and the "exactly" is the point: flooring each kind independently is
+ * what made a press asked for 150 come back with 149, and the number a person typed coming
+ * back a different number is the sort of thing that gets a feature distrusted. Whoever was
+ * cut hardest gets the spare, and the index breaks a tie so the same request apportions the
+ * same way twice.
+ *
+ * A kind on "none" stays on none - it is excluded from the remainders, so a target larger
+ * than the densities asked for grows the kinds that were asked for rather than reviving one
+ * that was not.
+ */
+export function apportion(counts: readonly number[], target: number): number[] {
+  const total = counts.reduce((sum, one) => sum + one, 0);
+  if (total <= 0 || target === total) return [...counts];
+  const exact = counts.map((one) => (one * target) / total);
+  const out = exact.map((one) => Math.floor(one));
+  const order = counts
+    .map((_, index) => index)
+    .filter((index) => counts[index]! > 0)
+    .sort((left, right) => exact[right]! - out[right]! - (exact[left]! - out[left]!) || left - right);
+  let left = target - out.reduce((sum, one) => sum + one, 0);
+  // Round-robin down the remainders. More than one lap only happens when `target` is a large
+  // multiple of the total, and then every kind is owed at least one more anyway.
+  for (let step = 0; left > 0 && order.length > 0; step += 1) {
+    const index = order[step % order.length]!;
+    out[index] = (out[index] ?? 0) + 1;
+    left -= 1;
+  }
+  return out;
 }
 
 /** mulberry32. Eight lines of arithmetic rather than a dependency, and deterministic, which
@@ -397,29 +437,29 @@ function positions(count: number, totalM: number, random: () => number): number[
  *
  * Order is fixed - kinds in `KINDS` order, each spaced along the corridor - so the same seed
  * and the same settings give the same file, byte for byte.
+ *
+ * With `objects` set the result holds **exactly** that many, apportioned across the kinds by
+ * their densities; without it, however many the densities asked for.
  */
 export function generateActors(options: RandomiseOptions): DrawnActor[] {
   const corridor = new Corridor(options.corridor);
   if (corridor.totalM <= 0) return [];
 
-  const cap = options.cap ?? Infinity;
-  const wanted: { kind: ActorKind; count: number }[] = [];
-  let total = 0;
-  for (const kind of ["pedestrian", "cyclist", "cone", "barrier"] as ActorKind[]) {
-    const count = countFor(kind, options.densities[kind], corridor.totalM);
-    total += count;
-    wanted.push({ kind, count });
-  }
-  // Scaled rather than truncated, so a capped press keeps the mix that was asked for
-  // instead of spending the whole budget on whichever kind is enumerated first.
-  const scale = total > cap ? cap / total : 1;
+  const kinds = ["pedestrian", "cyclist", "cone", "barrier"] as ActorKind[];
+  const asked = kinds.map((kind) => countFor(kind, options.densities[kind], corridor.totalM));
+  // Apportioned rather than truncated, so a press keeps the mix that was asked for instead
+  // of spending the whole number on whichever kind is enumerated first.
+  const counts =
+    options.objects !== undefined && options.objects > 0
+      ? apportion(asked, options.objects)
+      : asked;
 
   const random = rng(options.seed);
   const name = namer(options.taken);
   const out: DrawnActor[] = [];
 
-  for (const { kind, count } of wanted) {
-    const scaled = scale < 1 ? Math.max(count > 0 ? 1 : 0, Math.floor(count * scale)) : count;
+  for (const [index, kind] of kinds.entries()) {
+    const scaled = counts[index]!;
     const run = RUN[kind];
     if (run) {
       // Cones and barriers come in lines. The density still decides how many there are; it
