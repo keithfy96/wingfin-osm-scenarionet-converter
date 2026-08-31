@@ -357,3 +357,112 @@ they name (`signal_plan.py:152`, `:207`), so `drawn_at` rides along in a version
 directions. Bumping the version would have made every plan written before it unreadable by this
 converter — the opposite of the point. Two tests in `tests/unit/test_signal_plan.py` pin that a
 plan carrying it reads identically to one without, and that one without it still reads.
+
+### A junction is not one node, and the conflict check was reading it as if it were (2026-08-30)
+
+Keith looked at `junction-1`'s three phase groups and said phase-a and phase-b are on the same
+axis and ought to share a green, while phase-c should be the one that alternates. He was right,
+and the page had told him the plan was fine.
+
+**What the junction is.** Two streets, both derivable by script from `lane-model/reviewed.json`:
+
+- **Persiaran Perdana** — `secondary`, 3 lanes each way, split into two one-way carriageways.
+  phase-a is way 776021091 eastbound, heading **74.5°**; phase-b is way 1173001826 westbound,
+  heading **248.5°**. 174° apart, both through-only — phase-b's single left turn
+  (`7c442504 +80.7° → 777160374`) is `forbidden` — so their movements never meet.
+- **Persiaran Meranti** — `tertiary`, crossing it. phase-c is way 756118314 northbound, heading
+  **346.5°**, 88° off the Perdana axis and tagged `turn:lanes=right|right`: it crosses the
+  westbound carriageway at node 1927184814 and merges into the eastbound one at node 474928793.
+
+The plan ran the two conflicting pairs green together for **7.0 s and 17.0 s** of every 60, and
+the compatible pair for **0.0 s**. Inverted, exactly as he read it off the screenshot.
+
+**Why the page blessed it.** `findConflicts` compared only connectors whose `from` lane was
+directly signalled, and only when `left.junction === right.junction`. This junction is **four
+nodes** — 474928793 and 7251588325 on the eastbound carriageway, 1927184814 and 7251588324 on the
+westbound, 3.9 to 9.0 m apart — and each group's stop line sits at a different one, so no pair was
+ever compared and the panel printed an all-clear. **A dual carriageway is crossed in two stages;
+any junction with a central reservation has this shape, so this was never specific to
+`junction-1`.**
+
+**The fix is a bounded walk forward from each light**, in `reachOf`. Measured: the three real
+meetings are **11.3, 12.4 and 16.3 m** past a stop line and the first node outside the box is
+**53.7 m** out, so `DOWNSTREAM_M = 25` sits between them with room either side. The walk is over
+`SignalConnector`s from the payload, costed with `metresBetween` from `web/src/geo.ts`.
+
+**Three stop conditions, and the third is the load-bearing one.** Past `DOWNSTREAM_M` the stream
+has left the junction; at another group's signalled lane that light is what stops it; and **at a
+fork — a lane with more than one active movement — the walk stops because the driver chooses the
+route there, not the light**. Keith's decision on the unsignalled Persiaran Meranti southbound
+off-ramp (`777160375 idx0 → 777159293 → 777160374`, which crosses the westbound carriageway 16.3 m
+later) is that it gets no light and must not appear in the rules at all. That falls out of the fork
+rule rather than needing an exception, because the off-ramp is reached only through the diverge at
+node 7251588325. **Do not replace it with a name-based or way-based exclusion**: the general rule
+is the reason it is safe.
+
+Two smaller things the walk forced out, both of which had been invisible while nothing was
+compared. Two movements leaving **one** lane read as a crossing under `pathsCross` and are a
+diverge, not two streams — hence the `left.from === right.from` skip. And the panel counted
+**rows** while calling them *pairs*; one pair meets twice at node 474928793, once as a merge and
+once as a crossing, so it now counts meetings.
+
+**Corrected plan, and what it measures.** Same lanes, same 60 s cycle, same 27/3 splits; only the
+offsets move, to 0 / 0 / 30.
+
+```
+      0        10        20        30        40        50        60 s
+  a   GGGGGGGGGGGGGGGGGGGGGGGGGGGYYY..............................
+  b   GGGGGGGGGGGGGGGGGGGGGGGGGGGYYY..............................
+  c   ..............................GGGGGGGGGGGGGGGGGGGGGGGGGGGYYY
+
+  every meeting in the junction: 0.0 s green together
+```
+
+Driving the **built** bundle headlessly against the real page payload: the panel reports the three
+meetings with their distances, none green together, and never mentions the off-ramp; restoring the
+0 / 30 / 40 offsets turns all three red again. `read_signal_plan` accepts the rewritten file —
+3 groups, 8 lights, 60 s — and its `drawn_at` agrees with `stop_points` to **0.000e+00 degrees**.
+
+**The page's distances and a script's will not match to the millimetre.** The page measures in
+WGS84 through `metresBetween`'s flat approximation; a script over the model measures in the local
+projected metres. Over ~12 m that is 12.5 against 12.4 — under 1%, and not a bug in either.
+
+### Re-timing a junction is graph colouring over the conflict list (2026-08-30)
+
+The button Keith asked for — "Re-time to clear the clashes" — is `web/src/signal/auto-phase.ts`.
+It needed no new analysis, because **`findConflicts`' output is already the whole input**: it
+returns every meeting whatever its overlap, and computes `overlapSeconds` only *after* a pair is
+found, so the list is a plain graph over group names, independent of the timings being replaced.
+Colour that graph and each colour is a set of groups that never meet; give each colour its own
+slice of the shared cycle and nothing that meets is ever green at once.
+
+**Four things it is easy to get wrong, all of them measured:**
+
+- **The colouring must be deterministic.** Welsh–Powell orders by descending degree, and the
+  tie-break is *not* cosmetic: Undo restores the old timings and the button is there to be pressed
+  again, so a drift on a tie means the second press lands somewhere else. Name ascending breaks it.
+- **Greens come from the rounded offsets, never from `cycle / stages`.** At three stages over a
+  37 s cycle the offsets round to 0 / 12.3 / 24.7 and the stages are 12.3 / 12.4 / 12.3 — take the
+  greens from 12.333… and the plan comes back green-on-green, which is the one thing the button
+  claims not to do. Pinned by a test that runs `autoPhase` then the real `findConflicts`.
+- **A green is never made longer.** `min(existing, room)`, so a green deliberately shortened stays
+  short even when its stage would allow more. Growing it back would silently undo a choice.
+- **The busiest stage leads the cycle** — colours sorted by total lane count. On `junction-1` that
+  is the difference between opening with six lanes of dual carriageway and opening with the
+  two-lane side road.
+
+On `junction-1` it reproduces the hand-derived plan exactly and **shortens nothing**: two stages of
+30.0 s, `phase-a` and `phase-b` sharing the first, `phase-c` taking the second, offsets 0 / 0 / 30
+with all three greens still 27. A file downloaded straight after the press is accepted by
+`read_signal_plan` — 3 groups, 8 lights, 60 s.
+
+**The button times groups; it never regroups lanes.** That line is the whole reason it is safe to
+have at all, and the two comments that used to say the page "does not solve" —
+`conflicts.ts`'s header and `signal_builder_view.py`'s module docstring — were corrected rather
+than left standing. Which lanes belong to which group is the judgement about the junction; when
+each group may run is arithmetic.
+
+**The Undo is one step and deliberately fragile.** It is dropped by any of five edits — a group's
+timing, a group added or removed, the cycle, or a plan loaded over the top — so it can never write
+over newer work. Verified by driving the built bundle: press, download, undo, press again, change
+the cycle, and watch the Undo button disappear.

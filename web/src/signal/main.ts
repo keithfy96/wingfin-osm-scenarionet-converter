@@ -9,7 +9,8 @@
 // lane's downstream end. That is why lanes are what gets clicked rather than junctions:
 // a junction is where the conflict is, but a lane is where the light is.
 
-import { findConflicts, type Conflict } from "./conflicts.js";
+import { autoPhase, AutoPhaseError } from "./auto-phase.js";
+import { DOWNSTREAM_M, findConflicts, type Conflict } from "./conflicts.js";
 import { colourAt, phaseStripCss } from "./phase.js";
 import {
   inspectSignals,
@@ -129,6 +130,13 @@ function boot(): void {
     payload.lanes.map((lane) => [lane.id, stopPoint(lane)]),
   );
 
+  // Every lane's shape, so `findConflicts` can measure how far past a light its traffic is
+  // still inside the junction. Kept apart from `byId` because that is what the function
+  // needs and all it needs.
+  const laneLines = new Map<string, readonly [number, number][]>(
+    payload.lanes.map((lane) => [lane.id, lane.line]),
+  );
+
   // --- panel ------------------------------------------------------------------------
   const status = element("p", "verdict");
   const detail = element("p", "muted");
@@ -148,6 +156,13 @@ function boot(): void {
   const addGroupButton = element("button", "primary", "Add a phase group");
   const groupList = element("div", "groups");
   const conflictBox = element("div", "conflicts");
+  const autoButton = element("button", "fixbtn", "Re-time to clear the clashes");
+  const undoButton = element("button", "fixbtn", "Undo the re-timing");
+  // What the last press did, and what it did it to. `autoUndo` is dropped the moment
+  // anything else is edited, so Undo can never write over newer work.
+  let autoUndo: PhaseGroup[] | null = null;
+  let autoNote = "";
+  let autoFailed = false;
   const saveButton = element("button", "primary", "Download signals.json");
   // A button rather than the small underlined link this was: it is the other half of the
   // pair with Download, and read as a footnote for as long as it looked like one.
@@ -279,7 +294,7 @@ function boot(): void {
 
   function renderConflicts(): void {
     conflictBox.replaceChildren();
-    const conflicts = findConflicts(groups, cycleSeconds, payload.connectors);
+    const conflicts = findConflicts(groups, cycleSeconds, payload.connectors, laneLines);
     const clashing = conflicts.filter((conflict) => conflict.overlapSeconds > 0);
     if (groups.length < 2) {
       conflictBox.append(
@@ -294,7 +309,11 @@ function boot(): void {
     }
     if (conflicts.length === 0) {
       conflictBox.append(
-        element("p", "ok", "No two groups have movements that meet at the same junction."),
+        element(
+          "p",
+          "ok",
+          `No two groups' traffic meets within ${DOWNSTREAM_M} m of a stop line.`,
+        ),
       );
       return;
     }
@@ -303,13 +322,76 @@ function boot(): void {
       element(
         "p",
         heading,
+        // Counted in meetings and not in pairs: one pair can meet twice at one node, as a
+        // merge and as a crossing, and calling three rows "3 pairs" is simply wrong.
         clashing.length === 0
-          ? `${conflicts.length} pair${conflicts.length === 1 ? "" : "s"} meet, and this plan keeps them apart.`
-          : `${clashing.length} pair${clashing.length === 1 ? " is" : "s are"} green together.`,
+          ? `${conflicts.length} meeting${conflicts.length === 1 ? "" : "s"} between groups, and this plan keeps them apart.`
+          : `${clashing.length} meeting${clashing.length === 1 ? " is" : "s are"} green together.`,
       ),
     );
+    if (clashing.length > 0) conflictBox.append(autoButton);
+    if (autoNote) conflictBox.append(element("p", autoFailed ? "bad" : "caption", autoNote));
+    if (autoUndo) conflictBox.append(undoButton);
     for (const conflict of conflicts) describeConflict(conflict);
   }
+
+  /** Stop offering to undo a re-timing that no longer describes what is on screen. */
+  function forgetAutoTiming(): void {
+    autoUndo = null;
+    autoNote = "";
+    autoFailed = false;
+  }
+
+  autoButton.addEventListener("click", () => {
+    const before = groups.map((group) => ({ ...group }));
+    let proposed;
+    try {
+      proposed = autoPhase(groups, cycleSeconds, findConflicts(groups, cycleSeconds, payload.connectors, laneLines));
+    } catch (error) {
+      forgetAutoTiming();
+      autoFailed = true;
+      autoNote = error instanceof AutoPhaseError ? error.message : "Could not re-time this plan.";
+      renderAll();
+      return;
+    }
+    // The arithmetic says the stages cannot overlap. Checking anyway costs nothing and is
+    // what would catch a future change to the reach walk quietly breaking this claim - the
+    // one claim the button's label makes.
+    const left = findConflicts(proposed.groups, cycleSeconds, payload.connectors, laneLines).filter(
+      (conflict) => conflict.overlapSeconds > 0,
+    );
+    if (left.length > 0) {
+      forgetAutoTiming();
+      autoFailed = true;
+      autoNote =
+        `Re-timing would still leave ${left[0]!.a} and ${left[0]!.b} green together. ` +
+        "Nothing was changed.";
+      renderAll();
+      return;
+    }
+
+    groups.splice(0, groups.length, ...proposed.groups);
+    autoUndo = before;
+    autoFailed = false;
+    const stages = proposed.stages
+      .map((stage, index) => `stage ${index + 1} (${stage.lengthSeconds.toFixed(1)} s): ${stage.members.join(", ")}`)
+      .join("; ");
+    const cut = proposed.shortened
+      .map((one) => `${one.name} ${one.was.toFixed(1)} to ${one.now.toFixed(1)} s`)
+      .join(", ");
+    autoNote =
+      `Re-timed into ${proposed.stages.length} stages - ${stages}. ` +
+      (cut ? `Greens shortened to fit: ${cut}.` : "No green was shortened.") +
+      " Which lanes are in which group is untouched.";
+    renderAll();
+  });
+
+  undoButton.addEventListener("click", () => {
+    if (!autoUndo) return;
+    groups.splice(0, groups.length, ...autoUndo);
+    forgetAutoTiming();
+    renderAll();
+  });
 
   function describeConflict(conflict: Conflict): void {
     const row = element("div", conflict.overlapSeconds > 0 ? "crow bad" : "crow");
@@ -324,7 +406,26 @@ function boot(): void {
           : "never green together",
       ),
     );
+    const where = reachNote(conflict);
+    if (where) row.append(element("div", "n", where));
     conflictBox.append(row);
+  }
+
+  /** Which side of a conflict is not standing at its own stop line, and how far past it.
+   *
+   * A staggered junction is the whole reason the pair was found, so naming only the node
+   * sends a person hunting for a light that is not there. Below 0.05 m is the stop line
+   * itself and saying so would be noise on every row.
+   */
+  function reachNote(conflict: Conflict): string | null {
+    const away = [
+      { name: conflict.a, metres: conflict.metres.a },
+      { name: conflict.b, metres: conflict.metres.b },
+    ].filter((side) => side.metres > 0.05);
+    if (away.length === 0) return null;
+    return away
+      .map((side) => `${side.name}'s traffic gets there ${side.metres.toFixed(1)} m past its light`)
+      .join("; ");
   }
 
   function renderGroups(): void {
@@ -355,6 +456,7 @@ function boot(): void {
       remove.addEventListener("click", () => {
         groups.splice(index, 1);
         if (active >= groups.length) active = groups.length - 1;
+        forgetAutoTiming();
         renderAll();
       });
       head.append(name, remove);
@@ -385,6 +487,7 @@ function boot(): void {
         note.textContent = problem ?? "";
         if (problem) return;
         Object.assign(group, candidate);
+        forgetAutoTiming();
         renderAll();
       };
       for (const field of [green, yellow, offset]) field.addEventListener("change", apply);
@@ -454,6 +557,7 @@ function boot(): void {
       offset_seconds: Number((((cycleSeconds / (index + 1)) * index) % cycleSeconds).toFixed(1)),
     });
     active = index;
+    forgetAutoTiming();
     renderAll();
   });
 
@@ -470,6 +574,7 @@ function boot(): void {
       return;
     }
     cycleSeconds = value;
+    forgetAutoTiming();
     previewSeconds = Math.min(previewSeconds, cycleSeconds);
     previewInput.value = String(previewSeconds);
     renderAll();
@@ -517,6 +622,7 @@ function boot(): void {
     cycleInput.value = String(cycleSeconds);
     groups.splice(0, groups.length, ...inspection.plan.groups);
     active = groups.length > 0 ? 0 : -1;
+    forgetAutoTiming();
     loadNote.textContent = "";
     loadReport.replaceChildren();
     const drawnOn = inspection.identityProblems.find((p) => p.field === "generation");

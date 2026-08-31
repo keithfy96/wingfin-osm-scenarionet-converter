@@ -11,8 +11,14 @@ person rather than to a heuristic in the converter. This page is where that judg
 
 Placement is on **lanes**, not junctions, because a light stops the traffic leaving one lane
 and the wall goes at that lane's downstream end. The junction is where the *conflict* is, and
-the page reports those - two groups whose movements cross or merge at the same node, and how
-long this plan runs them green together - without trying to solve the phasing.
+the page reports those - two groups whose traffic crosses or merges within 25 m of a stop
+line, and how long this plan runs them green together.
+
+It will also *time* those groups for you, on request: one press gives every set of groups that
+never meet its own stage of the cycle. What it will never do is decide **which lanes belong to
+which group**. That is the judgement about the junction quoted above, and no button here makes
+it - the arithmetic of when a group may run is not the same kind of question as which movements
+should run together.
 
 Surveyed signals are drawn and never selected. `junction-1` makes the reason plain: its one
 `highway=traffic_signals` node sits at the edge of the extract, associated with the lanes it
@@ -70,6 +76,7 @@ _TEMPLATE = """<!doctype html>
   button.primary{background:#1c7ed6;border-color:#1c7ed6;color:#fff;width:100%%;margin-bottom:6px}
   button:disabled{opacity:.45;cursor:not-allowed}
   button.link{border:0;background:none;color:#c92a2a;padding:0 4px;text-decoration:underline}
+  button.fixbtn{width:100%%;margin:6px 0}
   input[type=text],input[type=number]{min-width:0;padding:5px;font:inherit;border:1px solid #ced4da;border-radius:3px}
   input[type=number]{width:64px;font-variant-numeric:tabular-nums}
   input[type=range]{flex:1;min-width:0}
@@ -112,6 +119,18 @@ at one moment in the cycle.</p>
 <div class='key'><span class='sw' style='border-top-color:#343a40'></span> an unsignalled lane</div>
 <div class='key'><span class='dot' style='background:#2f9e44'></span> where the light is - the
 stop line at the lane's downstream end, which is where the converter puts the wall</div>
+<h2>How the conflict check reads the junction</h2>
+<p class='caption'>A junction is often several OSM nodes rather than one - a dual carriageway is
+crossed in two stages, and each arm's light then sits at a different node. So each group's traffic
+is followed up to 25 m past its own light, and any two streams that cross or merge inside that are
+reported with how far past their lights they meet. The walk stops at another group's light, and at
+a fork: past a fork it is the driver who chooses the route, not the light, so no timing here can
+separate the streams beyond it.</p>
+<p class='caption'>When two groups are green together, <strong>Re-time to clear the clashes</strong>
+gives each set of groups that never meet its own stage of the cycle. It rewrites the offsets, and
+shortens a green only where one will not fit its stage - yellows, the cycle, and above all
+<em>which lanes are in which group</em> are left alone. That last one is the judgement about the
+junction and the page will not make it for you. One press can be undone.</p>
 <h2>Then run</h2>
 <pre>osm-scenario convert -w %(workspace)s \\
   --config config/default.yaml \\
