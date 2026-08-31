@@ -9,10 +9,15 @@
 import { describe, expect, it } from "vitest";
 import { metresBetween } from "../../src/geo.js";
 import {
+  BARRIER_RUN,
+  BARRIER_SPACING_M,
+  CONE_RUN,
+  CONE_SPACING_M,
   CYCLIST_LEAD_S,
   CYCLIST_PATH_MAX_M,
   CYCLIST_PATH_MIN_M,
   PEDESTRIAN_DWELL_S,
+  TAPER_START_M,
   MAX_DELAY_FRACTION,
 
   PER_KM,
@@ -43,6 +48,22 @@ function eastward(id: string, metres: number, from: [number, number] = [LAT, LON
     index: 1,
     count: 2,
   };
+}
+
+/** The same lane, but sitting `index` of `count` across the carriageway. */
+function across(
+  index: number,
+  count: number,
+  metres = 1000,
+  from: [number, number] = [LAT, LON],
+): PlacementLane {
+  return { ...eastward("a", metres, from), index, count };
+}
+
+/** How far kerbside of the lane centre a placed static ended up, in metres. */
+function kerbwardM(actor: DrawnActor): number {
+  const [lat, lon] = actor.position!;
+  return metresBetween([LAT, lon], [lat, lon]) * (lat > LAT ? 1 : -1);
 }
 
 const NONE: Record<ActorKind, Density> = {
@@ -287,5 +308,104 @@ describe("the whole-map press", () => {
     for (const kind of KINDS) {
       expect(capped.some((actor) => actor.kind === kind)).toBe(true);
     }
+  });
+});
+
+describe("cones and barriers", () => {
+  it("come in runs rather than one every eighty metres", () => {
+    // One cone on its own reads as litter. The density still says how many; this is where
+    // they go.
+    const made = only("cone", "medium");
+    expect(made).toHaveLength(PER_KM.cone.medium);
+    const alongs = made.map((actor) => metresBetween([LAT, LON], [LAT, actor.position![1]]));
+    const gaps = alongs.slice(1).map((at, index) => at - alongs[index]!);
+    const withinRun = gaps.filter((gap) => gap < CONE_SPACING_M * 2);
+    // Most neighbours are a run's spacing apart; only the jumps between runs are not.
+    expect(withinRun.length).toBeGreaterThanOrEqual(made.length - Math.ceil(made.length / CONE_RUN));
+    for (const gap of withinRun) expect(gap).toBeCloseTo(CONE_SPACING_M, 0);
+  });
+
+  it("spaces a barrier line closer than a barrier is long", () => {
+    const made = only("barrier", "dense");
+    const alongs = made.map((actor) => metresBetween([LAT, LON], [LAT, actor.position![1]]));
+    const gaps = alongs.slice(1).map((at, index) => at - alongs[index]!);
+    const withinRun = gaps.filter((gap) => gap < BARRIER_SPACING_M * 2);
+    expect(withinRun.length).toBeGreaterThanOrEqual(made.length - Math.ceil(made.length / BARRIER_RUN));
+    for (const gap of withinRun) expect(gap).toBeCloseTo(BARRIER_SPACING_M, 1);
+  });
+
+  it("stands well inside the kerb, not balanced on it", () => {
+    const lane = across(0, 3);
+    const { toKerb } = halfWidths(lane);
+    for (const kind of ["cone", "barrier"] as const) {
+      for (const actor of only(kind, "medium", { corridor: [lane] })) {
+        // Never beyond the kerb, and never merely grazing it either: the closest any of
+        // them comes to the kerb is `TAPER_START_M` inside it. Grazing was the complaint -
+        // 80 of 91 statics measured 0.00 m from the road edge, which blocks nothing.
+        expect(kerbwardM(actor)).toBeLessThanOrEqual(toKerb - TAPER_START_M + 1e-6);
+        expect(kerbwardM(actor)).toBeGreaterThanOrEqual(toKerb - halfLane(lane) - 1e-6);
+      }
+    }
+  });
+
+  it("lays a barrier line down the middle of the nearside lane, where it blocks", () => {
+    // The whole point of a barrier. MetaDrive counts an object as the car in front when any
+    // corner of its bounding box is on the lane polygon and a static one never drives off,
+    // so a line across a lane stops whatever is driving it.
+    for (const [index, count] of [[0, 1], [1, 2], [0, 3], [2, 3]] as const) {
+      const lane = across(index, count);
+      const { toKerb } = halfWidths(lane);
+      for (const actor of only("barrier", "dense", { corridor: [lane] })) {
+        expect(kerbwardM(actor)).toBeCloseTo(toKerb - halfLane(lane), 6);
+      }
+    }
+  });
+
+  it("closes the ego's own lane when the route is already in the nearside one", () => {
+    // No special case for the ego: on a single-lane carriageway, and on the nearside lane
+    // of any carriageway, the middle of the nearside lane *is* the middle of the ego's.
+    for (const [index, count] of [[0, 1], [1, 2], [2, 3]] as const) {
+      for (const actor of only("barrier", "dense", { corridor: [across(index, count)] })) {
+        expect(kerbwardM(actor)).toBeCloseTo(0, 6);
+      }
+    }
+  });
+
+  it("tapers a cone run in off the verge, and keeps a barrier line straight", () => {
+    const lane = across(0, 3);
+    const cones = only("cone", "medium", { corridor: [lane] }).slice(0, CONE_RUN);
+    const offsets = cones.map(kerbwardM);
+    // Kerbward distance falls as the run goes on: the line closes in across the lane.
+    for (let i = 1; i < offsets.length; i += 1) expect(offsets[i]!).toBeLessThan(offsets[i - 1]!);
+    expect(offsets[offsets.length - 1]!).toBeCloseTo(halfWidths(lane).toKerb - halfLane(lane), 6);
+
+    const barriers = only("barrier", "medium", { corridor: [lane] }).slice(0, BARRIER_RUN);
+    const flat = barriers.map(kerbwardM);
+    for (const offset of flat) expect(offset).toBeCloseTo(flat[0]!, 6);
+  });
+});
+
+describe("where a run is anchored", () => {
+  it("prefers the stretches that have a lane between the corridor and the kerb", () => {
+    // On a single-lane carriageway "on the road" and "in the ego's lane" are the same
+    // place, so a run there has to sit at the lane edge instead. And a *kerbside* lane is
+    // the same case however many lanes the carriageway has - indices run centre-out, so
+    // `count - 1` has nothing between it and the kerb. Testing `count > 1` instead of
+    // `index < count - 1` put five of eight cones back off the road on route-1.
+    const corridor = [
+      { ...across(1, 2, 300), id: "nearside" },
+      { ...across(0, 3, 300, offsetMetres([LAT, LON], 300, 0)), id: "wide" },
+    ];
+    const made = only("cone", "dense", { corridor });
+    const wideFrom = metresBetween([LAT, LON], [LAT, LON + 0]) + 300;
+    for (const actor of made) {
+      const along = metresBetween([LAT, LON], [LAT, actor.position![1]]);
+      expect(along).toBeGreaterThan(wideFrom - CONE_SPACING_M);
+    }
+  });
+
+  it("falls back to the whole corridor when no stretch has one", () => {
+    const made = only("cone", "medium", { corridor: [across(0, 1)] });
+    expect(made.length).toBe(PER_KM.cone.medium);
   });
 });

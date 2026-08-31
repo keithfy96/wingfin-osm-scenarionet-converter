@@ -75,8 +75,34 @@ export const MAX_DELAY_FRACTION = 0.6;
  * carriageway rather than on the edge of it. */
 export const VERGE_M = 2;
 
-/** How far outside the kerb edge a cone or a barrier stands. */
-export const KERB_CLEARANCE_M = 0.4;
+/** How far inside the kerb a cone run starts, before it tapers across the lane.
+ *
+ * Not a clearance - an intrusion. A cone or barrier sitting on the kerb line is on the road
+ * only in the sense that a bounding box grazes it, and it blocks nothing: a barrier that
+ * does not block traffic is not a barrier. So a run starts just inside the kerb and works
+ * its way to the middle of the nearside lane.
+ */
+export const TAPER_START_M = 0.4;
+
+/** Cones and barriers arrive in lines, because one alone reads as litter.
+ *
+ * A cone run tapers from just inside the kerb across to the middle of the nearside lane,
+ * which is the shape of a real lane closure. Barriers do not taper - a fence is a fence -
+ * and are 2.0 m long (`traffic_object.py:156`), so 2.2 m apart makes a continuous line
+ * rather than a dotted one.
+ *
+ * **These block.** `FrontBackObjects.get_find_front_back_objs_single_lane` counts an object
+ * as the car in front when any corner of its bounding box is on the lane polygon
+ * (`idm_policy.py:161`), and a static one never drives off - so whatever is driving the
+ * lane they are laid across stops behind them and stays there. That is the point of them.
+ * Which lane that is follows from the geometry and gets no special case: on a stretch with
+ * an inner lane the run closes the nearside one, and the ego passing on the inside is not
+ * stopped; where the route's own lane is the nearside one, it stops the ego too.
+ */
+export const CONE_RUN = 5;
+export const CONE_SPACING_M = 3;
+export const BARRIER_RUN = 3;
+export const BARRIER_SPACING_M = 2.2;
 
 /** Enough of a lane to place something on. Shorter ones are junction stubs. */
 export const MIN_LANE_M = 6;
@@ -182,6 +208,44 @@ class Corridor {
     if (!lane || start === undefined) return null;
     return along(lane, wanted - start);
   }
+
+  /** The stretches with a nearside lane between the corridor and the kerb.
+   *
+   * A run is laid across the nearside lane, so these are the stretches where it closes a
+   * lane the route is not itself using - roadworks the car drives past rather than roadworks
+   * that stop it dead at the first one. Preferred, not required: a route with no such
+   * stretch falls back to the whole corridor and the runs close its own lane, which is a
+   * blocked road and correct.
+   *
+   * The test is `index < count - 1`, **not** `count > 1`. Indices run centre-out, so
+   * `count - 1` *is* the kerbside lane: a car on it has nothing between it and the kerb,
+   * exactly like a single-lane road. `junction-1`'s route-1 is 400 m of which 279 m is
+   * multi-lane - but 203 m of that is the ego already in the nearside lane.
+   */
+  onRoad(): { from: number; to: number }[] {
+    const spans: { from: number; to: number }[] = [];
+    for (const [index, lane] of this.lanes.entries()) {
+      if (lane.index >= lane.count - 1) continue;
+      const from = this.starts[index] ?? 0;
+      const to = this.starts[index + 1] ?? from;
+      const last = spans[spans.length - 1];
+      if (last && Math.abs(last.to - from) < 1e-6) last.to = to;
+      else spans.push({ from, to });
+    }
+    return spans;
+  }
+}
+
+/** `distance` measured along `spans` only, mapped back to a distance along the corridor. */
+function withinSpans(spans: { from: number; to: number }[], distance: number): number {
+  let left = distance;
+  for (const span of spans) {
+    const length = span.to - span.from;
+    if (left <= length) return span.from + left;
+    left -= length;
+  }
+  const last = spans[spans.length - 1];
+  return last ? last.to : distance;
 }
 
 export function lineLengthM(line: readonly [number, number][]): number {
@@ -341,12 +405,79 @@ export function generateActors(options: RandomiseOptions): DrawnActor[] {
 
   for (const { kind, count } of wanted) {
     const scaled = scale < 1 ? Math.max(count > 0 ? 1 : 0, Math.floor(count * scale)) : count;
+    const run = RUN[kind];
+    if (run) {
+      // Cones and barriers come in lines. The density still decides how many there are; it
+      // is where they go that changes - a run of them along one stretch of kerb rather than
+      // one every eighty metres, which is litter rather than roadworks.
+      let left = scaled;
+      for (const distance of anchors(Math.ceil(scaled / run.size), corridor, random)) {
+        const members = Math.min(run.size, left);
+        left -= members;
+        for (const actor of line(kind, distance, members, corridor, name, run)) out.push(actor);
+      }
+      continue;
+    }
     for (const distance of positions(scaled, corridor.totalM, random)) {
       const sample = corridor.at(distance);
       if (!sample) continue;
       const actor = place(kind, sample, distance, name(STEM[kind]), random, options, corridor.totalM);
       if (actor) out.push(actor);
     }
+  }
+  return out;
+}
+
+/** Where to start each run: spread over the stretches a cone can be on the road, if any. */
+function anchors(count: number, corridor: Corridor, random: () => number): number[] {
+  const spans = corridor.onRoad();
+  const usable = spans.reduce((total, span) => total + (span.to - span.from), 0);
+  if (usable <= 0) return positions(count, corridor.totalM, random);
+  return positions(count, usable, random).map((distance) => withinSpans(spans, distance));
+}
+
+const RUN: Partial<Record<ActorKind, { size: number; spacing: number }>> = {
+  cone: { size: CONE_RUN, spacing: CONE_SPACING_M },
+  barrier: { size: BARRIER_RUN, spacing: BARRIER_SPACING_M },
+};
+
+/** How far from the corridor lane's centre a static stands: across the nearside lane.
+ *
+ * `fraction` runs 0 at the start of a taper to 1 at its end. 0 is `TAPER_START_M` inside the
+ * kerb; 1 is the middle of the nearside lane, which is where a barrier goes and where a cone
+ * run finishes. There is no floor keeping it out of the lane the car is driving - see
+ * `CONE_RUN` - because a barrier is meant to stop something.
+ */
+function staticOffset(lane: PlacementLane, fraction: number): number {
+  const { toKerb } = halfWidths(lane);
+  const inner = toKerb - halfLane(lane);
+  const outer = Math.max(toKerb - TAPER_START_M, inner);
+  return outer + (inner - outer) * fraction;
+}
+
+/** One run of cones or barriers, laid along the road from `distance`. */
+function line(
+  kind: ActorKind,
+  distance: number,
+  members: number,
+  corridor: Corridor,
+  name: (stem: string) => string,
+  run: { size: number; spacing: number },
+): DrawnActor[] {
+  const out: DrawnActor[] = [];
+  for (let index = 0; index < members; index += 1) {
+    const sample = corridor.at(distance + index * run.spacing);
+    if (!sample) continue;
+    // Cones taper in off the verge over the run; a barrier line is straight, because a
+    // barrier is a fence and a fence does not taper.
+    const fraction =
+      kind === "cone" ? (members === 1 ? 1 : index / (members - 1)) : 1;
+    out.push({
+      name: name(STEM[kind]),
+      kind,
+      position: toKerbside(sample, staticOffset(sample.lane, fraction)),
+      heading_rad: round4(Math.atan2(sample.north, sample.east)),
+    });
   }
   return out;
 }
@@ -430,14 +561,10 @@ function place(
     };
   }
 
-  // A cone or a barrier: just outside the kerb edge, squared to the road. Static tracks are
-  // valid for the whole episode, so there is nothing to time.
-  return {
-    name,
-    kind,
-    position: toKerbside(sample, toKerb + KERB_CLEARANCE_M),
-    heading_rad: round4(Math.atan2(sample.north, sample.east)),
-  };
+  // Cones and barriers never reach here: they are laid in runs by `line`, because one on
+  // its own reads as litter. Static tracks are valid for the whole episode, so unlike the
+  // walkers they have nothing to time.
+  return null;
 }
 
 function round1(value: number): number {

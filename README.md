@@ -236,7 +236,15 @@ places them for you:
 **Load your `routes.json` into it first.** The route is drawn in blue and every actor
 goes on or beside a lane it actually drives, so the car meets all of them — walkers
 standing at the kerb and stepping into the road as it arrives, riders on the road ahead
-of it, cones and barriers at the kerb. Without a route they are scattered over the whole
+of it, and cones and barriers in runs that **close a lane** — a cone taper from just
+inside the kerb across to the middle of the nearside lane, a barrier line down the middle
+of it. They are in the lane rather than on the kerb beside it, because MetaDrive counts
+anything overlapping a lane as the car in front and a barrier never drives off: whatever
+drives that lane stops behind it. Measured, one barrier on the recorded car's own line
+took it from finishing the route to 35% of it. Which lane closes follows from the
+geometry with no special case for the ego — where the route has an inner lane the car
+goes past on the inside; where it is already in the nearside lane, or the road has only
+one, the car stops. Without a route they are scattered over the whole
 map, capped at 150, and most will be nowhere near the drive. That is not hypothetical:
 a pedestrian placed by hand on `junction-1` sat 137 m off the route the entire time it
 existed, and nothing but a measurement of the pickle said so.

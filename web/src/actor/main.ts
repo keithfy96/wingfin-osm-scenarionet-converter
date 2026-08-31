@@ -203,6 +203,14 @@ function boot(): void {
   routeRow.hidden = true;
   routeRow.append(element("label", undefined, "route"), routeSelect);
   const routeNote = element("p", "caption");
+  // Said before Generate, not after it. Reporting the whole-map spread in the result note
+  // was too late to be useful: a press with no route loaded scattered 149 actors over the
+  // map, only 31 of them within 25 m of the route, and the first sign of it was the map.
+  const NO_ROUTE =
+    `No route loaded, so Generate will spread actors over the whole map (capped at ` +
+    `${WHOLE_MAP_CAP}) and most will be nowhere near the drive. Load the routes.json you ` +
+    `convert with to put them on it.`;
+  routeNote.textContent = NO_ROUTE;
 
   const seedInput = numberInput(1, "1", "72px");
   const paceInput = numberInput(30, "1", "72px");
@@ -409,15 +417,13 @@ function boot(): void {
     corridor = null;
     const chosen = loadedRoutes[routeSelect.selectedIndex];
     if (!chosen) {
-      routeNote.textContent = "";
+      routeNote.textContent = NO_ROUTE;
       redrawCorridor();
       return;
     }
     const found = graph.find(chosen.start_lane, chosen.end_lane);
     if (!found) {
-      routeNote.textContent =
-        `No drive from ${chosen.name}'s start to its end on this map. Actors will be ` +
-        "spread over the whole network instead.";
+      routeNote.textContent = `No drive from ${chosen.name}'s start to its end on this map. ${NO_ROUTE}`;
       redrawCorridor();
       return;
     }
@@ -453,8 +459,9 @@ function boot(): void {
         corridor = null;
         routeRow.hidden = true;
         redrawCorridor();
-        routeNote.textContent =
-          error instanceof RoutesFileError ? error.message : "Could not read that file.";
+        routeNote.textContent = `${
+          error instanceof RoutesFileError ? error.message : "Could not read that file."
+        } ${NO_ROUTE}`;
       }
       routeInput.value = "";
     });

@@ -109,6 +109,19 @@ kilometre - pedestrians 1, 4 or 10; cyclists 1, 3 or 8; cones 2, 8 or 20; barrie
 so what you get depends on how long the road is. Everything it places is an ordinary entry in
 the list below: select it, remove it, or edit the downloaded file. Pressing Generate again
 replaces what it placed last time and leaves anything you drew by hand alone.</p>
+<h2>Cones and barriers close a lane</h2>
+<p class='caption'>One on its own reads as litter, so they arrive as lines: a cone run
+tapering from just inside the kerb across to the middle of the nearside lane, a barrier line
+squared and laid down the middle of it. They are <em>in</em> the lane, not on the kerb beside
+it, and that is the point - MetaDrive counts anything overlapping a lane as the car in front,
+and a barrier never drives off, so whatever is driving that lane stops behind it and stays
+there. Measured: one barrier on the recorded car's own line took it from finishing the route
+to 35%% of it.</p>
+<p class='caption'>Which lane gets closed follows from the geometry, with no special case for
+the recorded car. Where the route has an inner lane the run closes the nearside one and the
+car goes past on the inside; where the route is already in the nearside lane - and on any
+single-lane road - it closes the car's own lane and stops it. Drag one out to the kerb if
+you want roadworks that nothing has to drive around.</p></p>
 <h2>Load a route first</h2>
 <p class='caption'>Without one, actors are scattered over the whole map - capped, because
 every lane at <em>dense</em> is thousands of them - and most will be nowhere near the car.
