@@ -605,6 +605,20 @@ then from inside `scripts/`:
 
 ```
 
+**Traffic makes the drive longer, and the drive is bounded.** Queueing behind other cars cost
+a measured 645 steps against a free-flow 412 on `junction-1` — and the bound used to be 424, so
+a perfectly good traffic drive reported `did not arrive: ran out of recorded steps`.
+`--traffic live` now doubles the self-driven part of that bound, which covers it. When a drive
+still runs out, the failure line prints the budget's terms and `--extra-seconds <n>` adds to it;
+neither applies to `--agent-policy replay`, whose positions are set frame by frame and cannot be
+delayed by anything on the road.
+
+A drive that outruns the recording loses what is on the tape: MetaDrive **removes recorded
+pedestrians and cyclists** past the last frame, keeps cones and barriers, and freezes
+`--lights tape` on its last colour (`--lights live` keeps cycling). The run says so when it
+happens. To time a generated crossing against a traffic-slowed drive, lower the **ego pace**
+field in the actor builder's Randomise panel rather than lengthening the recording.
+
 `--count` is a pool of *routes*, not cars; `--traffic-count` is how many cars are on the road
 at once, and one route can carry several. `traffic.json` holds geometry and no timing, so the
 same file serves every rate the workspace holds — like `routes.json`, and unlike a dataset.

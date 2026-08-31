@@ -134,6 +134,25 @@ MAX_LATERAL_DIST_M = 4.0
 # the run may take and changes nothing about how the car drives.
 IDM_TRACKING_RATIO = 0.85
 
+# What queueing behind other cars costs, as a multiple of the free-flow drive, and applied only
+# under `--traffic live`. The budget already carries a named term for every other cause of
+# legitimate extra time - the tracking deficit above, and the longest red in `_longest_red` -
+# and had none at all for the one thing `--traffic live` exists to create. Measured on
+# `junction-1` at 10 Hz, `--agent-policy idm`, each run driven to `arrive_dest` with the budget
+# raised by hand: no traffic 412 steps; 25 cars on seed 0, 645; 50 cars on seed 0, 656; 25 cars
+# on seed 3, 412. The delay is **seed-dependent rather than count-dependent** - doubling the
+# cars added 11 steps and changing the seed removed all 233 - so no factor is right for every
+# run and `--extra-seconds` exists beside this one. 2.0 against a worst measured 1.57 is the
+# same "measured, with room" shape as the 0.906 -> 0.85 above.
+#
+# It costs nothing on a drive that arrives: the loop ends on `arrive_dest`, not on the bound.
+# Only a drive that was going to fail anyway pays for the larger number.
+TRAFFIC_DELAY_FACTOR = 2.0
+
+# How far past the recording a drive has to run before `_tape_ran_out` says so, as a share of
+# the recording. See that function for why it is not "one step past".
+TAPE_OVERRUN_SHARE = 0.1
+
 
 def _default_traffic_file(dataset: str) -> str:
     """`<workspace>/traffic/traffic.json`, worked out from the dataset directory.
@@ -309,6 +328,130 @@ def _longest_red(scenario) -> float:
         for group in plan["groups"]
     )
     return max(longest, 0.0)
+
+
+def _step_budget(*, recorded_s, pace_s, red_s, extra_s, traffic, sim_dt):
+    """How many `env.step`s this drive may take, and the named terms that made that number.
+
+    Pure, so `tests/unit/test_drive_budget.py` can pin it - the arithmetic used to be four
+    lines inline in `main()` and therefore only checkable by driving.
+
+    **Seconds in, steps out, converted once and here.** Every term arrives in seconds because
+    that is the only unit they share: `recorded_s` comes off the recorded timestamps, `pace_s`
+    off the ego's own speed profile, `red_s` off the signal plan's cycle and `extra_s` off a
+    flag - four different clocks written by four different things. The one conversion that
+    matters is by **`sim_dt`, never `data_dt`**: at `--step-hz 100` ten seconds is a thousand
+    steps, not a hundred, and `_longest_red`'s docstring records what happened the last time
+    those two were confused.
+
+    The terms, in the order they are printed:
+
+    - **the drive itself**, which is the longer of the recording and what a car that has to
+      *steer* to the route takes (`pace_s` inflated by `IDM_TRACKING_RATIO`, and again by
+      `TRAFFIC_DELAY_FACTOR` when there is traffic to queue behind). `pace_s` is None for a
+      replayed ego, whose position is set frame by frame - it cannot be delayed by anything,
+      so neither the tracking deficit nor the traffic factor may reach it.
+    - **a red**, the worst wait the plan can impose, and zero for the scenarios with no plan.
+    - **--extra-seconds**, which is the operator saying this particular drive needs longer.
+
+    Returns `(budget, parts)`, `parts` being `[(label, steps), ...]` so the failure message can
+    say which term produced the number rather than leaving it to be reverse-engineered.
+    """
+
+    def in_steps(seconds):
+        return int(round(seconds / sim_dt))
+
+    own = None
+    if pace_s is not None:
+        own = pace_s / IDM_TRACKING_RATIO
+        if traffic:
+            own *= TRAFFIC_DELAY_FACTOR
+
+    if own is not None and own > recorded_s:
+        drive_s, label = own, "the drive itself"
+        if traffic:
+            label += f", x{TRAFFIC_DELAY_FACTOR:g} for --traffic live"
+    else:
+        drive_s, label = recorded_s, "the recording"
+
+    parts = [(label, in_steps(drive_s))]
+    if red_s > 0:
+        parts.append(("a red", in_steps(red_s)))
+    if extra_s > 0:
+        parts.append(("--extra-seconds", in_steps(extra_s)))
+    return sum(count for _, count in parts), parts
+
+
+def _budget_reason(budget, parts):
+    """The "did not arrive" line for a drive the budget ended, naming the knob that raises it.
+
+    This used to be a three-way branch on the red allowance, and it read the wrong number back:
+    `allowance == 0` printed "ran out of recorded steps", which stopped being true the day the
+    pace term was added. A `junction-1` drive cut off at 424 was told it had run out of a
+    recording that is 379 frames long. Printing the terms cannot go stale the same way.
+    """
+    if len(parts) == 1:
+        breakdown = f"{parts[0][1]} for {parts[0][0]}"
+    else:
+        breakdown = f"{budget} = " + " + ".join(
+            f"{count} for {label}" for label, count in parts
+        )
+    return f"ran out of steps ({breakdown}); raise it with --extra-seconds"
+
+
+def _tape_ran_out(scenario, *, steps, recorded_steps, length, lights):
+    """What stopped when the drive outlived the recording, or None when nothing did.
+
+    The budget can now legitimately exceed the tape - `--traffic live` doubles the drive term
+    and `--extra-seconds` adds to it - and three things end at the last recorded frame whether
+    the car has arrived or not. All three were read out of the MetaDrive 0.4.3 checkout rather
+    than assumed:
+
+    - `ScenarioTrafficManager.after_step` **removes every replayed pedestrian and cyclist**
+      once `episode_step >= current_scenario_length`
+      (`manager/scenario_traffic_manager.py:136-140`). A generated crossing simply is not there
+      for the part of the drive that runs past the tape.
+    - **Cones and barriers stay.** The same block skips static objects deliberately, with the
+      comment "static object will not be cleaned!" - so a lane closure holds for the whole
+      drive and a walker does not.
+    - `ScenarioLightManager.after_step` returns early past the same bound
+      (`manager/scenario_light_manager.py:69`), so `--lights tape` **freezes on its last
+      colour**. A frozen red is a drive that can never arrive, which looks exactly like a car
+      that has broken. `--lights live` evaluates the plan from the episode clock and keeps
+      cycling; `signal_control.py`'s own docstring says so.
+
+    None of it raises, none of it is logged, and none of it is visible from the summary line -
+    which is the whole reason this exists.
+
+    **A tenth of the drive, not a single step past the tape.** A paced car has always outrun
+    the recording a little - the budget's drive term is the ego's own duration inflated by
+    `IDM_TRACKING_RATIO`, which is longer than the tape by construction - and on `junction-1`
+    free-flow that is 33 steps of 412, 8%, all of it after the car has arrived. Warning there
+    would put a line on every idm drive ever run. Under 25 cars it is 266 of 645, 41%, and the
+    walkers are missing from the part of the drive that was still going somewhere.
+    """
+    if steps <= recorded_steps * (1.0 + TAPE_OVERRUN_SHARE):
+        return None
+    walkers = sum(
+        1
+        for track_id, track in (scenario.get("tracks") or {}).items()
+        if track.get("type") in ("PEDESTRIAN", "CYCLIST")
+        and track_id != (scenario.get("metadata") or {}).get("sdc_id")
+    )
+    frozen = lights == "tape" and bool(scenario.get("dynamic_map_states"))
+    if not walkers and not frozen:
+        return None
+    ends = []
+    if walkers:
+        ends.append(
+            f"{walkers} recorded pedestrian(s) and cyclist(s) were removed there "
+            "(cones and barriers stay)"
+        )
+    if frozen:
+        ends.append("--lights tape froze on its last colour there - --lights live keeps cycling")
+    return (
+        f"note: {steps} steps against a {length}-frame recording. " + "; ".join(ends) + "."
+    )
 
 
 def _refuse_mismatch(scenario, *, policy, lights, sim_dt, data_dt):
@@ -1234,6 +1377,19 @@ def main() -> int:
         "that is circling shows as a step count climbing against a completion that is not.",
     )
     parser.add_argument(
+        "--extra-seconds",
+        type=float,
+        default=0.0,
+        help="Seconds of extra room in the step budget, for anything that makes this drive "
+        "legitimately slower than the one the budget was sized for. The budget already "
+        "carries a term for the IDM tracking deficit, one for the longest red, and - under "
+        "--traffic live - a factor for queueing behind other cars; this is for what none of "
+        "them predicted. In seconds rather than steps because a step is 0.1 s or 0.01 s "
+        "depending on --step-hz and the seconds are the same number at both. No effect under "
+        "--agent-policy manual or remote, which have no budget at all. The `did not arrive` "
+        "line prints the budget's terms, so it says how much is being added to what.",
+    )
+    parser.add_argument(
         "--lights",
         default="tape",
         choices=["tape", "live"],
@@ -2112,7 +2268,7 @@ def main() -> int:
                     return 1
 
             if arguments.agent_policy in ("manual", "remote"):
-                allowance, budget = None, None
+                budget, budget_parts = None, None
                 # Not a detail: `ScenarioEnv` puts the ego on the tape's first position *with
                 # the speed recorded there*, so the drive starts mid-traffic rather than at a
                 # standstill, and a driver who is still reaching for the keys is already
@@ -2124,23 +2280,26 @@ def main() -> int:
             else:
                 # Steps of *this run*, not frames of the recording. The recording covers
                 # `length * data_dt` seconds; how many `env.step`s that is depends on the sim
-                # clock, and the red the car may have to sit out is seconds of its own. At
-                # matched rates both terms are today's integers.
-                allowance_s = (
-                    0.0 if arguments.agent_policy == "replay" else _longest_red(scenario)
+                # clock, and the red the car may have to sit out is seconds of its own. Every
+                # term goes in as seconds and `_step_budget` does the one conversion; see its
+                # docstring for why that is not a tidy-up.
+                #
+                # The drive term is the longer of the two drives, never the shorter: the
+                # recording is the right bound for a replayed car, and a paced IDM one takes
+                # as long as its own speed profile says it does. Measured on `junction-1`
+                # before that term existed: the ego drove the whole route and reached
+                # `arrive_dest` in 1044 steps, was cut off at the recording's 960, and was
+                # reported as "did not arrive" at 85% of the route.
+                budget, budget_parts = _step_budget(
+                    recorded_s=length * data_dt,
+                    pace_s=None if pace is None else pace.duration_s,
+                    red_s=(
+                        0.0 if arguments.agent_policy == "replay" else _longest_red(scenario)
+                    ),
+                    extra_s=max(arguments.extra_seconds, 0.0),
+                    traffic=arguments.traffic == "live",
+                    sim_dt=sim_dt,
                 )
-                allowance = int(round(allowance_s / sim_dt))
-                # The longer of the two drives, never the shorter: the recording is the
-                # right bound for a replayed car, and a paced IDM one takes as long as its
-                # own speed profile says it does - divided by how much of that profile a
-                # regulator actually holds. Measured on `junction-1` before this: the ego
-                # drove the whole route and reached `arrive_dest` in 1044 steps, and was cut
-                # off at the recording's 960 and reported as "did not arrive" at 85% of the
-                # route. See `_EgoPace.duration_s` and `IDM_TRACKING_RATIO`.
-                seconds = length * data_dt
-                if pace is not None:
-                    seconds = max(seconds, pace.duration_s / IDM_TRACKING_RATIO)
-                budget = int(round(seconds / sim_dt)) + allowance
 
             # A baked stop is computed against the plan's written offsets, so it is right
             # under `--lights tape` and wrong under `--lights live`, which draws a fresh
@@ -2334,6 +2493,15 @@ def main() -> int:
                     max(heights) if heights else float("nan"),
                 )
             )
+            outlived = _tape_ran_out(
+                scenario,
+                steps=steps,
+                recorded_steps=int(round(length * data_dt / sim_dt)),
+                length=length,
+                lights=arguments.lights,
+            )
+            if outlived:
+                print("             " + outlived)
             if not info.get("arrive_dest", False):
                 # `arrive_dest=False` on its own does not say whether the drive was wrong or
                 # merely different. `out_of_road` under `--agent-policy idm`, for instance, is
@@ -2347,17 +2515,14 @@ def main() -> int:
                     # drive stopped by hand did not run out of steps and did not leave the road.
                     ran_out = "stopped early at your request"
                     reasons = []
-                elif allowance is None:
-                    # There is no budget under `manual`, so the loop can only have been left by
-                    # the episode ending. If none of the named reasons is set, MetaDrive ended
-                    # it for one this script does not name rather than the steps running out.
-                    ran_out = "the episode ended without arriving"
-                elif allowance == 0:
-                    ran_out = "ran out of recorded steps"
+                elif budget_parts is not None and steps >= budget:
+                    ran_out = _budget_reason(budget, budget_parts)
                 else:
-                    ran_out = (
-                        f"ran out of steps ({budget}: the recording plus {allowance} for a red)"
-                    )
+                    # There is no budget at all under `manual` and `remote`, and under the
+                    # others the loop can be left before the budget is spent - so if the steps
+                    # did not run out, MetaDrive ended the episode for a reason this script
+                    # does not name rather than the drive being cut off.
+                    ran_out = "the episode ended without arriving"
                 print(
                     "             did not arrive: {}{}".format(
                         ", ".join(reasons) or ran_out,
