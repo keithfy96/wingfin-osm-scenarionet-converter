@@ -21,6 +21,8 @@ import {
 import {
   DENSITIES,
   WHOLE_MAP_CAP,
+  corridorLengthM,
+  countFor,
   generateActors,
   lineLengthM,
   type Density,
@@ -207,20 +209,33 @@ function boot(): void {
   // was too late to be useful: a press with no route loaded scattered 149 actors over the
   // map, only 31 of them within 25 m of the route, and the first sign of it was the map.
   const NO_ROUTE =
-    `No route loaded, so Generate will spread actors over the whole map (capped at ` +
-    `${WHOLE_MAP_CAP}) and most will be nowhere near the drive. Load the routes.json you ` +
-    `convert with to put them on it.`;
+    `No route loaded, so Generate will spread actors over the whole map - trimmed to the ` +
+    `"at most" number below - and most will be nowhere near the drive. Load the routes.json ` +
+    `you convert with to put them on it.`;
   routeNote.textContent = NO_ROUTE;
 
   const seedInput = numberInput(1, "1", "72px");
+  const newSeedButton = element("button", undefined, "new seed");
   const paceInput = numberInput(30, "1", "72px");
   const seedRow = element("div", "row");
   seedRow.append(
     element("label", undefined, "seed"),
     seedInput,
+    newSeedButton,
     element("label", undefined, "ego averages km/h"),
     paceInput,
   );
+  // The ceiling, on screen rather than in the source. It applies to a route press as well as
+  // a whole-map one - one number is easier to reason about than two, and on a route it binds
+  // only if it is lowered, because the densities over `junction-1`'s route-1 want about 50.
+  const capInput = numberInput(WHOLE_MAP_CAP, "1", "72px");
+  const capRow = element("div", "row");
+  capRow.append(element("label", undefined, "at most"), capInput, element("label", undefined, "actors"));
+  const capNote = element("p", "caption");
+  capNote.textContent =
+    "The seed decides where actors go, never how many - that is the densities times the " +
+    "length of road, so a new seed rearranges a scene of exactly the same size. Raise " +
+    "\"at most\" to keep more of what the densities asked for; 0 keeps all of them.";
   const zebraCheck = element("input");
   zebraCheck.type = "checkbox";
   const zebraRow = element("div", "row");
@@ -261,6 +276,8 @@ function boot(): void {
       routeRow,
       routeNote,
       seedRow,
+      capRow,
+      capNote,
       zebraRow,
       generateButton,
       generateNote,
@@ -469,7 +486,8 @@ function boot(): void {
 
   routeSelect.addEventListener("change", chooseRoute);
 
-  generateButton.addEventListener("click", () => {
+  /** Replace whatever the last press placed with a fresh scene at the settings on screen. */
+  function regenerate(): void {
     // Its own previous work, and only that. A hand-drawn actor is never swept up, so the
     // button composes with the map rather than replacing it.
     for (let index = actors.length - 1; index >= 0; index -= 1) {
@@ -482,8 +500,15 @@ function boot(): void {
     const route = corridor !== null && corridor.length > 0 ? corridor : null;
     const onRoute = route !== null;
     const pace = Number(paceInput.value);
+    const lanes = route ?? payload.lanes;
+    const ceiling = Math.trunc(Number(capInput.value)) || 0;
+    // What the densities asked for before any trimming, so the note can say what was lost.
+    // `corridorLengthM` and not a length summed here: placement drops lanes under
+    // `MIN_LANE_M`, and counting road it will not use would over-report every press.
+    const metres = corridorLengthM(lanes);
+    const asked = KINDS.reduce((sum, kind) => sum + countFor(kind, densities[kind], metres), 0);
     const made = generateActors({
-      corridor: route ?? payload.lanes,
+      corridor: lanes,
       densities,
       seed: Math.trunc(Number(seedInput.value)) || 0,
       taken: actors.map((actor) => actor.name),
@@ -494,7 +519,7 @@ function boot(): void {
       egoMps: onRoute && pace > 0 ? pace / 3.6 : null,
       crossings: zebraCheck.checked,
       crossingWidthM: payload.defaults.crossing_width_m,
-      cap: onRoute ? undefined : WHOLE_MAP_CAP,
+      cap: ceiling > 0 ? ceiling : undefined,
     });
     for (const actor of made) {
       generated.add(actor.name);
@@ -505,11 +530,27 @@ function boot(): void {
         (onRoute
           ? "along the loaded route. Every start delay is an estimate of when the car gets " +
             "there - edit any of them below or in the file."
-          : `across the whole map, capped at ${WHOLE_MAP_CAP}. Load a routes.json to put ` +
-            "them where the car actually drives.") +
+          : "across the whole map. Load a routes.json to put them where the car actually " +
+            "drives.") +
+        // Said, rather than left to be noticed. A press that quietly dropped 280 of the 430
+        // it placed looked exactly like a press that had nothing more to place.
+        (asked > made.length
+          ? ` These densities asked for ${asked}; the rest were trimmed to the "at most" ` +
+            `number. Raise it for more.`
+          : "") +
         " Generate again to replace them; anything you drew by hand is left alone."
       : "Nothing to place: every kind is set to none.";
     renderList();
+  }
+
+  generateButton.addEventListener("click", regenerate);
+
+  // A new scene in one click. The roll is written **into the box** rather than kept to
+  // itself, so what `randomise.ts` promises still holds: the number that produced what is on
+  // the map is on screen, and typing it back gives the same scene again.
+  newSeedButton.addEventListener("click", () => {
+    seedInput.value = String(1 + Math.floor(Math.random() * 999_999));
+    regenerate();
   });
 
   map.on("click", (event: LeafletMouseEvent) => {
