@@ -27,6 +27,16 @@ wheels = [
 ]
 
 [[package]]
+name = "apsw"
+version = "3.53.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3b/a3/404d93429ad78385158b277ddd4929137eb279b047d892c24b8d75237119/apsw-3.53.4.0.tar.gz", hash = "sha256:4250fab667cc41c55170028ab095a9d4a4ae66363f4bc0720771c20519702625", size = 1247765, upload-time = "2026-07-26T17:02:32.28Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a8/d6/b32dd63ae11fac0738cc3789e9c48e2e13ba27115ed6e806cd4556c8f56f/apsw-3.53.4.0-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:cad12a70fae847c7b0fcf98ba0299ffcfe9c51c9f0f7764185bd91a2c709c937", size = 3699869, upload-time = "2026-07-26T17:00:00.918Z" },
+    { url = "https://files.pythonhosted.org/packages/c2/55/a98d16ffbed2048bcd76f71260de76b3681ddf22977a45db085409e7a957/apsw-3.53.4.0-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:13db505f1f08a185917786124d0960615e81b3fe0a016d1069b6b91abe552100", size = 3652840, upload-time = "2026-07-26T17:00:10.14Z" },
+]
+
+[[package]]
 name = "asttokens"
 version = "3.0.2"
 source = { registry = "https://pypi.org/simple" }
@@ -359,6 +369,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/58/52/d14161a2be7eff8525214060a2350d76422f1697839a5fcc933e272a08aa/lxml-6.1.2-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:ee7410c98222070fd717ad881ee2a80cc11826b7001b9a5a807155d8918bfc7a", size = 5321744, upload-time = "2026-08-19T05:00:40.187Z" },
     { url = "https://files.pythonhosted.org/packages/8b/7d/3a35ff7e08461f4aef320e5f95b6f6ff80a1a1b4b871a2e4ca09425f9c91/lxml-6.1.2-pp310-pypy310_pp73-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:4a16457e330b7099aa5a8e8bfa5d53a33a1672a819fa656157e9e6dc433ac7a4", size = 4329292, upload-time = "2026-08-19T05:01:32.516Z" },
     { url = "https://files.pythonhosted.org/packages/62/08/d88e0ae9ad2cf261143142d9633269d1bf90dc24454132d3c758c147d4fd/lxml-6.1.2-pp310-pypy310_pp73-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:18467b0e9f7f0bc477df69e99829a59ae17fb37d34e5f68399371c7c67be9002", size = 4409999, upload-time = "2026-08-19T05:01:50.389Z" },
+]
+
+[[package]]
+name = "lz4"
+version = "4.4.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/57/51/f1b86d93029f418033dddf9b9f79c8d2641e7454080478ee2aab5123173e/lz4-4.4.5.tar.gz", hash = "sha256:5f0b9e53c1e82e88c10d7c180069363980136b9d7a8306c4dca4f760d60c39f0", size = 172886, upload-time = "2025-11-03T13:02:36.061Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6d/34/7be9b09015e18510a09b8d76c304d505a7cbc66b775ec0b8f61442316818/lz4-4.4.5-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:2a2b7504d2dffed3fd19d4085fe1cc30cf221263fd01030819bdd8d2bb101cf1", size = 1367315, upload-time = "2025-11-03T13:01:31.054Z" },
 ]
 
 [[package]]
@@ -977,6 +996,32 @@ wheels = [
 ]
 
 [[package]]
+name = "rosbags"
+version = "0.11.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "apsw" },
+    { name = "lz4" },
+    { name = "numpy" },
+    { name = "ruamel-yaml" },
+    { name = "typing-extensions" },
+    { name = "zstandard" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ab/3d/b618779b1eb36f0f50b2634e59bc9cc4d5c87a3c1e32bcda2f8f33684275/rosbags-0.11.5.tar.gz", hash = "sha256:f6fc16e52af1f383209010557c92933d4ac30a1b376c97e215b71244b26304d8", size = 281583, upload-time = "2026-08-19T10:08:05.161Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1a/8e/b4f03a302c071a9f764cc79e450dbab6a97c0034eb662990836e1e0d16fa/rosbags-0.11.5-py3-none-any.whl", hash = "sha256:e81bc1bbdadeb1a03cd43f9d67dfb2e17ac9fd5245c8ee5119da72ce8a7ab29b", size = 144862, upload-time = "2026-08-19T10:08:03.395Z" },
+]
+
+[[package]]
+name = "ruamel-yaml"
+version = "0.19.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c7/3b/ebda527b56beb90cb7652cb1c7e4f91f48649fbcd8d2eb2fb6e77cd3329b/ruamel_yaml-0.19.1.tar.gz", hash = "sha256:53eb66cd27849eff968ebf8f0bf61f46cdac2da1d1f3576dd4ccee9b25c31993", size = 142709, upload-time = "2026-01-02T16:50:31.84Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b8/0c/51f6841f1d84f404f92463fc2b1ba0da357ca1e3db6b7fbda26956c3b82a/ruamel_yaml-0.19.1-py3-none-any.whl", hash = "sha256:27592957fedf6e0b62f281e96effd28043345e0e66001f97683aa9a40c667c93", size = 118102, upload-time = "2026-01-02T16:50:29.201Z" },
+]
+
+[[package]]
 name = "ruff"
 version = "0.16.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1281,6 +1326,9 @@ model = [
     { name = "torch" },
     { name = "torch-tensorrt" },
 ]
+ros = [
+    { name = "rosbags" },
+]
 sim = [
     { name = "metadrive-simulator" },
 ]
@@ -1314,6 +1362,7 @@ model = [
     { name = "torch", specifier = "==2.8.0", index = "https://download.pytorch.org/whl/cu128" },
     { name = "torch-tensorrt", specifier = "==2.8.0", index = "https://download.pytorch.org/whl/cu128" },
 ]
+ros = [{ name = "rosbags", specifier = ">=0.10,<1" }]
 sim = [{ name = "metadrive-simulator", git = "https://github.com/metadriverse/metadrive.git?rev=85e5dadc" }]
 
 [[package]]
@@ -1327,4 +1376,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/23/97/b6f296d1e9cc1ec25c7604178b48532fa5901f721bcf1b8d8148b13e5588/yapf-0.43.0.tar.gz", hash = "sha256:00d3aa24bfedff9420b2e0d5d9f5ab6d9d4268e72afbf59bb3fa542781d5218e", size = 254907, upload-time = "2024-11-14T00:11:41.584Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/37/81/6acd6601f61e31cfb8729d3da6d5df966f80f374b78eff83760714487338/yapf-0.43.0-py3-none-any.whl", hash = "sha256:224faffbc39c428cb095818cf6ef5511fdab6f7430a10783fdfb292ccf2852ca", size = 256158, upload-time = "2024-11-14T00:11:39.37Z" },
+]
+
+[[package]]
+name = "zstandard"
+version = "0.25.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/fd/aa/3e0508d5a5dd96529cdc5a97011299056e14c6505b678fd58938792794b1/zstandard-0.25.0.tar.gz", hash = "sha256:7713e1179d162cf5c7906da876ec2ccb9c3a9dcbdffef0cc7f70c3667a205f0b", size = 711513, upload-time = "2025-09-14T22:15:54.002Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fd/e5/6d36f92a197c3c17729a2125e29c169f460538a7d939a27eaaa6dcfcba8e/zstandard-0.25.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:4b6d83057e713ff235a12e73916b6d356e3084fd3d14ced499d84240f3eecee0", size = 5556583, upload-time = "2025-09-14T22:16:08.457Z" },
+    { url = "https://files.pythonhosted.org/packages/b3/87/d3ee185e3d1aa0133399893697ae91f221fda79deb61adbe998a7235c43f/zstandard-0.25.0-cp310-cp310-musllinux_1_1_x86_64.whl", hash = "sha256:25f8f3cd45087d089aef5ba3848cd9efe3ad41163d3400862fb42f81a3a46701", size = 5572283, upload-time = "2025-09-14T22:16:12.128Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/11/4c91411805c3f7b6f31c60e78ce347ca48f6f16d552fc659af6ec3b73202/zstandard-0.25.0-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:75ffc32a569fb049499e63ce68c743155477610532da1eb38e7f24bf7cd29e74", size = 5363131, upload-time = "2025-09-14T22:16:22.206Z" },
 ]

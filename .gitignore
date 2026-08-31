@@ -30,3 +30,11 @@ node_modules/
 # rather than as files -- a tracked path that points at a commit and breaks on any clone that
 # has no such worktree. Happened once, in 3ec64b1.
 .claude/worktrees/
+
+# ROS 2 bags. A camera bag at rig scale is tens of gigabytes -- the reference vehicle's own is
+# 7.41 GB -- and `workspaces/` being tracked means `git add -A` is already a habit here that
+# sweeps up whatever is lying around. A bag is a recording, reproducible from its dataset and
+# the flags printed in its own metadata, so none of them belongs in git.
+bags/
+*.mcap
+*.mcap.zstd

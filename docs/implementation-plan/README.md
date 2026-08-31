@@ -535,10 +535,15 @@ are not: two-point lane polylines load (MetaDrive skips a lane only at
   topology may mark a restriction already satisfied; incomplete or
   contradictory evidence remains review-required.
 - V1 produces a valid static map only. Vehicles, actors, traffic-light cycles,
-  and scenario timelines are intentionally deferred. Traffic-light cycles arrived
-  with `convert --signals`; the rest is picked up, as plans and not yet as code,
-  in `stage-7-an-agent-at-the-wheel.md` (the ego driven by a keyboard and then by
-  a model), `stage-8-live-traffic.md` (other vehicles on the road) and
+  and scenario timelines are intentionally deferred here, and every one of them
+  has since been **built** downstream of a finished Stage 6 dataset. Traffic-light
+  cycles arrived with `convert --signals`; the rest is in
+  `stage-7-an-agent-at-the-wheel.md` (the ego driven by a keyboard and then by a
+  model), `stage-8-live-traffic.md` (other vehicles on the road),
   `stage-9-a-model-at-the-wheel.md` (cameras to a real model, and the model's
-  waypoints to openpilot's controller). All three sit entirely downstream of a
-  finished Stage 6 dataset, and none depends on the others.
+  waypoints to openpilot's controller) and
+  `stage-10-ros-bags-out-of-a-drive.md` (the drive written out as a ROS 2 bag with
+  ground truth attached). Each sits downstream of Stage 6 and none depends on the
+  others. **This paragraph said "as plans and not yet as code" until 2026-08-31,
+  a week and more after all three were built and measured -- which is what made
+  Stage 10 look like it should be Stage 7. Their own `## Status` blocks are authoritative.**

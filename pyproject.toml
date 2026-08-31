@@ -90,6 +90,32 @@ model = [
   "tensorrt==10.12.0.36",
 ]
 
+# Stage 10: writing a drive out as a ROS 2 bag. Opt-in like the rest -- and like the rest,
+# `uv sync --group ros` **alone removes `sim`, `gpu` and `model`**; name every group wanted.
+#
+# **No ROS installation is involved, and that is the whole point.** `rosbags` is a third-party
+# pure-Python implementation of the rosbag2 format with no dependency on the ROS stacks, which
+# matters here because ROS 2 humble ships debs only for Ubuntu 22.04 / Python 3.10 while this
+# host is 26.04 / 3.14. The bags it writes are read by `ros2 bag`, rviz2 and foxglove all the
+# same; `Stores.ROS2_HUMBLE` pins the message definitions to the distro the reference rig
+# recorded under, so a sim bag and a rig bag carry byte-identical schemas.
+#
+# **Two message packages are not in that typestore** -- `vision_msgs` (the 3D boxes) and
+# `ffmpeg_image_transport_msgs` (the camera encoding the rig uses). Neither needs a build step
+# or a package: `get_types_from_msg` parses the `.msg` text at runtime and `register` adds them,
+# verified round-tripping through CDR. `ros_schema.py` vendors those definitions.
+#
+# **`CompressionMode.FILE` must never be used**, though the published docs list only `file` and
+# `message`. The installed release also has **`STORAGE`**, which is the one that matches the
+# reference bag: measured on a 16 MB bag, `STORAGE` gives 12 chunks each marked `zstd` with the
+# index intact, while `FILE` writes a single `bag.mcap.zstd` whose summary cannot be read
+# without inflating the whole file -- which would break exactly the index-only audit the rig's
+# own tooling performs (1.47 M timestamps out of 7.41 GB in 0.3 s). `MESSAGE` comes out
+# *larger* than no compression at all.
+ros = [
+  "rosbags>=0.10,<1",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

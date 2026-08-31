@@ -439,6 +439,18 @@ These describe *what runs*, and are deliberately distinct from `docs/implementat
   sees it. Its stripe angle comes from the polygon's longest edge, and `constants.py:436-439`
   describes the encoding **wrongly**; the shader is the authority.
 
+### ROS 2 bags out of a drive
+→ `docs/reference/ros-bags.md`
+
+- **A bag recorded off a live stream loses frames**, silently — which is why the writer is
+  in-process and MetaDrive's own zmq bridge is not reused. `CompressionMode.FILE` is equally
+  fatal: it destroys the index-only read the rig's own audit depends on. Use `STORAGE`.
+- **A TF sign or a skipped GNSS origin is silent.** `Camera.position` is already MetaDrive's ego
+  frame, not the CARLA spec; `old_origin_in_current_coordinate` is 93.8 m on junction-1, and
+  `metadata.get(...) or (0.0, 0.0)` raises on the numpy array. Run `tools/ros_probe.py`.
+- **`--ros-bag` is drive-time and must never become a `ConverterConfig` field**, and it needs
+  Python 3.10 — the host's `METADRIVE_PYTHON` is 3.8, so it is the container or nothing.
+
 ### The Stage 2 lane model
 → `docs/reference/lane-model-algorithm.md`
 

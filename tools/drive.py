@@ -1366,6 +1366,37 @@ def main() -> int:
         "reads it back and a wrong --step-hz is refused rather than drawn as a spiking car.",
     )
     parser.add_argument(
+        "--ros-bag",
+        default=None,
+        help="Write the drive to this directory as a ROS 2 bag (MCAP, per-chunk zstd), under "
+        "the same topic names and message types the vehicle rig records - so a simulated bag "
+        "and a real one are interchangeable to whatever reads them. Unlike the rig's, this one "
+        "also carries ground truth: a 3D box on every object actually in the scene, the colour "
+        "of every traffic light, the ego's pose, and the route. Every topic of one frame shares "
+        "one stamp taken from the simulator's clock, so the labels and the pixels of an instant "
+        "agree. Drive-time, like --record and --export-drive: it touches no fingerprint and "
+        "cannot invalidate a Stage 3 review. Needs Python 3.10+ for `rosbags`, which on the "
+        "host means the container - see the refusal message if it fires. Read a bag back with "
+        "`uv run python tools/ros_audit.py <dir>`.",
+    )
+    parser.add_argument(
+        "--ros-topics",
+        default=None,
+        help="Comma-separated subset of the --ros-bag topics to write, for a smaller file. "
+        "Default is all of them. Names are the full topic paths, e.g. "
+        "/localization/odometry,/perception/objects.",
+    )
+    parser.add_argument(
+        "--ros-bag-past-tape",
+        action="store_true",
+        help="Keep recording after the drive outlives the recording. Off by default, and the "
+        "default is the useful one: past the last recorded frame MetaDrive removes every "
+        "replayed pedestrian and cyclist while keeping cones and barriers, so a busy junction "
+        "renders empty. Those frames are not mislabelled - the boxes still match the pixels - "
+        "they are unrepresentative, and training on them teaches a model this junction has no "
+        "people in it. Measured under 25 cars on junction-1: 266 of 645 steps.",
+    )
+    parser.add_argument(
         "--progress-seconds",
         type=float,
         default=30.0,
@@ -2032,6 +2063,24 @@ def main() -> int:
     # after a two-scenario run the engine holds only the second one.
     exported = []
     reported_settle = False
+    ros_bag = None
+    ros_projection = None
+    ros_tape_steps = 0
+    ros_stopped_at = None
+    ros_topics = (
+        {name.strip() for name in arguments.ros_topics.split(",") if name.strip()}
+        if arguments.ros_topics
+        else None
+    )
+    if arguments.ros_bag:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import ros_frame
+
+        # Before anything is built. `rosbags` needs 3.10 and `tools/` also runs on the MetaDrive
+        # checkout's 3.8, so an unsupported interpreter has to be a refusal at the top rather
+        # than an ImportError three hundred frames into a recording.
+        ros_frame.refuse_if_unsupported()
+
     recorder = None
     if arguments.record:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -2155,6 +2204,22 @@ def main() -> int:
             flush=True,
         ),
     )
+    if arguments.ros_bag:
+        from ros_bag import BagWriter
+
+        ros_bag = BagWriter(
+            arguments.ros_bag,
+            topics=ros_topics,
+            notes={
+                "dataset": dataset,
+                "step_hz": effective_hz,
+                "decision_hz": effective_hz / stride,
+                "agent_policy": arguments.agent_policy,
+                "traffic": arguments.traffic,
+                "lights": arguments.lights,
+            },
+        ).__enter__()
+
     # Built on the first reset, once the scenario is loaded and the ego's route exists.
     pace = None
     try:
@@ -2228,6 +2293,25 @@ def main() -> int:
             data_dt = data_step_seconds(scenario)
             path_every = max(1, int(round(0.1 / sim_dt)))
             lights = getattr(env.engine, "light_manager", None)
+            if ros_bag is not None:
+                import ros_frame
+
+                # Where the recording ends, in this drive's own steps. Past it MetaDrive
+                # removes every replayed pedestrian and cyclist while keeping cones and
+                # barriers, so a busy junction renders empty - frames that are not mislabelled
+                # but are unrepresentative, and training on them teaches a model this junction
+                # has no people in it. The bag stops there unless asked not to.
+                ros_tape_steps = int(round(length * data_dt / sim_dt))
+
+                # Per scenario: the CRS and MetaDrive's re-centring shift both belong to this
+                # scenario, and the shift is the 93.8 m trap - carried once here rather than
+                # subtracted at every call site.
+                ros_projection = ros_frame.projection_of(scenario)
+                ros_bag.start_episode(
+                    ros_frame.read(env, 0, 0.0, ros_projection),
+                    route=ros_frame.route_of(env),
+                    mounts=ros_frame.mounts_from_rig(rig) if rig is not None else None,
+                )
             if recorder is not None:
                 recorder.start_episode(scenario_id)
             if remote is not None:
@@ -2376,6 +2460,19 @@ def main() -> int:
                 if pace is not None:
                     pace.before_step(env)
                 observation, _, terminated, truncated, info = env.step(action)
+                if ros_bag is not None and (
+                    arguments.ros_bag_past_tape or steps < ros_tape_steps
+                ):
+                    # After `env.step` and before anything else consumes the env, beside
+                    # `recorder.record` - the slot this file already reserves for one consumer
+                    # per frame. `steps` is the loop's own counter, so the sim time is the
+                    # frame's own and not `engine.episode_step`, which is one ahead.
+                    ros_bag.write(
+                        ros_frame.read(env, steps, steps * sim_dt, ros_projection)
+                    )
+                    ros_stopped_at = None
+                elif ros_bag is not None and ros_stopped_at is None:
+                    ros_stopped_at = steps
                 if recorder is not None:
                     # The observation that *produced* the action, paired with the action the
                     # car executed for it - so the one from before the step, not the one the
@@ -2688,6 +2785,11 @@ def main() -> int:
         # left the driver freeing the VA space of a process that had died mid-ioctl.
         closing.arm_exit()
         try:
+            if ros_bag is not None:
+                # Before `env.close()`, deliberately. Closing a bag writes its index and its
+                # metadata; doing that after the GL teardown would put it downstream of the one
+                # call in this file most likely to die badly.
+                ros_bag.__exit__(None, None, None)
             if model is not None:
                 model.close()
             env.close()
@@ -2727,6 +2829,25 @@ def main() -> int:
             )
         )
         remote.close()
+
+    if ros_bag is not None:
+        counts = ros_bag.summary()["messages_per_topic"]
+        total = sum(counts.values())
+        print(
+            f"ros bag      {ros_bag.frames} frames, {total} messages across "
+            f"{len(counts)} topics -> {arguments.ros_bag}"
+        )
+        if ros_stopped_at is not None:
+            print(
+                f"             stopped at step {ros_stopped_at} of {steps}: the recording ends "
+                f"at {ros_tape_steps} and past it MetaDrive drops every replayed pedestrian "
+                "and cyclist, so those frames show an emptier junction than the scenario has. "
+                "--ros-bag-past-tape keeps them."
+            )
+        print(
+            "             read it back with: uv run python tools/ros_audit.py "
+            f"{arguments.ros_bag}"
+        )
 
     if recorder is not None:
         # Said rather than left to be discovered: a replayed car's policy returns None every

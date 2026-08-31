@@ -1672,6 +1672,49 @@ tests, then the rig, then the conversions with no GPU pass, then the model predi
 replayed drive, then the drive itself, then the `--backend stub` control that keeps a wire
 regression distinguishable from a model one. Stop at whichever tier answers the question.
 
+### Record a drive as a ROS 2 bag
+
+```bash
+./scripts/ros-bag.sh junction-1 -- --out bags/junction-1-001
+./scripts/ros-bag.sh --audit bags/junction-1-001            # read it back, index only
+uv run python tools/ros_probe.py bags/junction-1-001 --workspace workspaces/junction-1
+```
+
+Out comes a **rosbag2** — MCAP with per-chunk zstd, under the same topic names and message
+types the vehicle rig records, so a simulated bag and a real one are interchangeable to whatever
+reads them. Every flag a drive already has works: `--traffic live`, `--agent-policy`,
+`--step-hz`, `--camera-rig`.
+
+**And it carries what a recorded drive cannot: the answers.** A 3D box on every pedestrian,
+cyclist, cone and car actually in the scene, the colour of every traffic light, the ego's pose,
+and the route — on every frame. A real rig bag has pixels and no labels, because nobody labelled
+it. That is the point of Stage 10, rather than imitating the rig for its own sake.
+
+Measured on `junction-1` at 10 Hz: 364 frames, 3,641 messages across 11 topics, 0.97 MB on disk
+against 34.98 MB of payload, every channel at exactly 10.00 Hz, 300 distinct object ids and
+between 51 and 257 boxes a frame.
+
+**No ROS is installed or needed.** `rosbags` is a pure-Python implementation of the format, and
+`uv sync --group ros` is the whole of it — the bags open in `ros2 bag`, rviz2 and foxglove all
+the same. It does need Python 3.10, and on the host `drive.py` runs on the MetaDrive checkout's
+3.8, so either run it in the container or point `METADRIVE_PYTHON` at `.venv/bin/python` after
+`uv sync --group sim --group ros`. It refuses before the drive starts rather than failing part
+way through one.
+
+Two things it will refuse or stop for, both because the alternative is a bag that is quietly
+wrong:
+
+- **`--lights` against a dataset with no traffic lights in it.** Neither workspace has any baked
+  in today; `junction-1` has a `signals/signals.json` that was never converted in. An empty
+  lights topic is, months later, indistinguishable from a junction that genuinely had none.
+- **Frames after the drive outlives the recording.** Past the last recorded frame MetaDrive
+  removes every replayed pedestrian and cyclist while keeping cones and barriers, so a busy
+  junction renders empty. Measured on an IDM drive with `--extra-seconds 40`: 824 steps against
+  a 379-frame recording, 251 walkers removed, and **445 of 824 frames would have shown an
+  emptier junction than the scenario has.** The bag stops at the tape and says so;
+  `--ros-bag-past-tape` keeps them.
+
+The details, the measurements and the traps are in `docs/reference/ros-bags.md`.
 
 ---
 
