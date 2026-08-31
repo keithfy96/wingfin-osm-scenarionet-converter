@@ -603,15 +603,41 @@ then from inside `scripts/`:
 
 ./scripts/drive.sh junction-1 -- --agent-policy idm --traffic live --traffic-count 25 --render 3D
 
+# the drive still ran out of steps — give it another two minutes of road
+./scripts/drive.sh junction-1 -- --agent-policy idm --traffic live --traffic-count 25 \
+    --extra-seconds 120 --render 3D
 ```
 
 **Traffic makes the drive longer, and the drive is bounded.** Queueing behind other cars cost
 a measured 645 steps against a free-flow 412 on `junction-1` — and the bound used to be 424, so
 a perfectly good traffic drive reported `did not arrive: ran out of recorded steps`.
-`--traffic live` now doubles the self-driven part of that bound, which covers it. When a drive
-still runs out, the failure line prints the budget's terms and `--extra-seconds <n>` adds to it;
-neither applies to `--agent-policy replay`, whose positions are set frame by frame and cannot be
-delayed by anything on the road.
+`--traffic live` now doubles the self-driven part of that bound, which covers every traffic run
+measured, so most of the time `--extra-seconds` is not needed at all.
+
+**When a drive does still run out, the failure line tells you what to raise.** It names the
+budget's terms rather than a bare number:
+
+```
+scenario 0  ...: 424 of 424 steps (379 recorded frames at 0.1 s), arrive_dest=False, completion 0.415
+            did not arrive: ran out of steps (848 for the drive itself, x2 for --traffic live);
+                            raise it with --extra-seconds
+```
+
+— the bound was 848 and what made it, and the `completion` above says how far short the car got.
+
+Three things to know about `--extra-seconds`:
+
+- It goes **after the `--`**, like every other `drive.py` flag through `scripts/drive.sh`.
+- It is **simulated seconds, not wall clock**, and means the same at any rate:
+  `--extra-seconds 10` is 100 more steps at 10 Hz and 1000 at `--step-hz 100`.
+- **Overshoot — the bound is free.** The loop ends on `arrive_dest`, not on the budget, so a
+  generous number costs nothing on a drive that arrives; read what it really took off the
+  summary line (`645 of 849 steps`) afterwards.
+
+It has nothing to offer `--agent-policy replay`, whose positions are set frame by frame and
+cannot be delayed by anything on the road: there is nothing after the last recorded frame, so
+raising the bound from 379 to 479 still ends the drive at 364. `manual` and `remote` have no
+budget at all.
 
 A drive that outruns the recording loses what is on the tape: MetaDrive **removes recorded
 pedestrians and cyclists** past the last frame, keeps cones and barriers, and freezes

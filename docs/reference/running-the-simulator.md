@@ -801,6 +801,29 @@ inventing what the walkers do for the extra 27 seconds. The actor randomiser alr
 right knob: its **ego pace** field is the assumed speed that sets each walker's `start_delay_s`,
 so lowering it is how a generated scene is timed against a traffic-slowed drive.
 
+**Using the flag.** Four facts, and the last is the one that stops it being reached for where it
+cannot help:
+
+```bash
+./scripts/drive.sh junction-1 -- --agent-policy idm --traffic live --traffic-count 25 \
+    --extra-seconds 120 --render 3D
+```
+
+- **After the `--`**, like every other `drive.py` flag through `scripts/drive.sh`.
+- **Simulated seconds, not wall clock**, and the same number at every rate — measured:
+  `--extra-seconds 10` is +100 steps at 10 Hz and **+1000** at `--step-hz 100`. That is the whole
+  reason the flag is in seconds; a step count would mean two different things on the two datasets
+  a workspace holds.
+- **Overshoot.** The loop ends on `arrive_dest`, not on the bound, so a generous number costs
+  nothing on a drive that arrives — read what the drive really took off the summary line
+  (`645 of 849 steps`) rather than trying to predict it. Extrapolating from the completion at
+  cutoff misses badly in the other direction: 0.415 at 424 steps suggests ~1022, and the drive
+  takes 645, because the queueing is not spread evenly along the route.
+- **Nothing to offer `--agent-policy replay`.** Measured: `--extra-seconds 10` raised the bound
+  from 379 to 479 and the drive still ended at 364 on `arrive_dest`, there being nothing after
+  the last recorded frame to drive to. `manual` and `remote` have no budget at all, so the flag
+  is inert there too.
+
 Verified end to end on `workspaces/junction-1`, all headless:
 
 | command | before | after |

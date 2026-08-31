@@ -7,6 +7,7 @@
 #   ./scripts/drive.sh -- --render 2D           # everything after -- goes to tools/drive.py
 #   ./scripts/drive.sh -- --line-width-m 0.1    # thinner lane lines, this run only
 #   ./scripts/drive.sh -- --step-hz 100         # drives that workspace's 100 Hz dataset
+#   ./scripts/drive.sh -- --extra-seconds 120   # let a blocked drive run 2 min longer
 #   ./scripts/drive.sh -- --step-hz 100 --decision-hz 20   # 100/20/100: 20 Hz decisions
 #   GPU=integrated ./scripts/drive.sh           # force the built-in graphics
 #
