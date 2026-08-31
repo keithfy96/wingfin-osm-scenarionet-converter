@@ -245,11 +245,30 @@ took it from finishing the route to 35% of it. Which lane closes follows from th
 geometry with no special case for the ego — where the route has an inner lane the car
 goes past on the inside; where it is already in the nearside lane, or the road has only
 one, the car stops. Without a route they are scattered over the whole
-map, capped at 150, and most will be nowhere near the drive. That is not hypothetical:
+map, trimmed to the **at most** box, and most will be nowhere near the drive. That is not hypothetical:
 a pedestrian placed by hand on `junction-1` sat 137 m off the route the entire time it
 existed, and nothing but a measurement of the pickle said so.
 
-The seed makes a scene repeatable and the timing is an **estimate** — the page works out
+**The seed moves actors; it never adds any.** How many there are is the density table
+times the length of road, so a different seed gives a different arrangement of exactly
+the same number — press **Generate** twice at one seed and you get the same file byte for
+byte, which is what makes a scene reproducible. **new seed** rolls a fresh one into the
+box and regenerates, so a different scene is one click and the number that produced it
+stays on screen.
+
+To change *how many*, move the densities or raise **at most**. That box is a ceiling and
+only a ceiling — it withholds actors, it never invents them, and when it bites the panel
+says what it dropped. On `junction-1`'s whole map, 9.3 km of usable lane:
+
+| every kind at | wanted | kept at the old fixed 150 |
+|---|---|---|
+| low | 46 | 46 |
+| medium | 168 | 150 |
+| dense | 430 | 150 |
+
+Set it to 0 to keep the lot. Past `dense` the knob is the density table, not the cap.
+
+The timing is an **estimate** — the page works out
 when the car arrives from the distance along the route and the average speed in the box,
 which is why a walker waits either side of it rather than stepping out on a stopwatch.
 Everything it places is an ordinary entry: select it, remove it, or edit the file.

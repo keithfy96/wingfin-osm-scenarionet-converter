@@ -35,11 +35,14 @@ export const PER_KM: Record<ActorKind, Record<Exclude<Density, "none">, number>>
   barrier: { low: 1, medium: 3, dense: 8 },
 };
 
-/** Ceiling on a whole-map press.
+/** What the panel's "at most" box starts at - a default, no longer a ceiling in the source.
  *
  * Without a route the rates run over every lane in the model, which on `mosque` is 405 of
  * them - "dense" there is thousands of actors and a file nobody can edit, which is the one
- * outcome this feature exists to avoid.
+ * outcome this feature exists to avoid. So a press still arrives trimmed, but to a number
+ * that is on screen and editable rather than to this constant: on `junction-1`'s 9,343 m of
+ * usable lane, all-medium wants 168 actors and all-dense wants 430, and being handed 150 of
+ * them with no way to ask for the rest is what made every press look identical.
  */
 export const WHOLE_MAP_CAP = 150;
 
@@ -246,6 +249,18 @@ function withinSpans(spans: { from: number; to: number }[], distance: number): n
   }
   const last = spans[spans.length - 1];
   return last ? last.to : distance;
+}
+
+/** The corridor length a press actually places against.
+ *
+ * The same filter `Corridor` applies - a lane under `MIN_LANE_M` is a junction stub, and
+ * placing against it would count road that nothing can stand on. Exported because the panel
+ * has to say how many actors a press *wanted* before the cap trimmed it, and `countFor`
+ * needs exactly this number to work that out; computing it a second way in the panel is how
+ * the two would come to disagree.
+ */
+export function corridorLengthM(lanes: readonly PlacementLane[]): number {
+  return new Corridor([...lanes]).totalM;
 }
 
 export function lineLengthM(line: readonly [number, number][]): number {
