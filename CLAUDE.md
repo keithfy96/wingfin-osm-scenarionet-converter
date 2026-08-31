@@ -336,6 +336,10 @@ These describe *what runs*, and are deliberately distinct from `docs/implementat
   that is the only place it is written down.
 - **Use `tools/drive.py`, not `python -m scenarionet.sim`**, for 3D. The broken map is
   MetaDrive terrain defaults, not our data, and none of the fixes are reachable from `sim`.
+- **A drive is bounded, and "did not arrive" is often the bound rather than a fault.** The
+  budget prints its terms; `--extra-seconds` raises it, and `--traffic live` already doubles the
+  self-driven part. Past the recording MetaDrive drops recorded pedestrians and cyclists and
+  freezes `--lights tape`.
 - **Ctrl-C ends a drive at the next frame boundary and still exports it**; a second Ctrl-C
   `os._exit`s. The flag must never be read mid-`env.step` — `convert_recorded_scenario_exported`
   asserts the last frame is whole. An export **replaces** its directory, removing only the three

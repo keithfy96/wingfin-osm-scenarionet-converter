@@ -690,3 +690,147 @@ than engineered around.
 
 **Nothing marks a partial export as partial.** The scenario line and the `did not arrive`
 reason say so on the run that produced it; the file itself carries only its length.
+
+### The step budget had no term for traffic (2026-08-31)
+
+`--traffic live --traffic-count 25` on `junction-1` ended the drive at 42.4 seconds and reported
+a failure:
+
+```
+scenario 0  ...: 424 of 424 steps (379 recorded frames at 0.1 s), arrive_dest=False, completion 0.415
+            did not arrive: ran out of recorded steps
+result      FAILED
+```
+
+The drive was fine. The bound was wrong, and the message named the wrong thing for it.
+
+**What the budget was.** `drive.py` sized a self-driven run as the longer of the recording and
+the ego's own paced duration inflated by `IDM_TRACKING_RATIO`, plus the longest red:
+
+```python
+seconds = length * data_dt
+if pace is not None:
+    seconds = max(seconds, pace.duration_s / IDM_TRACKING_RATIO)
+budget = int(round(seconds / sim_dt)) + allowance
+```
+
+One named term for each cause of legitimate extra time it knew about — the IDM regulator
+settling below its target, and waiting out a red — and **none at all for queueing behind other
+cars**, which is the one thing `--traffic live` exists to create.
+
+**Measured.** `junction-1` route 1 at 10 Hz, `--agent-policy idm --render none`, each run driven
+to `arrive_dest` with the bound raised by hand (`IDM_TRACKING_RATIO` monkeypatched from a `-c`
+preamble, so no code changed for the measurement):
+
+| run | steps to arrive | against a budget of 424 |
+|---|---|---|
+| no traffic | 412 | arrives, 12 steps of slack |
+| `--traffic live --traffic-count 25 --traffic-seed 0` | **645** | cut off, completion 0.415 |
+| `--traffic-count 50 --traffic-seed 0` | 656 | cut off |
+| `--traffic-count 25 --traffic-seed 3` | 412 | arrives |
+
+Two readings, and the second is the one that decides the design. **The free-flow budget carries
+1.2 seconds of slack**, so any delay at all overruns it. And **the delay is seed-dependent, not
+count-dependent** — doubling the cars to 50 added 11 steps, while changing the seed at 25 cars
+removed all 233. No fixed factor can be right for every run, so a flag has to exist beside
+whatever the default is.
+
+**What it is now.** `_step_budget` is a pure function taking every term in seconds and doing the
+one conversion to steps itself; `tests/unit/test_drive_budget.py` pins it. Two changes to the
+number it returns:
+
+- `TRAFFIC_DELAY_FACTOR = 2.0` multiplies **the self-driven term only** under `--traffic live`.
+  2.0 against a worst measured 1.59 is the same "measured, with room" shape as
+  `IDM_TRACKING_RATIO`'s 0.906 → 0.85.
+- `--extra-seconds` adds to it, for whatever none of the terms predicted.
+
+**Only the self-driven term**, and that is not a tidy detail. `--agent-policy replay` has its
+position set frame by frame by `ReplayEgoCarPolicy` and cannot be delayed by anything on the
+road, so neither the tracking ratio nor the traffic factor may reach it: its budget is the
+recording exactly, with traffic on or off. `--traffic none` is unchanged, and `manual` and
+`remote` still have no budget at all.
+
+**A generous bound costs nothing on a drive that arrives.** The loop ends on `arrive_dest`, not
+on the bound, so the larger number is only ever paid by a drive that was going to fail anyway.
+That is why the answer to a seed-dependent delay is a bound with room in it rather than a
+cleverer estimate. Verified: `--traffic-seed 3`, which already fitted inside 424, still arrives
+at 412 with the budget at 849.
+
+**The message was reading the wrong number back.** The old branch printed `ran out of recorded
+steps` whenever the red allowance was zero — so a drive cut off at 424 was told it had exhausted
+a recording that is 379 frames long. `allowance == 0` had silently stopped meaning "the budget
+is the recording" the day the pace term was added. It now prints the terms:
+
+```
+did not arrive: ran out of steps (848 for the drive itself, x2 for --traffic live);
+                raise it with --extra-seconds
+```
+
+and only when the steps actually ran out — `steps >= budget` — rather than whenever an episode
+ended without arriving.
+
+**Three things end at the last recorded frame, and now the drive can outlive them.** Read out of
+the 0.4.3 checkout rather than assumed:
+
+- `ScenarioTrafficManager.after_step` **removes every replayed pedestrian and cyclist** once
+  `episode_step >= current_scenario_length` (`manager/scenario_traffic_manager.py:136-140`).
+- **Cones and barriers stay** — the same block skips static objects, commented "static object
+  will not be cleaned!". A generated lane closure holds for a whole drive; a generated crossing
+  does not.
+- `ScenarioLightManager.after_step` returns early past the same bound
+  (`manager/scenario_light_manager.py:69`), so `--lights tape` **freezes on its last colour**. A
+  frozen red is a drive that can never arrive and looks exactly like a broken car.
+  `--lights live` evaluates the plan from the episode clock and keeps cycling.
+
+None of it raises and none of it is logged, so `_tape_ran_out` says it on the run:
+
+```
+note: 645 steps against a 379-frame recording. 58 recorded pedestrian(s) and cyclist(s)
+      were removed there (cones and barriers stay).
+```
+
+**A tenth of the drive, not one step past the tape.** A paced car has always outrun the
+recording a little — the drive term is the ego's own duration inflated by `IDM_TRACKING_RATIO`,
+longer than the tape by construction — and on `junction-1` free-flow that is 33 steps of 412, 8%,
+every one of them after the car has arrived. Warning there would put a line on every `idm` drive
+ever run. Under 25 cars it is 266 of 645, 41%, and the walkers are missing from the part of the
+drive that was still going somewhere. `TAPE_OVERRUN_SHARE = 0.1` is the line between the two.
+
+**The recording is not padded to fix this, and should not be.** Making the tape longer means
+inventing what the walkers do for the extra 27 seconds. The actor randomiser already has the
+right knob: its **ego pace** field is the assumed speed that sets each walker's `start_delay_s`,
+so lowering it is how a generated scene is timed against a traffic-slowed drive.
+
+**Using the flag.** Four facts, and the last is the one that stops it being reached for where it
+cannot help:
+
+```bash
+./scripts/drive.sh junction-1 -- --agent-policy idm --traffic live --traffic-count 25 \
+    --extra-seconds 120 --render 3D
+```
+
+- **After the `--`**, like every other `drive.py` flag through `scripts/drive.sh`.
+- **Simulated seconds, not wall clock**, and the same number at every rate — measured:
+  `--extra-seconds 10` is +100 steps at 10 Hz and **+1000** at `--step-hz 100`. That is the whole
+  reason the flag is in seconds; a step count would mean two different things on the two datasets
+  a workspace holds.
+- **Overshoot.** The loop ends on `arrive_dest`, not on the bound, so a generous number costs
+  nothing on a drive that arrives — read what the drive really took off the summary line
+  (`645 of 849 steps`) rather than trying to predict it. Extrapolating from the completion at
+  cutoff misses badly in the other direction: 0.415 at 424 steps suggests ~1022, and the drive
+  takes 645, because the queueing is not spread evenly along the route.
+- **Nothing to offer `--agent-policy replay`.** Measured: `--extra-seconds 10` raised the bound
+  from 379 to 479 and the drive still ended at 364 on `arrive_dest`, there being nothing after
+  the last recorded frame to drive to. `manual` and `remote` have no budget at all, so the flag
+  is inert there too.
+
+Verified end to end on `workspaces/junction-1`, all headless:
+
+| command | before | after |
+|---|---|---|
+| `--agent-policy idm --traffic live --traffic-count 25` | 424 of 424, **FAILED** at 0.415 | 645 of 849, **OK** at 0.952 |
+| `--agent-policy idm` | 412 of 424, OK | unchanged |
+| `--agent-policy replay` | 364 of 379, OK | unchanged |
+| `--agent-policy idm --extra-seconds 30` | — | budget 424 → 724 |
+| `--step-hz 100 --agent-policy idm --extra-seconds 10` | — | budget 4312 → 5312, **+1000 steps not +100** |
+| `--traffic live --traffic-count 25 --traffic-seed 3` | 412 of 424, OK | 412 of 849, OK |
