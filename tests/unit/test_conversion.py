@@ -2009,9 +2009,9 @@ def test_the_page_can_reproduce_the_junction_only_view_exactly() -> None:
     assert len(reached) == strict["best_start_reaches"]
 
 
-def test_all_three_pages_are_written_and_recorded_beside_the_dataset(tmp_path: Path) -> None:
+def test_all_four_pages_are_written_and_recorded_beside_the_dataset(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path, _model())
-    *_, report_path, (html_path, builder_path, signal_path) = convert_scenario(
+    *_, report_path, (html_path, builder_path, signal_path, actor_path) = convert_scenario(
         workspace=workspace, config=ConverterConfig(config_version=1)
     )
     assert html_path == workspace / "inspection" / "stage-6-reachability.html"
@@ -2021,9 +2021,12 @@ def test_all_three_pages_are_written_and_recorded_beside_the_dataset(tmp_path: P
     # Same argument for the lights: a dataset with none is how every dataset starts, and the
     # page is the only place a plan can be made.
     assert signal_path == workspace / "inspection" / "stage-6-signal-builder.html"
+    # And for the actors: the source carries no footway and no crossing worth converting, so
+    # the page is the only place a pedestrian can come from.
+    assert actor_path == workspace / "inspection" / "stage-6-actor-builder.html"
     # In `inspection/`, not in the dataset directory: MetaDrive reads that directory and it
     # must hold the dataset and nothing else.
-    for path in (html_path, builder_path, signal_path):
+    for path in (html_path, builder_path, signal_path, actor_path):
         assert not (workspace / dataset_dir_name(0.1) / path.name).exists()
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -2035,6 +2038,9 @@ def test_all_three_pages_are_written_and_recorded_beside_the_dataset(tmp_path: P
     )
     assert report["artifacts"]["signal_builder_html"]["path"] == (
         "inspection/stage-6-signal-builder.html"
+    )
+    assert report["artifacts"]["actor_builder_html"]["path"] == (
+        "inspection/stage-6-actor-builder.html"
     )
     manifest = json.loads((workspace / "source" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["stage_6"]["artifacts"]["reachability_html"] == (

@@ -232,3 +232,59 @@ by definition the line between two lanes of one way. `tools/check_dataset.py` re
 `covered_paint` and **fails** when a line runs `_MIN_PAINT_M` or further inside a lane that is not
 its own. See
 `docs/mapping-algo-changes/2026-08-16-20:01:55-a-turning-lanes-edge-was-painted-through-the-road-beside-it.md`.
+
+---
+
+## Crosswalks (2026-08-31)
+
+A `CROSSWALK` is a **polygon** in `map_features`, emitted by `actors.crosswalk_features` for the
+run of a drawn actor path that lies inside a lane surface, and only when that actor asked for one
+with `crossing_width_m`. Everything about it is export-time, like the rest of this document, so no
+fingerprint moves.
+
+### It is paint and a semantic label, and nothing else
+
+- `ScenarioBlock._sample_topology:35` picks it up by type and takes `polygon[..., :2]`.
+- `base_block._construct_crosswalk:399` builds a **ghost** body and then calls `np.removeNode()` —
+  there is no visible model. Gated on `show_crosswalk`, which is True in `base_env.py:233` and not
+  overridden by `scenario_env`.
+- The stripes come from the terrain shader alone, via the attribute map.
+- `collision_callback:20` **skips CROSSWALK outright**, so driving over one is not a crash.
+- Nothing routes a pedestrian onto one and no policy in `metadrive/policy/` yields at one.
+
+### The angle encoding, and the stale comment that describes it wrongly
+
+`base_map.get_semantic_map:256-273` fills the polygon with `40 + int(angle / 2)`, where the angle
+comes from `find_longest_edge(polygon)` (`metadrive/utils/shapely_utils/geom.py:144`) and runs
+0–360°. So the value runs **40–220**. `shaders/terrain.frag.glsl:126-129` decodes it back as
+`theta = (value - 40) * 2` degrees, guarded by `value > 39 || value < 222`. Code and shader agree.
+
+**`constants.py:436-439` says the band is "0.4 <= value < 0.76" and `value * 10 = angle`. It is
+wrong**, and it is the comment a reader hits first. Measured on `mosque`: one crossing, longest
+edge 14.1 m, encoded value **82**, decoding to 84° against the 85.0° the polygon's longest edge
+actually makes. 82 is outside the documented band and renders correctly regardless. Do not "fix"
+the encoding to match that comment.
+
+Two consequences for what we emit. **Vertex order decides which way the stripes run**, because the
+angle is taken from the longest edge — so `_rectangle` builds the polygon from the straight chord
+between the entry and exit points rather than buffering the path, which would return a rounded or
+many-sided shape for a path that bends inside the carriageway and paint at an angle nobody chose.
+And a self-intersecting polygon fills as two triangles from the wrong edge, which
+`tools/check_dataset.py` now fails on.
+
+Verified end to end on `mosque`: `current.crosswalks` holds 1, the block holds 1, and
+`get_semantic_map(..., layer=("lane", "lane_line", "crosswalk"))` fills **3643 pixels** at 8 px/m
+with value 82.
+
+### It is exempt from the paint check, deliberately and structurally
+
+`_paint_on_tarmac` only inspects features carrying **both** a `lane_id` and a `polyline`, and a
+crosswalk has neither. That is the whole exemption, and it is right: the rule exists because a
+solid line's ghost body sets `on_white_continuous_line`, so paint on drivable road reads to an
+agent as a road boundary — and a crosswalk's body is CROSSWALK-typed and skipped by the collision
+callback. Measured with a crossing present on `mosque`, `longest line inside another lane` is
+unchanged at **0.47 m**.
+
+Because that exemption is invisible, `check_dataset._crosswalk_faults` asserts it rather than
+leaving it to be rediscovered: a CROSSWALK carrying a `lane_id` or a `polyline` is reported, as is
+one that intersects no lane surface at all — a zebra painted on grass.

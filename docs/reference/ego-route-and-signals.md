@@ -466,3 +466,114 @@ each group may run is arithmetic.
 timing, a group added or removed, the cycle, or a plan loaded over the top — so it can never write
 over newer work. Verified by driving the built bundle: press, download, undo, press again, change
 the cycle, and watch the Undo button disappear.
+
+---
+
+## Actors other than the ego — pedestrians, cyclists and street furniture (2026-08-31)
+
+The third exchange file, `actors.json`, drawn in `inspection/stage-6-actor-builder.html` and read
+by `convert --actors`. Same shape as `routes.json` and `signals.json`: a version, an identity block,
+and a list. Read by `src/osm_scenario/actors.py`; written into `tracks` beside the ego.
+
+### There was never any drive-time work to do
+
+`PEDESTRIAN` and `CYCLIST` are first-class ScenarioNet track types (`metadrive/type.py:65-66`), and
+`ScenarioTrafficManager.after_reset` / `after_step` branch on `track["type"]` to call
+`spawn_pedestrian` / `spawn_cyclist` / `spawn_static_object`, attaching
+`ReplayTrafficParticipantPolicy` — which needs no lane, no route and no map feature, only the
+track's own state arrays. **That manager is already registered in every drive this repo runs**:
+`no_traffic` defaults False (`scenario_env.py:47`) and `tools/drive.py` never sets it.
+`tools/traffic.py:848` had already recorded that it "stays registered and does nothing", which was
+true only because our datasets carried one track. Nothing in `tools/` changed for any of this.
+
+### The ego really does brake for them, measured
+
+`CollisionGroup` carries `(TrafficParticipants, LidarBroadDetector, True)` and
+`(Vehicle, TrafficParticipants, True)` (`constants.py:218-231`), and `can_be_lidar_detected()`
+includes `TrafficParticipants` — so IDM's front-object search finds them and
+`collision_callback:36-37` sets `crash_human`. A pedestrian's bounding box is ±0.35 m
+(`Pedestrian.RADIUS`), which clears even the 2 m corridor `get_idm_route` hands the ego.
+
+Measured on `mosque`, one pedestrian standing on the ego's own line 40.3 m along its route, ego on
+`--agent-policy idm`:
+
+| | |
+|---|---|
+| steps holding the pedestrian as its front object | **180 of 200** |
+| speed before | 11.0 m/s |
+| speed after | **0.04 m/s** |
+| where it stopped | 10.2 m short of the pedestrian |
+
+### Three ways it fails silently, all of them guarded now
+
+- **`spawn_pedestrian` and `spawn_cyclist` read `state["width"]` unconditionally**
+  (`scenario_traffic_manager.py:253`, `:280`), even though `parse_object_state` lists
+  `length`/`width`/`height` under "optional keys". An omitted array is a bare `KeyError` at reset
+  naming neither the dataset nor the track. `actors.py` always writes all three for the moving
+  kinds; `tools/check_dataset.py` fails on their absence.
+- **`spawn_static_object` discards anything under `MIN_VALID_FRAME_LEN = 20` valid frames as
+  sensor noise**, without a word — a habit inherited from the real datasets this format came from.
+  A short-lived cone is not a short-lived cone, it is no cone at all. Cones and barriers are
+  therefore written valid for the whole scenario, and the checker reads the threshold off
+  `ScenarioTrafficManager` rather than hard-coding it.
+- **A wrong `metadata.object_id`** fails a `_check_object_state_dict` assert whose message names
+  neither the file nor the actor. Checked by name in `check_dataset`.
+
+### The file is `[lat, lon]`, and that is not a preference
+
+The page is a Leaflet map and the browser has no projection, so the exchange file carries degrees
+in the order every other Stage 6 payload speaks, and `actors.py` projects into the model's own CRS
+with the WKT the lane model carries. **A swapped pair cannot be caught by range**: `junction-1` is
+at lat 3.18, lon 101.6, and 3.18 is a perfectly good longitude. So every projected point is checked
+against the lanes' own extent plus `EXTENT_MARGIN_M` (200 m) — wide enough for a pavement, narrow
+enough that a transposed pair lands outside it.
+
+`metadata.old_origin_in_current_coordinate` must **not** be applied here. That shift is the
+drive-time correction `tools/` makes to files read *beside* a pickle; these go *inside* one,
+through the same path as the ego track.
+
+### Why the paths are drawn rather than derived
+
+There is nothing to derive them from. Stage 1 drops footways (`road_exclusion_reason`,
+`osm_source.py:179`), and the extracts are bare regardless — counted from
+`workspaces/*/source/map.osm`:
+
+| workspace | `highway=footway` | `path` | `steps` | `highway=crossing` nodes | any `crossing=*` tag |
+|---|---|---|---|---|---|
+| junction-1 | 0 | 1 | 0 | **0** | **0** |
+| mosque | 4 | 1 | 1 | **0** | **0** |
+
+Not one surveyed crossing on either map. Deriving pavements and zebras from the kerb geometry was
+considered and rejected for exactly that reason: it would be inventing infrastructure, not
+converting it.
+
+### Shape of the tracks
+
+- **Rebuilt per scenario**, like the lights, because every state array is length-checked against
+  the scenario length and each route is a different length.
+- **An actor whose walk begins after a short route has ended is omitted from that route** rather
+  than written with no valid frame — which is `sanity_check`'s own advice for such a track.
+- **Present only while walking**: invalid before `start_delay_s`, invalid again once it arrives.
+  Holding it at the far kerb would leave a pedestrian standing in the scene for reasons the plan
+  never stated, and MetaDrive despawns it on the first invalid frame anyway. Every array is zeroed
+  where `valid` is False, which `sanity_check` only enforces under `valid_check=True` but which
+  costs nothing to honour.
+- **Constant speed, deliberately not `ego_route._sample_in_time`.** That routes through
+  `speed_profile`, which caps speed by curvature against `LATERAL_ACCEL_MPS2` — a figure pinned to
+  the recorded car's own 30°-per-step gate. Slowing a pedestrian by car physics would be a
+  fabrication. `_with_dwells` *is* shared, because a wait written in as a repeated vertex is the
+  same thing a person standing at a kerb does.
+- **Velocity is read off the recorded positions, not from `speed_mps`**, so a step spent in a wait
+  reads as stationary — which is what `set_velocity` gets and what the walk animation picks its
+  cycle from.
+
+### Two things that moved for every dataset, once
+
+`metadata.counts` gained `actors` and `crosswalks`. Like `signalled_lanes` and `phase_groups`
+before them these are written unconditionally, so **every dataset's bytes change once** even
+without `--actors`. Verified against `mosque`: re-converting without the flag changed the counts
+block and nothing else. (The route itself also changed, 418 → 414 steps — that is unrelated
+pre-existing drift, the committed pickle having been built from older sources than HEAD.)
+
+`--actors` is refused without `--routes`: a map-only scenario is one frame long and holds no
+tracks, so actors given alone would paint their crossings and drop every walker.

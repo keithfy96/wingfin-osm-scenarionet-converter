@@ -1,0 +1,212 @@
+# ruff: noqa: E501
+"""The Stage 6 actor builder: place the pedestrians, cyclists and street furniture.
+
+MetaDrive replays non-vehicle actors already, and has done all along. `PEDESTRIAN` and
+`CYCLIST` are first-class ScenarioNet track types and `ScenarioTrafficManager` spawns them
+straight from `tracks`, on a pure replay policy that wants no lane, no route and no map
+feature. That manager is registered in every drive this repo runs. It has simply never had
+anything but the recorded car to spawn.
+
+**What is missing is not code, it is the paths.** Stage 1 drops footways, and the extracts are
+bare regardless: across `junction-1` and `mosque` together the source OSM holds four
+`highway=footway` ways, one `steps`, two `path`, and **not one `highway=crossing` node or
+`crossing=*` tag of any kind**. There is nothing surveyed to convert. So where a person walks
+is a judgement about the place, like the choice of route and the timing of the lights, and it
+is made here rather than by a heuristic in the converter.
+
+Placement is by **clicking the map**, not by picking a lane, which is what makes this page
+unlike the other two. An actor walks where no lane is, so there is nothing to snap to and
+nothing content-addressed to name. The file therefore carries geometry - `[lat, lon]`, the
+order every page here speaks - and `osm_scenario.actors` projects it into the model's own
+metric CRS on the way in. The identity block is the only thing standing between a stale file
+and a pedestrian placed silently in a live carriageway, which is why the page checks it too.
+
+A **crossing is painted only where you ask for one**, per actor. A `CROSSWALK` map feature is
+paint and a semantic-camera label and nothing else - `collision_callback` skips it, and no
+policy in MetaDrive yields at one - so painting a zebra under every walker would be inventing
+infrastructure that neither the survey nor the simulator knows about.
+
+The exchange file is `actors.json`, downloaded here and read by `convert --actors`, the same
+arrangement `routes.json` and `signals.json` use. **MetaDrive never sees it.**
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from importlib import resources
+
+from osm_scenario.lane_model import PreliminaryLaneModel
+from osm_scenario.lane_payload import build_lane_payload, embed
+
+CLIENT_ASSET = "actor-client.js"
+
+ACTORS_FILENAME = "actors.json"
+
+# Starting points, not recommendations, and the page says so. 1.3 m/s is the figure the
+# pedestrian-crossing literature uses for an unhurried adult; MetaDrive's own `Pedestrian`
+# carries `SPEED_LIST = [0.4, 1.2]`, which chooses the walk *animation* and not the speed.
+# 5.0 m/s is 18 km/h, an ordinary urban cyclist. 4 m is a common zebra width.
+DEFAULT_PEDESTRIAN_MPS = 1.3
+DEFAULT_CYCLIST_MPS = 5.0
+DEFAULT_CROSSING_WIDTH_M = 4.0
+
+_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stage 6 - actor builder</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  html,body{margin:0;height:100%%;font:13px/1.5 system-ui,sans-serif;color:#212529}
+  #wrap{display:flex;height:100%%}
+  #map{flex:1;min-width:0;cursor:crosshair}
+  #side{width:400px;overflow-y:auto;padding:16px;border-left:1px solid #dee2e6;background:#f8f9fa}
+  h1{font-size:16px;margin:0 0 4px}
+  h2{font-size:13px;margin:18px 0 6px;text-transform:uppercase;letter-spacing:.04em;color:#495057}
+  .muted{color:#868e96}
+  code{font-size:11px;background:#e9ecef;padding:1px 4px;border-radius:3px;word-break:break-all}
+  pre{font-size:11px;background:#e9ecef;padding:8px;border-radius:3px;overflow-x:auto}
+  .caption{margin:-2px 0 10px;font-size:11px;color:#868e96}
+  .verdict{font-size:15px;font-weight:600;padding:6px 10px;border-radius:3px;margin:0 0 4px;background:#d0ebff;color:#1864ab}
+  .key{display:flex;align-items:center;gap:8px;margin:3px 0}
+  .sw{width:22px;height:0;border-top-width:4px;border-top-style:solid;flex:none}
+  button{padding:6px 10px;font:inherit;cursor:pointer;border:1px solid #ced4da;background:#fff;color:#495057;border-radius:3px}
+  button.primary{background:#1c7ed6;border-color:#1c7ed6;color:#fff;width:100%%;margin-bottom:6px}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.link{border:0;background:none;color:#c92a2a;padding:0 4px;text-decoration:underline}
+  input[type=text],input[type=number],select{min-width:0;padding:5px;font:inherit;border:1px solid #ced4da;border-radius:3px}
+  input[type=number]{font-variant-numeric:tabular-nums}
+  input[type=text]{flex:1}
+  .row{display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap}
+  .row label{color:#868e96;font-size:11px}
+  .row[hidden]{display:none}
+  .arow,.wrow{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:5px 6px;border-bottom:1px solid #f1f3f5;font-size:12px;cursor:pointer}
+  .arow:last-child,.wrow:last-child{border-bottom:0}
+  .arow .n{font-variant-numeric:tabular-nums;color:#868e96;white-space:nowrap}
+  .waits{margin-bottom:8px}
+  .loadbtn{display:block;text-align:center;padding:6px 10px;font:inherit;cursor:pointer;border:1px solid #1c7ed6;background:#fff;color:#1c7ed6;border-radius:3px}
+  .loadbtn input{display:none}
+</style>
+</head>
+<body>
+<div id="wrap"><div id="map"></div><div id="side">
+<h1>Stage 6 - actor builder</h1>
+<p class='caption'>Pick a kind, then click the map where the actor goes - each click adds a
+corner, in the order it is walked. Name it, add it, and download <code>actors.json</code>.</p>
+<div id="panel"></div>
+<h2>Colours</h2>
+<div class='key'><span class='sw' style='border-top-color:#adb5bd'></span> a lane, drawn for context</div>
+<div class='key'><span class='sw' style='border-top-color:#7048e8;border-top-style:dashed'></span> the actor you are laying out now</div>
+<div class='key'><span class='sw' style='border-top-color:#0ca678'></span> an actor already added</div>
+<div class='key'><span class='sw' style='border-top-color:#e8590c'></span> the one selected in the list</div>
+<h2>What MetaDrive does with these</h2>
+<p class='caption'>Each actor becomes a <code>tracks</code> entry that MetaDrive's own
+<code>ScenarioTrafficManager</code> spawns and replays. Nothing at drive time has to be told
+about them, and no flag turns them on. A pedestrian and a cyclist are both solid: the ego's
+lidar detects them, IDM brakes for one standing in its lane, and hitting one registers as
+<code>crash_human</code>.</p>
+<h2>They are a tape, not a crowd</h2>
+<p class='caption'>An actor walks exactly the path you draw, at the speed you set, whatever
+else is happening. It will not wait for a car and a car will not be waved across by it. Give
+it a wait where it should stand still, and a start delay to meet the traffic where you want
+it - those are the only two controls over its timing, because there is no pedestrian policy
+in MetaDrive to give it more.</p>
+<h2>Crossings are paint</h2>
+<p class='caption'>Ticking <em>paint a crossing</em> emits a <code>CROSSWALK</code> polygon for
+the part of the path that lies on the carriageway - stripes on the road surface and a label
+for the semantic camera. It changes nothing about behaviour: nothing routes a pedestrian onto
+it and no policy yields at one. Leave it off for a walker on the pavement, or for a jaywalker.
+The source carries no surveyed crossing anywhere on this map, so every zebra here is one you
+chose.</p>
+<h2>Then run</h2>
+<pre>osm-scenario convert -w %(workspace)s \\
+  --config config/default.yaml \\
+  --routes %(routes_hint)s \\
+  --actors %(actors_hint)s</pre>
+<p class='caption'><code>--actors</code> needs <code>--routes</code>: a map-only dataset is one
+frame long and holds no tracks, so there would be nowhere for an actor to walk. Each actor is
+written into every scenario the routes produce, cut to that scenario's length.</p>
+<h2>Reusing a plan you already drew</h2>
+<p class='caption'>Load one with the button above. It is refused unless it was drawn on this
+generation of the map - and that check matters more here than anywhere else in Stage 6. A stale
+route names lane ids that can be found missing; a stale actor names nothing at all, so it would
+simply put a pedestrian somewhere else, quite possibly in a live carriageway, with nothing
+downstream noticing. The fingerprint moves on <em>every</em> Stage 1 rerun, even over an
+unchanged <code>map.osm</code>.</p>
+<h2>Drawn on</h2>
+<p class='caption'>Generation <code>%(fingerprint)s</code>. Points are stored as
+<code>[lat, lon]</code> and projected by the converter, so the page and the dataset cannot
+disagree about which of the pair is which.</p>
+</div></div>
+<script>window.__ACTOR_PAYLOAD__=%(data)s;</script>
+<script>%(client)s</script>
+</body></html>
+"""
+
+
+def client_source() -> str:
+    """The compiled actor client, or a clear error when it was never built."""
+    try:
+        return resources.files("osm_scenario.assets").joinpath(CLIENT_ASSET).read_text("utf-8")
+    except (FileNotFoundError, ModuleNotFoundError) as error:  # pragma: no cover - packaging fault
+        raise RuntimeError(
+            f"The actor builder client bundle is missing ({CLIENT_ASSET}). "
+            "Run `npm install && npm run build` in web/ to rebuild it."
+        ) from error
+
+
+def render_actor_builder_html(
+    *,
+    model: PreliminaryLaneModel,
+    neighbours: Mapping[str, tuple[list[str], list[str]]],
+    moves: Mapping[str, list[str]],
+    workspace_name: str,
+    model_sha256: str,
+    actors_version: int,
+) -> str:
+    """Draw the reviewed map so a person can place the actors on it.
+
+    `neighbours` and `moves` are passed in rather than recomputed, for the reason the other
+    two Stage 6 pages give: the page must be drawn from the objects the scenario was built
+    from. Here it buys less than it does there - this page never asks where a lane leads - but
+    a page drawing a different set of lanes from the dataset would still be a page showing a
+    road that is not in the file.
+
+    Only the geometry and the labels are carried across. The lanes are context for placing an
+    actor, not something to pick, so `exits`, `sideways` and the connectors are dropped rather
+    than shipped unused: the payload is inlined into the HTML, and on `mosque` that is 405
+    lanes' worth of it.
+    """
+    payload = build_lane_payload(model=model, neighbours=neighbours, moves=moves)
+    lanes = [
+        {key: lane[key] for key in ("id", "short", "label", "line")}
+        for lane in payload["lanes"]
+    ]
+    data = embed(
+        {
+            "lanes": lanes,
+            "center": payload["center"],
+            "bounds": payload["bounds"],
+            "identity": {
+                "generation_fingerprint": model.metadata.generation_fingerprint,
+                "reviewed_lane_model_sha256": model_sha256,
+            },
+            "actors_version": actors_version,
+            "suggested_filename": ACTORS_FILENAME,
+            "defaults": {
+                "pedestrian_mps": DEFAULT_PEDESTRIAN_MPS,
+                "cyclist_mps": DEFAULT_CYCLIST_MPS,
+                "crossing_width_m": DEFAULT_CROSSING_WIDTH_M,
+            },
+        }
+    )
+    return _TEMPLATE % {
+        "data": data,
+        "client": client_source(),
+        "workspace": f"workspaces/{workspace_name}",
+        "routes_hint": f"workspaces/{workspace_name}/routes/routes.json",
+        "actors_hint": f"workspaces/{workspace_name}/actors/{ACTORS_FILENAME}",
+        "fingerprint": model.metadata.generation_fingerprint[:16],
+    }

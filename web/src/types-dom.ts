@@ -30,6 +30,12 @@ export interface LeafletLayerGroup extends LeafletLayer {
   clearLayers(): LeafletLayerGroup;
 }
 
+/** What Leaflet passes on a map click. The actor builder places points by clicking the map
+ * rather than by picking a lane, because an actor walks where no lane is. */
+export interface LeafletMouseEvent {
+  latlng: { lat: number; lng: number };
+}
+
 /** What `L.control.layers` passes when a checkbox is ticked or unticked. */
 export interface LeafletOverlayEvent {
   type: string;
@@ -40,6 +46,7 @@ export interface LeafletOverlayEvent {
 export interface LeafletMap {
   setView(center: [number, number], zoom: number): LeafletMap;
   fitBounds(bounds: LatLngBoundsLike, options?: Record<string, unknown>): LeafletMap;
+  on(event: "click", handler: (event: LeafletMouseEvent) => void): LeafletMap;
   on(event: string, handler: (event: LeafletOverlayEvent) => void): LeafletMap;
 }
 

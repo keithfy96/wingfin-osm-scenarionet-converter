@@ -57,6 +57,16 @@ from shapely import STRtree, contains_xy, segmentize, union_all
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon
 from shapely.ops import linemerge, substring, unary_union
 
+from osm_scenario.actor_builder_view import render_actor_builder_html
+from osm_scenario.actors import (
+    ACTORS_VERSION,
+    ActorPlan,
+    ActorPlanError,
+    actor_tracks,
+    crosswalk_features,
+    read_actor_plan,
+)
+
 # Private helpers imported across modules on purpose, for the reason `validation` gives:
 # these are the exact routines the earlier stages use, and a Stage 6 copy would be a
 # second implementation to keep in step. `_sha256` must match what Stage 5 wrote into the
@@ -1646,6 +1656,7 @@ def _scenario(
     manifest: dict[str, Any],
     model_sha256: str,
     plan: SignalPlan | None,
+    actors: ActorPlan | None = None,
     time_step_s: float = TIME_STEP_S,
 ) -> tuple[
     dict[str, Any],
@@ -1663,6 +1674,30 @@ def _scenario(
     moves = _lane_change_moves(model)
     built = _map_features(model, neighbours, moves)
     features, kerbs = built.features, built.kerbs
+
+    # Folded into the shared `map_features` rather than into each route's scenario, because a
+    # crosswalk is a property of the map and every scenario in the dataset is the same map. It
+    # is derived from the drawn paths and not from the source: the extracts carry no
+    # `highway=crossing` node at all, so there is nothing to convert and this is the only
+    # place a crossing can come from.
+    crosswalks = (
+        crosswalk_features(
+            actors,
+            lane_polygons={
+                identifier: feature["polygon"]
+                for identifier, feature in features.items()
+                if feature["type"] == _LANE_TYPE and "polygon" in feature
+            },
+        )
+        if actors is not None
+        else {}
+    )
+    for identifier, feature in crosswalks.items():
+        if identifier in features:
+            raise ConversionError(
+                f"crosswalk {identifier} shares an id with another map feature"
+            )
+        features[identifier] = feature
     # Counted here, not inferred from the gap between what the model holds and what was
     # written: `merged` is that gap, and letting the two reasons for a missing boundary share
     # one number would report suppression as deduplication.
@@ -1746,6 +1781,11 @@ def _scenario(
                 # `junction-1` the first is 1 and it is at the edge of the extract.
                 "signalled_lanes": len(plan.lanes) if plan else 0,
                 "phase_groups": len(plan.groups) if plan else 0,
+                # Counted here for the reason `lane_boundaries` is: the totals are read off
+                # the written features by type, so a type nobody counts is a type the summary
+                # says the map does not have.
+                "actors": len(actors.actors) if actors else 0,
+                "crosswalks": len(crosswalks),
             },
             # Which lines were drawn broken, and on what authority. The same reason
             # `signals` carries `source` - a reader has to be able to tell a surveyed
@@ -1925,6 +1965,7 @@ def _with_route(
     track: dict[str, Any],
     model: PreliminaryLaneModel,
     plan: SignalPlan | None,
+    actors: ActorPlan | None = None,
     time_step_s: float = TIME_STEP_S,
 ) -> dict[str, Any]:
     """The map-only scenario, plus the car that turns it into a drive.
@@ -1939,6 +1980,13 @@ def _with_route(
     envelope carries is wrong for every route.
     """
     steps = len(track["state"]["position"])
+    # Rebuilt per scenario for the reason the lights are: every state array is length-checked
+    # against the scenario length, and each route is a different length. An actor whose walk
+    # begins after a short route has already ended is left out of that route entirely -
+    # `sanity_check`'s own advice for a track with no valid frame is to remove it.
+    walkers = (
+        actor_tracks(actors, steps=steps, time_step_s=time_step_s) if actors else {}
+    )
     scenario_id = f"{base['id']}-{route.name}"
     metadata = {
         **base["metadata"],
@@ -1957,7 +2005,7 @@ def _with_route(
         **base,
         "id": scenario_id,
         "length": steps,
-        "tracks": {_EGO_ID: track},
+        "tracks": {_EGO_ID: track, **walkers},
         "dynamic_map_states": (
             light_states(plan, model=model, steps=steps, time_step_s=time_step_s)
             if plan
@@ -1983,6 +2031,25 @@ def _read_signal_plan(
             source=path,
         )
     except SignalPlanError as error:
+        raise ConversionError(str(error)) from error
+
+
+def _read_actor_plan(
+    path: Path, *, model: PreliminaryLaneModel, model_sha256: str
+) -> ActorPlan:
+    """`actors.read_actor_plan`, with its failures wearing this stage's name.
+
+    Split out for the reason `_read_signal_plan` is: the CLI catches `ConversionError` and
+    nothing else, so a malformed plan would otherwise print a traceback instead of a sentence.
+    """
+    try:
+        return read_actor_plan(
+            _read(path, "actor plan"),
+            model=model,
+            model_sha256=model_sha256,
+            source=path,
+        )
+    except ActorPlanError as error:
         raise ConversionError(str(error)) from error
 
 
@@ -2015,9 +2082,10 @@ def convert_scenario(
     config: ConverterConfig,
     routes: Path | None = None,
     signals: Path | None = None,
+    actors: Path | None = None,
     speed_kph: float | None = None,
     step_hz: float | None = None,
-) -> tuple[list[Path], Path, Path, Path, tuple[Path, Path, Path]]:
+) -> tuple[list[Path], Path, Path, Path, tuple[Path, Path, Path, Path]]:
     """Convert WORKSPACE's validated lane model into a ScenarioNet dataset.
 
     Without `routes` the result is map-only: every road, and nothing that moves. MetaDrive
@@ -2072,12 +2140,26 @@ def convert_scenario(
         if signals is not None
         else None
     )
+    # Refused rather than half honoured. A map-only scenario is one frame long and holds no
+    # tracks at all, so actors given without routes would paint their crossings and drop
+    # every walker - a dataset that looks like it has pedestrians and has none.
+    if actors is not None and routes is None:
+        raise ConversionError(
+            "--actors needs --routes: a map-only dataset is one frame long and holds no "
+            "tracks, so there is nowhere for an actor to walk"
+        )
+    actor_plan = (
+        _read_actor_plan(actors, model=model, model_sha256=model_sha256)
+        if actors is not None
+        else None
+    )
     scenario, routing, neighbours, moves = _scenario(
         model=model,
         workspace_name=workspace.name,
         manifest=manifest,
         model_sha256=model_sha256,
         plan=plan,
+        actors=actor_plan,
         time_step_s=time_step_s,
     )
 
@@ -2116,6 +2198,7 @@ def convert_scenario(
                     ),
                     model=model,
                     plan=plan,
+                    actors=actor_plan,
                     time_step_s=time_step_s,
                 )
             )
@@ -2195,6 +2278,21 @@ def convert_scenario(
         ),
     )
 
+    # Written on every convert for the reason the other two builders are: it is how a dataset
+    # with no pedestrians stops having none, so it has to exist before there are any actors.
+    actor_path = workspace / "inspection" / "stage-6-actor-builder.html"
+    _write_text_atomic(
+        actor_path,
+        render_actor_builder_html(
+            model=model,
+            neighbours=neighbours,
+            moves=moves,
+            workspace_name=workspace.name,
+            model_sha256=model_sha256,
+            actors_version=ACTORS_VERSION,
+        ),
+    )
+
     artifacts = {}
     for name, path in (
         ("dataset_summary", summary_path),
@@ -2202,6 +2300,7 @@ def convert_scenario(
         ("reachability_html", html_path),
         ("route_builder_html", builder_path),
         ("signal_builder_html", signal_path),
+        ("actor_builder_html", actor_path),
         *(
             (f"scenario:{item['id']}", path)
             for item, path in zip(scenarios, scenario_paths, strict=True)
@@ -2223,6 +2322,7 @@ def convert_scenario(
             "reviewed_lane_model_sha256": model_sha256,
             "routes": routes.name if routes is not None else None,
             "signals": signals.name if signals is not None else None,
+            "actors": actors.name if actors is not None else None,
         },
         "converted": scenario["metadata"]["counts"],
         "map_features": len(scenario["map_features"]),
@@ -2273,5 +2373,5 @@ def convert_scenario(
         summary_path,
         mapping_path,
         report_path,
-        (html_path, builder_path, signal_path),
+        (html_path, builder_path, signal_path, actor_path),
     )

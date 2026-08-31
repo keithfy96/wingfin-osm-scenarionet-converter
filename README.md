@@ -139,9 +139,10 @@ uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yam
 Writes the ScenarioNet dataset into `<workspace>/scenarionet/`. Without a route this
 is **map-only**: MetaDrive can load it and check it, but not drive it.
 
-Two things are drawn by hand in the browser and passed in as files — a route, and
-optionally a set of traffic lights. Both are exchange files between the page and the
-CLI, exactly like Stage 3's `review.json`: a browser can't write to disk.
+Three things are drawn by hand in the browser and passed in as files — a route, and
+optionally a set of traffic lights and a set of actors. All three are exchange files
+between the page and the CLI, exactly like Stage 3's `review.json`: a browser can't
+write to disk.
 
 ### Stage 6, routes — pick where the car drives (browser, manual)
 
@@ -207,6 +208,84 @@ red because the wait is *in those positions*, computed against the tape. Under
 warns when you ask for that combination. For training, the answer is
 `--agent-policy idm` with `--lights live`, which brakes for the light itself rather
 than for a recording of it.
+
+### Stage 6, actors — put people on the map (browser, manual)
+
+Optional. Without it the dataset holds exactly one moving object, the recorded car.
+
+Open `inspection/stage-6-actor-builder.html`. Pick a **kind** — pedestrian, cyclist,
+cone or barrier — then **click the map** where the actor goes: each click adds a
+corner, in the order it walks them, and two points is enough for a straight crossing.
+Set its speed, and a start delay if it should meet the traffic later. Tick **paint a
+crossing** where it should leave a zebra. Name it, press add, repeat. It downloads
+`actors.json` — save it to `<workspace>/actors/`.
+
+You click the map here rather than picking a lane, unlike the other two Stage 6 pages,
+for the reason the whole thing is drawn by hand: an actor walks where no lane is.
+
+```bash
+uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yaml \
+  --routes workspaces/junction-1/routes/routes.json \
+  --actors workspaces/junction-1/actors/actors.json
+```
+
+**`--actors` needs `--routes`.** Without a route the dataset is one frame long and
+holds no tracks, so there would be nowhere for an actor to walk; `convert` refuses the
+combination rather than painting the crossings and dropping every walker.
+
+What an entry looks like — the page writes all of this, and it is here so you can read
+one back or edit it by hand:
+
+```jsonc
+{
+  "name": "crossing-mid",        // becomes the track key; anything but "ego"
+  "kind": "pedestrian",          // or cyclist, cone, barrier
+  "path": [[lat, lon], ...],     // [lat, lon], the order every page here speaks
+  "speed_mps": 1.3,              // constant; 1.3 is an unhurried adult, 5.0 a cyclist
+  "start_delay_s": 0.0,          // it is not in the scene until then
+  "waits": [                     // stand still partway across
+    {"at_m": 9.0, "seconds": 20.0}
+  ],
+  "crossing_width_m": 4.0        // omit for no zebra at all
+}
+```
+
+A cone or a barrier does not move, so it takes `"position": [lat, lon]` and an
+optional `"heading_rad"` instead of a path, and none of the walking fields.
+
+**It is like the lights, not like `--traffic live`.** Actors are baked into the
+pickles at convert time, so they are *in the dataset*: a stock ScenarioNet consumer
+sees them, every rate you convert gets them, and **no drive-time flag turns them on**.
+There is no `--actors` on `drive.py` and there does not need to be — MetaDrive's own
+`ScenarioTrafficManager` is already registered in every drive and spawns them straight
+out of `tracks`. The other cars from `--traffic live` are the opposite: not in the
+dataset, and switched on per run.
+
+**The ego brakes for them, and so does the traffic.** They are solid to the lidar and
+to the physics. Measured on `mosque` with a pedestrian standing on the ego's own line
+40 m along its route, under `--agent-policy idm`: the ego held it as its front object
+for 180 of 200 steps and came down from 11.0 m/s to 0.04 m/s, stopping 10.2 m short.
+Hitting one registers as `crash_human`.
+
+**They are a tape, not a crowd.** An actor walks the path you drew at the speed you
+set, whatever else is happening — it will not wait for a car, and a car will not wave
+it across. `waits` and `start_delay_s` are the only controls over its timing, because
+MetaDrive has no pedestrian policy to give it more.
+
+**A crossing is paint.** Ticking the box emits a `CROSSWALK` polygon over the part of
+the path that lies on the carriageway: stripes on the road surface and a label for the
+semantic camera, and nothing else. Nothing routes a pedestrian onto one and no policy
+yields at one. Leave it off for a walker on the pavement, or for a jaywalker. **The
+source carries no surveyed crossing anywhere on either map** — zero `highway=crossing`
+nodes across `junction-1` and `mosque`, and four footways between them — which is the
+same reason the paths themselves are drawn rather than derived. There is nothing to
+convert.
+
+`actors.json` records which lane model it was drawn on and `convert` refuses one drawn
+on a different map, exactly as `routes.json` and `signals.json` do. It matters more
+here: a stale route names lane IDs that can be found missing, but a stale actor names
+nothing at all, so it would simply put a pedestrian somewhere else — quite possibly in
+a live carriageway — with nothing downstream noticing.
 
 ### Stage 6, speed — how fast the recorded car drives
 
@@ -477,9 +556,9 @@ step(s) of 0.1 s)` at the default. Step 4's drive reaches completion 0.950, agai
 
 ### Put other cars on the road
 
-The roads in a converted dataset hold exactly one moving object, the ego. `--traffic live`
-puts other cars on them, generated from the reviewed lane graph and driven by MetaDrive's own
-IDM. Two steps — work out the routes once, then drive:
+The roads in a converted dataset hold one moving car, the ego — plus whatever `--actors`
+put there. `--traffic live` puts other *cars* on them, generated from the reviewed lane
+graph and driven by MetaDrive's own IDM. Two steps — work out the routes once, then drive:
 
 ```bash
 uv run osm-scenario traffic -w workspaces/junction-1 --count 60 --seed 1
@@ -507,6 +586,13 @@ tape and the road would empty around it. Live cars have no end — one that reac
 the map is retired and another enters where a road begins. Measured across 24 episodes on both
 extracts, under a replayed ego and a slow `--agent-policy idm` one, the road never fell below
 the number of cars asked for.
+
+That is also the difference between this and **Stage 6, actors**, above.
+Pedestrians, cyclists and street furniture sit on the *other* side of the same split: they are
+recorded tracks written into the pickles at convert time, so they need no flag here and a stock
+consumer sees them — and they are a tape, with the end that implies. Cars are live, so they are
+not in the file and have no end. If the question is "how do I add a person", the answer is
+`convert --actors`, not anything on this page.
 
 **The cars give way where two routes cross.** MetaDrive's IDM brakes only for what is on its
 own lane, so a car entering a junction from the side is not an obstacle to it at any distance —
@@ -1684,6 +1770,14 @@ splicing connector centrelines for junction hops), resampled at 10 Hz — or at 
 `tracks["ego"]["state"]["position"]`. **MetaDrive never reads
 `routes.json`** — it reads the pickles, and the route *is* those positions.
 
+With `--actors`, each entry becomes a track of its own beside `tracks["ego"]`, cut to
+that scenario's length — so the same plan produces different tracks per route, and an
+actor whose walk begins after a short route has already ended is left out of that
+route rather than written with no valid frame. Each actor that asked for a crossing
+also contributes a `CROSSWALK` polygon to the shared `map_features`, covering the part
+of its path that lies on a lane surface. `metadata.counts` reports both as `actors`
+and `crosswalks`.
+
 The route builder page previews the same geometry in the browser; Python re-derives
 it. The two agree to within 3.5 m over 1.1 km across 40 real routes, and both sides
 are deliberately covered by the same test cases (`web/test/route/geometry.test.ts`
@@ -1701,10 +1795,11 @@ test that loads MetaDrive's real `ScenarioDescription` when the checkout is pres
 ### The browser pages
 
 Every inspection page is a single self-contained HTML file with its data inlined as a
-JSON payload — no server, no build step at view time. The two interactive ones (the
-Stage 3 reviewer and the Stage 6 route builder) host TypeScript clients from `web/`,
-compiled by esbuild into `src/osm_scenario/assets/*.js` and **committed**, so an
-installed CLI never needs Node.
+JSON payload — no server, no build step at view time. The four interactive ones (the
+Stage 3 reviewer and the Stage 6 route, signal and actor builders) host TypeScript
+clients from `web/`, compiled by esbuild into `src/osm_scenario/assets/*.js` and
+**committed**, so an installed CLI never needs Node. Each is its own bundle rather
+than one shared build: they share no code, and a page should not carry another's.
 
 ---
 
@@ -1742,8 +1837,10 @@ src/osm_scenario/
   review.py           Stage 3        apply_review.py      Stage 4
   validation.py       Stage 5        conversion.py        Stage 6
   ego_route.py        route planning + the synthetic ego car
-  inspection.py, comparison_view.py, validation_view.py,
-  reachability_view.py, route_builder_view.py     the HTML views
+  signal_plan.py      the phase plan       actors.py            the actor plan
+  inspection.py, comparison_view.py, validation_view.py, reachability_view.py,
+  route_builder_view.py, signal_builder_view.py, actor_builder_view.py
+                      the HTML views
   assets/             committed compiled browser clients
 web/                  TypeScript sources for those clients
 tools/                drive.py, check_dataset.py, signal_control.py,

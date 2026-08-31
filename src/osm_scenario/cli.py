@@ -232,6 +232,17 @@ def convert(
             "no traffic lights; OSM supplies no signal timing, so the plan is chosen there.",
         ),
     ] = None,
+    actors_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--actors",
+            exists=True,
+            dir_okay=False,
+            help="actors.json from the Stage 6 actor builder: pedestrians, cyclists, cones "
+            "and barriers, replayed by MetaDrive's own traffic manager. Needs --routes, "
+            "because a map-only dataset is one frame long and holds no tracks.",
+        ),
+    ] = None,
     speed_kph: Annotated[
         float | None,
         typer.Option(
@@ -267,6 +278,7 @@ def convert(
             config=config,
             routes=routes_path,
             signals=signals_path,
+            actors=actors_path,
             speed_kph=speed_kph,
             step_hz=step_hz,
         )
@@ -308,10 +320,17 @@ def convert(
             f"  signals: {lanes} lane(s) in {len(plan['groups'])} phase group(s) on a "
             f"{plan['cycle_seconds']:.0f} s cycle, marked {plan['source']}"
         )
-    reachability, builder, signals = html_paths
+    counts = report["converted"]
+    if counts.get("actors"):
+        typer.echo(
+            f"  actors: {counts['actors']} pedestrian(s), cyclist(s) or object(s) in every "
+            f"scenario, {counts.get('crosswalks', 0)} painted crossing(s)"
+        )
+    reachability, builder, signals, actors_page = html_paths
     typer.echo(f"Stage 6 reachability map: {reachability}")
     typer.echo(f"Stage 6 route builder:    {builder}")
     typer.echo(f"Stage 6 signal builder:   {signals}")
+    typer.echo(f"Stage 6 actor builder:    {actors_page}")
 
 
 @app.command()

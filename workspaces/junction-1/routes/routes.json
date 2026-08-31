@@ -6,9 +6,9 @@
   },
   "routes": [
     {
-      "name": "5",
-      "start_lane": "34f42eb7a4fbf4e0",
-      "end_lane": "86762d6619cf4163"
+      "name": "route-1",
+      "start_lane": "1eef4a136cc4167d",
+      "end_lane": "863caef770461b65"
     }
   ]
 }

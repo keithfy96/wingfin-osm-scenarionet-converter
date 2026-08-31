@@ -42,6 +42,7 @@ const bundles = [
   optionsFor("src/main.ts", outfile),
   optionsFor("src/route/main.ts", resolve(assets, "route-client.js")),
   optionsFor("src/signal/main.ts", resolve(assets, "signal-client.js")),
+  optionsFor("src/actor/main.ts", resolve(assets, "actor-client.js")),
 ];
 
 if (process.argv.includes("--watch")) {

@@ -289,7 +289,7 @@ These describe *what runs*, and are deliberately distinct from `docs/implementat
 (what was planned), `docs/mapping-algo-changes/` (corrections log) and
 `docs/ai-action-logs/` (session records).
 
-### Driving a dataset — routes, junction geometry, signals
+### Driving a dataset — routes, junction geometry, signals, actors
 → `docs/reference/ego-route-and-signals.md`
 
 - **A route has to be in the file.** `ScenarioEnv` has no start-and-end setting and
@@ -311,6 +311,13 @@ These describe *what runs*, and are deliberately distinct from `docs/implementat
   `stop_point` sits at the top level of a light entry, never inside `state`.
 - **Waiting at a red has to be in the recorded positions.** `ReplayEgoCarPolicy` sets
   position directly and drives through a red however correct the tape is.
+- **Pedestrians and cyclists need no drive-time code at all.** MetaDrive's stock
+  `traffic_manager` is already registered in every drive and spawns them straight out of
+  `tracks`; the ego's IDM brakes for one standing in its lane (measured, 11.0 → 0.04 m/s).
+  `spawn_pedestrian` reads `state["width"]` unconditionally, so an omitted size is a bare
+  `KeyError` at reset, and a static object under 20 valid frames is silently discarded.
+- **`actors.json` is `[lat, lon]` and a swapped pair is a valid pair** at these latitudes, so
+  it is caught against the map's extent rather than by range. `--actors` needs `--routes`.
 
 ### Running the simulator — rates, what a step costs, the container
 → `docs/reference/running-the-simulator.md`
@@ -423,6 +430,10 @@ These describe *what runs*, and are deliberately distinct from `docs/implementat
   unconditional, because a line drawn short is a fault and not a preference.
 - **A road that stops must not be painted across**, or a stop line appears where there is
   none, with a ghost body, on road a car drives along.
+- **A `CROSSWALK` is the one thing that may sit on drivable road** — its body is a ghost the
+  collision callback skips, and it has no `lane_id` or `polyline` so the paint check never
+  sees it. Its stripe angle comes from the polygon's longest edge, and `constants.py:436-439`
+  describes the encoding **wrongly**; the shader is the authority.
 
 ### The Stage 2 lane model
 → `docs/reference/lane-model-algorithm.md`

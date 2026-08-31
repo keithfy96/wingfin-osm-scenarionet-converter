@@ -117,6 +117,105 @@ def _paint_on_tarmac(map_features) -> tuple[float, str]:
     return worst, culprit
 
 
+def _actor_faults(scenario, minimum_static_frames):
+    """What is wrong with the non-ego tracks, as sentences. Empty when nothing is.
+
+    Every one of these is silent in MetaDrive. A missing `width` is a bare `KeyError` inside
+    `spawn_pedestrian` at reset with nothing naming the track; a static object with too few
+    valid frames is dropped as sensor noise without a word; a mismatched `object_id` fails an
+    assert whose message names neither the file nor the actor. `sanity_check` catches the last
+    of those and none of the first two.
+    """
+    faults = []
+    length = scenario["length"]
+    sdc_id = scenario["metadata"].get("sdc_id")
+    for name, track in sorted(scenario["tracks"].items()):
+        if name == sdc_id:
+            continue
+        kind = track.get("type")
+        state = track.get("state") or {}
+        recorded = (track.get("metadata") or {}).get("object_id")
+        if recorded != name:
+            faults.append(
+                f"track {name} carries object_id {recorded!r}; MetaDrive asserts the two match"
+            )
+        for key, array in state.items():
+            if len(array) != length:
+                faults.append(
+                    f"track {name} state {key} is {len(array)} long, not the scenario's {length}"
+                )
+        if kind in ("PEDESTRIAN", "CYCLIST"):
+            # `parse_object_state` treats these as optional; `spawn_pedestrian` and
+            # `spawn_cyclist` read them unconditionally. The second is the one that runs.
+            missing = [key for key in ("length", "width", "height") if key not in state]
+            if missing:
+                faults.append(
+                    "{} track {} has no {} - spawn_{} reads it unconditionally and would "
+                    "raise KeyError at reset".format(
+                        kind, name, "/".join(missing), kind.lower()
+                    )
+                )
+        if kind in ("TRAFFIC_CONE", "TRAFFIC_BARRIER"):
+            valid = int(sum(1 for flag in state.get("valid", ()) if flag))
+            if valid < minimum_static_frames:
+                faults.append(
+                    f"{kind} track {name} is valid for {valid} frame(s); under "
+                    f"ScenarioTrafficManager.MIN_VALID_FRAME_LEN "
+                    f"({minimum_static_frames}) it is discarded as noise and never appears"
+                )
+    return faults
+
+
+def _crosswalk_faults(map_features):
+    """What is wrong with the CROSSWALK polygons.
+
+    A crosswalk is paint and a semantic label: `collision_callback` skips the type outright,
+    so nothing about it can be felt and nothing about it can fail loudly. It is drawn by
+    `base_map.get_semantic_map`, which fills the polygon and takes the stripe angle from its
+    longest edge - so a polygon with the wrong shape paints at an angle nobody chose, and one
+    off the carriageway paints a zebra on grass.
+
+    It also must stay invisible to `_paint_on_tarmac`. That exemption is deliberate and it is
+    structural - a crosswalk has no `lane_id` and no `polyline` - so it is asserted here
+    rather than left to be rediscovered.
+    """
+    try:
+        from shapely.geometry import Polygon
+        from shapely.ops import unary_union
+    except ImportError:  # pragma: no cover - MetaDrive pulls shapely in
+        return []
+
+    faults = []
+    surfaces = [
+        Polygon(feature["polygon"][:, :2]).buffer(0)
+        for feature in map_features.values()
+        if feature.get("type") == "LANE_SURFACE_STREET" and len(feature.get("polygon", [])) >= 4
+    ]
+    carriageway = unary_union(surfaces) if surfaces else None
+
+    for identifier, feature in sorted(map_features.items()):
+        if feature.get("type") != "CROSSWALK":
+            continue
+        polygon = feature.get("polygon")
+        if polygon is None or len(polygon) < 4:
+            faults.append(f"crosswalk {identifier} has fewer than four corners")
+            continue
+        if "lane_id" in feature or "polyline" in feature:
+            faults.append(
+                f"crosswalk {identifier} carries a lane_id or polyline, which would put it "
+                "back inside the paint-on-tarmac check it is meant to be exempt from"
+            )
+        shape = Polygon(polygon[:, :2])
+        if not shape.is_valid:
+            faults.append(f"crosswalk {identifier} is self-intersecting, so it fills wrong")
+            continue
+        if carriageway is not None and not shape.intersects(carriageway):
+            faults.append(
+                f"crosswalk {identifier} touches no lane surface - a zebra painted on grass"
+            )
+    return faults
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("dataset", help="Directory holding dataset_summary.pkl")
@@ -138,6 +237,9 @@ def main() -> int:
 
     # Imported here rather than at module scope so the version line above is printed even
     # when MetaDrive is missing, which is itself the likeliest reason this script fails.
+    # Imported for `MIN_VALID_FRAME_LEN` rather than hard-coded: a static object valid for
+    # fewer frames than that is dropped as noise, and the threshold belongs to MetaDrive.
+    from metadrive.manager.scenario_traffic_manager import ScenarioTrafficManager
     from metadrive.scenario.scenario_description import ScenarioDescription
     from metadrive.scenario.utils import draw_map, read_dataset_summary, read_scenario_data
 
@@ -191,6 +293,28 @@ def main() -> int:
                 1.0 / step_s,
             )
         )
+
+        # The tracks besides the recorded car: pedestrians, cyclists and street furniture,
+        # which MetaDrive's own `ScenarioTrafficManager` spawns straight out of `tracks` with
+        # no drive-time flag to turn them on. Nothing here is checked anywhere else.
+        others = {
+            name: track
+            for name, track in scenario["tracks"].items()
+            if name != scenario["metadata"].get("sdc_id")
+        }
+        if others:
+            kinds = collections.Counter(track.get("type") for track in others.values())
+            print(
+                "actors       {}".format(
+                    ", ".join(f"{count} {name}" for name, count in sorted(kinds.items()))
+                )
+            )
+            for fault in _actor_faults(scenario, ScenarioTrafficManager.MIN_VALID_FRAME_LEN):
+                print(f"             FAILED: {fault}")
+                failures += 1
+        for fault in _crosswalk_faults(scenario["map_features"]):
+            print(f"             FAILED: {fault}")
+            failures += 1
 
         # A divider has to satisfy MetaDrive's `is_broken_line` to be drawn dashed, and a
         # boundary type never does however it is spelled - `ScenarioBlock` sends every

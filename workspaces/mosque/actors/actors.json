@@ -1,0 +1,72 @@
+{
+  "actors_version": 1,
+  "identity": {
+    "generation_fingerprint": "b1fe3e0cc9bc58ec0e57cd4baeb81593f49752d50ac9b432823fcd495b7e1ab7",
+    "reviewed_lane_model_sha256": "fd2e2a31b397549033b6a03ef530feb34a8c76cc1176d0b0ced7108be03facaf"
+  },
+  "actors": [
+    {
+      "name": "crossing-mid",
+      "kind": "pedestrian",
+      "path": [
+        [
+          3.1850717,
+          101.6112201
+        ],
+        [
+          3.1850528,
+          101.611005
+        ]
+      ],
+      "speed_mps": 1.3,
+      "start_delay_s": 0.0,
+      "waits": [
+        {
+          "at_m": 9.0,
+          "seconds": 20.0
+        }
+      ],
+      "crossing_width_m": 4.0
+    },
+    {
+      "name": "pavement-walker",
+      "kind": "pedestrian",
+      "path": [
+        [
+          3.1850551,
+          101.6110319
+        ],
+        [
+          3.1850528,
+          101.611005
+        ]
+      ],
+      "speed_mps": 1.1,
+      "start_delay_s": 2.0
+    },
+    {
+      "name": "rider",
+      "kind": "cyclist",
+      "path": [
+        [
+          3.1847095,
+          101.6111325
+        ],
+        [
+          3.1850613,
+          101.6111018
+        ]
+      ],
+      "speed_mps": 5.0,
+      "start_delay_s": 0.0
+    },
+    {
+      "name": "cone-1",
+      "kind": "cone",
+      "position": [
+        3.1850551,
+        101.6110319
+      ]
+    }
+  ]
+}

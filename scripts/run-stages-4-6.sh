@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # Stages 4 to 6: apply the Stage 3 review, validate the reviewed map, and convert it into
-# a ScenarioNet dataset. The dataset comes out map-only -- routes and signals are drawn by
-# hand afterwards, in the Stage 6 pages this run writes.
+# a ScenarioNet dataset. The dataset comes out map-only -- routes, signals and actors are
+# drawn by hand afterwards, in the Stage 6 pages this run writes.
 #
 #   ./scripts/run-stages-4-6.sh                 # workspace from .env
 #   ./scripts/run-stages-4-6.sh junction-1      # override it for this run
@@ -73,6 +73,10 @@ note "it is in $WS/scenarionet-10hz: each rate gets its own directory, because a
 note "can only be replayed at the rate it was written at. --step-hz 100 makes another."
 note "routes    $WS/inspection/stage-6-route-builder.html   -> routes/routes.json"
 note "signals   $WS/inspection/stage-6-signal-builder.html  -> signals/signals.json"
+note "actors    $WS/inspection/stage-6-actor-builder.html   -> actors/actors.json"
 note "then      ${CLI[*]} convert -w $WS --config $CONFIG \\"
 note "            --routes $WS/routes/routes.json"
+# --actors is listed apart because it is the one that cannot stand alone: a map-only dataset
+# is a single frame and holds no tracks, so convert refuses it without --routes.
+note "            [--signals $WS/signals/signals.json] [--actors $WS/actors/actors.json]"
 printf '\n'
