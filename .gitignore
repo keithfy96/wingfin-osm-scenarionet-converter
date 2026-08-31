@@ -24,3 +24,9 @@ workspaces/*/reports/
 recordings/
 node_modules/
 
+
+# Throwaway git worktrees. `git worktree add .claude/worktrees/<name>` puts a whole second
+# checkout here, and a `git add -A` from the root commits it as a **gitlink** (mode 160000)
+# rather than as files -- a tracked path that points at a commit and breaks on any clone that
+# has no such worktree. Happened once, in 3ec64b1.
+.claude/worktrees/

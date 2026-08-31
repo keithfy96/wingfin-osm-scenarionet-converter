@@ -76,6 +76,7 @@ _TEMPLATE = """<!doctype html>
   button.primary{background:#1c7ed6;border-color:#1c7ed6;color:#fff;width:100%%;margin-bottom:6px}
   button:disabled{opacity:.45;cursor:not-allowed}
   button.link{border:0;background:none;color:#c92a2a;padding:0 4px;text-decoration:underline}
+  button.danger{border-color:#ffc9c9;background:#fff5f5;color:#c92a2a}
   input[type=text],input[type=number],select{min-width:0;padding:5px;font:inherit;border:1px solid #ced4da;border-radius:3px}
   input[type=number]{font-variant-numeric:tabular-nums}
   input[type=text]{flex:1}
@@ -84,6 +85,7 @@ _TEMPLATE = """<!doctype html>
   .row[hidden]{display:none}
   .arow,.wrow{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:5px 6px;border-bottom:1px solid #f1f3f5;font-size:12px;cursor:pointer}
   .arow:last-child,.wrow:last-child{border-bottom:0}
+  .arow.on{background:#fff4e6;box-shadow:inset 3px 0 0 #e8590c}
   .arow .n{font-variant-numeric:tabular-nums;color:#868e96;white-space:nowrap}
   .waits{margin-bottom:8px}
   .loadbtn{display:block;text-align:center;padding:6px 10px;font:inherit;cursor:pointer;border:1px solid #1c7ed6;background:#fff;color:#1c7ed6;border-radius:3px}
@@ -101,13 +103,30 @@ Or start from a whole scene with <em>Randomise</em> and edit it down.</p>
 <div class='key'><span class='sw' style='border-top-color:#adb5bd'></span> a lane, drawn for context</div>
 <div class='key'><span class='sw' style='border-top-color:#7048e8;border-top-style:dashed'></span> the actor you are laying out now</div>
 <div class='key'><span class='sw' style='border-top-color:#0ca678'></span> an actor already added</div>
-<div class='key'><span class='sw' style='border-top-color:#e8590c'></span> the one selected in the list</div>
+<div class='key'><span class='sw' style='border-top-color:#e8590c;border-top-style:dashed'></span> the one you are editing, picked on the map or in the list</div>
 <div class='key'><span class='sw' style='border-top-color:#1c7ed6'></span> the loaded route, which is what actors are placed along</div>
+<h2>Changing one you have already placed</h2>
+<p class='caption'>Click an actor - either its row in the list or the actor itself on the map -
+and the form at the top becomes an editor for it. Its kind, name, speed, delay, waits, heading
+and crossing all fill in, and its path or position turns dashed orange so you can see which one
+you have. <em>Delete&nbsp;&lt;name&gt;</em> appears under the button and throws that one away
+without going back to the list to find it. <strong>There is no Save.</strong> Every change lands as you make it, so picking a
+different actor or clicking away never strands a half-finished edit. Press <em>Done editing</em>
+when you have finished, or click the same row again.</p>
+<p class='caption'>The geometry is edited in the same buffer a new actor is drawn in: clicking
+the map adds a corner at the end of the path, <em>Undo last point</em> takes one off, and
+<em>Clear</em> starts the shape again - the actor keeps the shape it had until you have clicked
+enough points for a new one. The same goes for the name: while it is blank or already taken, the
+actor simply keeps its old one. Changing a walker into a cone puts it on the first corner of its
+own path, and changing it back brings the rest of the path with it.</p>
+<p class='caption'>Editing an actor that came from <em>Generate</em> does not make it yours -
+it is still one of the ones the button placed, so the next press replaces it along with the
+rest. The panel says so when you select one. Draw it by hand if it needs to survive.</p>
 <h2>Randomising a starting scene</h2>
 <p class='caption'>Set a density per kind and press <em>Generate</em>. The rates are per
 kilometre - pedestrians 1, 4 or 10; cyclists 1, 3 or 8; cones 2, 8 or 20; barriers 1, 3 or 8 -
 so what you get depends on how long the road is. Everything it places is an ordinary entry in
-the list below: select it, remove it, or edit the downloaded file. Pressing Generate again
+the list below: select it and change it, remove it, or edit the downloaded file. Pressing Generate again
 replaces what it placed last time and leaves anything you drew by hand alone.</p>
 <h2>The seed moves them; it does not add any</h2>
 <p class='caption'>The seed decides <em>where</em> each actor goes and nothing else. How many

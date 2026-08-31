@@ -104,6 +104,11 @@ function boot(): void {
   const drawn: [number, number][] = [];
   const waits: ActorWait[] = [];
   const actors: DrawnActor[] = [];
+  // Which actor is being edited, or -1. Selecting one - in the list or by clicking it on the
+  // map - turns the form above into a live editor of that actor: every change is written
+  // straight back into the list, so there is no Save to forget and nothing to lose by
+  // clicking away. `drawn` and `waits` hold its geometry while it is selected, which is the
+  // same buffer a brand new actor is laid out in.
   let selected = -1;
   const scratch: LeafletLayer[] = [];
   const placed: LeafletLayer[] = [];
@@ -167,6 +172,14 @@ function boot(): void {
   const undoButton = element("button", undefined, "Undo last point");
   const clearButton = element("button", undefined, "Clear");
   const problemNote = element("p", "caption");
+  // Its own row under the finish button, not beside Undo and Clear: those two are about the
+  // shape being drawn and this one throws the actor away, and a destructive control sitting
+  // in a row of reversible ones is a misclick waiting to happen. Named after whatever is
+  // selected, so what is about to go is on the button rather than held in your head.
+  const deleteButton = element("button", "danger", "Delete this actor");
+  const deleteRow = element("div", "row");
+  deleteRow.hidden = true;
+  deleteRow.append(deleteButton);
   const buttons = element("div", "row");
   buttons.append(undoButton, clearButton);
 
@@ -298,6 +311,7 @@ function boot(): void {
       waitRow,
       waitList,
       addButton,
+      deleteRow,
       problemNote,
       buttons,
       element("h2", undefined, "Randomise"),
@@ -333,30 +347,41 @@ function boot(): void {
 
   function redrawScratch(): void {
     for (const layer of scratch.splice(0)) layer.remove?.();
+    // Orange while editing something already placed, purple while laying out a new one. The
+    // two are different acts and the legend names both; drawing an edit in the "new actor"
+    // colour is how you lose track of which of the two you are in the middle of.
+    const line = selected >= 0 ? { ...SELECTED, dashArray: "6 4" } : DRAWING;
+    const dot = selected >= 0 ? { ...VERTEX, color: SELECTED.color } : VERTEX;
     if (drawn.length >= 2) {
-      scratch.push(L.polyline(drawn, { ...DRAWING, renderer }).addTo(map));
+      scratch.push(L.polyline(drawn, { ...line, renderer }).addTo(map));
     }
     for (const point of drawn) {
-      scratch.push(L.circleMarker(point, { ...VERTEX, renderer }).addTo(map));
+      scratch.push(L.circleMarker(point, { ...dot, renderer }).addTo(map));
     }
   }
 
   function redrawPlaced(): void {
     for (const layer of placed.splice(0)) layer.remove?.();
     for (const [index, actor] of actors.entries()) {
-      const style = index === selected ? SELECTED : PLACED;
-      if (actor.path) {
-        placed.push(L.polyline(actor.path, { ...style, renderer }).addTo(map));
-      } else if (actor.position) {
-        placed.push(
-          L.circleMarker(actor.position, {
-            ...STATIC_DOT,
-            color: style.color,
-            fillColor: style.color,
-            renderer,
-          }).addTo(map),
-        );
-      }
+      // The selected one is drawn from the live buffer by `redrawScratch` instead, because it
+      // is what moves as you edit. Drawing it here as well would leave a stale copy of where
+      // it used to be sitting under the one that follows the clicks.
+      if (index === selected) continue;
+      // `bubblingMouseEvents: false`, and it is not optional: this page listens for clicks on
+      // the map to place points, so without it picking an actor off the map would also drop a
+      // corner into whatever is being drawn underneath it.
+      const shape = actor.path
+        ? L.polyline(actor.path, { ...PLACED, renderer, bubblingMouseEvents: false })
+        : actor.position
+          ? L.circleMarker(actor.position, {
+              ...STATIC_DOT,
+              renderer,
+              bubblingMouseEvents: false,
+            })
+          : null;
+      if (!shape) continue;
+      shape.on("click", () => select(index));
+      placed.push(shape.addTo(map));
     }
   }
 
@@ -371,6 +396,7 @@ function boot(): void {
       remove.addEventListener("click", () => {
         waits.splice(index, 1);
         renderWaits();
+        applyEdit();
       });
       row.append(remove);
       waitList.append(row);
@@ -379,6 +405,7 @@ function boot(): void {
 
   function refresh(): void {
     const isMoving = moving();
+    const current = editing();
     movingRow.hidden = !isMoving;
     crossingRow.hidden = !isMoving;
     waitRow.hidden = !isMoving;
@@ -400,23 +427,35 @@ function boot(): void {
       const speed = Number(speedInput.value) || 0;
       const dwell = waits.reduce((total, wait) => total + wait.seconds, 0);
       const seconds = speed > 0 ? metres / speed + dwell : 0;
-      status.textContent = `${metres.toFixed(1)} m, about ${seconds.toFixed(0)} s to walk.`;
-      detail.textContent =
-        `${drawn.length} points. A route shorter than that in a given scenario simply ends ` +
-        "before this actor finishes, and the actor is dropped from any route that ends " +
-        "before it starts.";
+      status.textContent = current
+        ? `Editing ${current.name} - ${metres.toFixed(1)} m, about ${seconds.toFixed(0)} s.`
+        : `${metres.toFixed(1)} m, about ${seconds.toFixed(0)} s to walk.`;
+      detail.textContent = current
+        ? "Every change applies as you make it. Click the map to add a corner at the end of " +
+          "the path, Undo to take one off, Clear to draw it again from scratch."
+        : `${drawn.length} points. A route shorter than that in a given scenario simply ends ` +
+          "before this actor finishes, and the actor is dropped from any route that ends " +
+          "before it starts.";
     } else {
-      status.textContent = "Placed. Name it and add it.";
-      detail.textContent = "";
+      status.textContent = current ? `Editing ${current.name}.` : "Placed. Name it and add it.";
+      detail.textContent = current
+        ? "Every change applies as you make it. Click the map to move it."
+        : "";
     }
-    addButton.disabled = drawn.length < need;
+    // One button, two jobs, because they are the same button in the person's head: the thing
+    // you press when you have finished with the form. Adding needs enough points; finishing
+    // an edit never does, since the edit is already applied.
+    addButton.textContent = current ? "Done editing" : "Add actor";
+    addButton.disabled = !current && drawn.length < need;
+    deleteRow.hidden = !current;
+    if (current) deleteButton.textContent = `Delete ${current.name}`;
     redrawScratch();
   }
 
   function renderList(): void {
     list.replaceChildren();
     for (const [index, actor] of actors.entries()) {
-      const row = element("div", "arow");
+      const row = element("div", index === selected ? "arow on" : "arow");
       row.append(element("span", undefined, `${actor.name} · ${actor.kind}`));
       const note = actor.path
         ? `${pathLengthM(actor.path).toFixed(0)} m${actor.crossing_width_m ? " · zebra" : ""}`
@@ -425,16 +464,11 @@ function boot(): void {
       const remove = element("button", "link", "remove");
       remove.addEventListener("click", (event) => {
         event.stopPropagation();
-        // Also forgotten as generated, so a hand-drawn actor that later takes the same name
-        // is not swept up by the next Generate.
-        generated.delete(actor.name);
-        actors.splice(index, 1);
-        if (selected >= actors.length) selected = -1;
-        renderList();
+        removeActor(index);
       });
       row.addEventListener("click", () => {
-        selected = selected === index ? -1 : index;
-        renderList();
+        if (index === selected) deselect();
+        else select(index);
       });
       row.append(remove);
       list.append(row);
@@ -446,6 +480,151 @@ function boot(): void {
         ? "Nothing placed yet. Without --actors the dataset holds the recorded car and nothing else."
         : `${actors.length} actor${actors.length === 1 ? "" : "s"}, ${zebras} painted crossing${zebras === 1 ? "" : "s"}. Every one is written into every scenario in the dataset.`;
     redrawPlaced();
+  }
+
+  // --- selecting and editing ----------------------------------------------------------
+
+  /** Take one out of the list, from wherever it was asked for - the row's own remove link or
+   * the Delete button on the actor being edited. One function because the bookkeeping below
+   * is the part that is easy to get wrong, and two copies of it would drift. */
+  function removeActor(index: number): void {
+    const actor = actors[index];
+    if (!actor) return;
+    // Also forgotten as generated, so a hand-drawn actor that later takes the same name is
+    // not swept up by the next Generate.
+    generated.delete(actor.name);
+    actors.splice(index, 1);
+    // `selected` is an index into a list that just got shorter. Removing the one being edited
+    // ends the edit; removing anything above it slides it down by one, and not saying so is
+    // how an edit silently continues on a different actor.
+    if (index === selected) {
+      deselect();
+      return;
+    }
+    if (index < selected) selected -= 1;
+    renderList();
+  }
+
+  function editing(): DrawnActor | null {
+    return selected >= 0 ? (actors[selected] ?? null) : null;
+  }
+
+  /** Load an actor into the form and start editing it.
+   *
+   * Its geometry goes into the same `drawn` buffer a new actor is laid out in, so every
+   * control that already works on a new actor - the map, Undo, Clear, the wait rows - works
+   * on this one without knowing an edit is happening.
+   */
+  function select(index: number): void {
+    const actor = actors[index];
+    if (!actor) return;
+    selected = index;
+    kindSelect.value = actor.kind;
+    nameInput.value = actor.name;
+    drawn.length = 0;
+    const geometry = actor.path ?? (actor.position ? [actor.position] : []);
+    for (const point of geometry) drawn.push([point[0], point[1]]);
+    waits.length = 0;
+    for (const wait of actor.waits ?? []) waits.push({ ...wait });
+    speedInput.value = String(
+      actor.speed_mps ??
+        (actor.kind === "cyclist"
+          ? payload.defaults.cyclist_mps
+          : payload.defaults.pedestrian_mps),
+    );
+    delayInput.value = String(actor.start_delay_s ?? 0);
+    headingInput.value = String(Math.round(((actor.heading_rad ?? 0) * 180) / Math.PI));
+    crossingCheck.checked = actor.crossing_width_m !== undefined;
+    crossingWidth.value = String(actor.crossing_width_m ?? payload.defaults.crossing_width_m);
+    editNote(null);
+    renderWaits();
+    renderList();
+    refresh();
+  }
+
+  /** The one line under the form: whatever is wrong right now, or else where this actor came
+   * from. Written through one function because the two share a line and an edit would
+   * otherwise silently wipe the warning that the next Generate is about to replace it. */
+  function editNote(problem: string | null): void {
+    const current = editing();
+    problemNote.textContent =
+      problem ??
+      (current && generated.has(current.name)
+        ? "This one came from Generate. Edit it freely - but pressing Generate again " +
+          "replaces everything it placed, this included."
+        : "");
+  }
+
+  /** Forget the selection and the buffer it filled. Does not redraw; `deselect` does. */
+  function clearSelection(): void {
+    selected = -1;
+    drawn.length = 0;
+    waits.length = 0;
+    nameInput.value = "";
+    problemNote.textContent = "";
+  }
+
+  function deselect(): void {
+    clearSelection();
+    renderWaits();
+    renderList();
+    refresh();
+  }
+
+  /** Write the form back into the selected actor, taking whatever is currently valid.
+   *
+   * There is no Save button, deliberately: an edit lands the moment it is made, so selecting
+   * something else or clicking the map can never strand a half-finished change. The two
+   * things that go momentarily invalid while being typed - a name that is blank or already
+   * taken, and a path with too few points to be one - are simply not committed, and the actor
+   * keeps what it had until they are valid again.
+   */
+  function applyEdit(): void {
+    const current = editing();
+    if (!current) return;
+    const isMoving = moving();
+    const next: DrawnActor = { name: current.name, kind: kind() };
+
+    const name = nameInput.value.trim();
+    // Its own name is not a clash with itself, so it comes out of the taken list.
+    const problem = nameProblem(
+      name,
+      actors.filter((_, index) => index !== selected).map((actor) => actor.name),
+    );
+    if (!problem) next.name = name;
+
+    const points = drawn.map((point): [number, number] => [point[0], point[1]]);
+    if (isMoving) {
+      // A path needs two points. Switching a cone to a pedestrian therefore waits for the
+      // second click rather than inventing one, and the actor stays a cone until then.
+      const path = points.length >= 2 ? points : current.path;
+      if (!path) return;
+      next.path = path;
+      next.speed_mps = Number(speedInput.value);
+      next.start_delay_s = Number(delayInput.value);
+      if (waits.length) next.waits = waits.map((wait) => ({ ...wait }));
+      if (crossingCheck.checked) next.crossing_width_m = Number(crossingWidth.value);
+    } else {
+      const at = points[0] ?? current.position ?? current.path?.[0];
+      if (!at) return;
+      next.position = [at[0], at[1]];
+      next.heading_rad = (Number(headingInput.value) * Math.PI) / 180;
+    }
+
+    if (next.name !== current.name && generated.delete(current.name)) {
+      // The rename follows into the generated set, or the next press leaves the renamed actor
+      // behind as a stray while hunting for one that no longer exists.
+      generated.add(next.name);
+    }
+    actors[selected] = next;
+    editNote(problem);
+    renderList();
+  }
+
+  /** Applied and redrawn, which is what every control on the form wants after a change. */
+  function touch(): void {
+    applyEdit();
+    refresh();
   }
 
   function redrawCorridor(): void {
@@ -531,7 +710,9 @@ function boot(): void {
       if (actor && generated.has(actor.name)) actors.splice(index, 1);
     }
     generated.clear();
-    selected = -1;
+    // An edit in progress may be on one of the actors this press is about to remove, and
+    // `selected` is an index into a list that is about to be rebuilt either way.
+    if (selected >= 0) clearSelection();
 
     const route = corridor !== null && corridor.length > 0 ? corridor : null;
     const onRoute = route !== null;
@@ -582,7 +763,9 @@ function boot(): void {
         ` Seed ${seed}. Generate again to replace them; anything you drew by hand is left alone.`
       : "Nothing to place: every kind is set to none.";
     describeCount();
+    renderWaits();
     renderList();
+    refresh();
   }
 
   generateButton.addEventListener("click", regenerate);
@@ -598,10 +781,19 @@ function boot(): void {
   map.on("click", (event: LeafletMouseEvent) => {
     if (!moving() && drawn.length >= 1) drawn.length = 0;
     drawn.push([event.latlng.lat, event.latlng.lng]);
-    refresh();
+    touch();
   });
 
   kindSelect.addEventListener("change", () => {
+    if (editing()) {
+      // The points and the waits are the actor's, not the kind's, so they are kept across the
+      // switch: a pedestrian turned into a cone stands on the first corner of its own path,
+      // and turning it back restores the rest. The speed is the actor's too, so unlike a new
+      // actor it is not reset to the kind's default.
+      renderWaits();
+      touch();
+      return;
+    }
     drawn.length = 0;
     waits.length = 0;
     speedInput.value = String(
@@ -612,8 +804,13 @@ function boot(): void {
   });
 
   for (const input of [speedInput, delayInput]) {
-    input.addEventListener("input", refresh);
+    input.addEventListener("input", touch);
   }
+  // Only meaningful while something is selected; `applyEdit` returns at once otherwise.
+  nameInput.addEventListener("input", applyEdit);
+  headingInput.addEventListener("input", applyEdit);
+  crossingWidth.addEventListener("input", applyEdit);
+  crossingCheck.addEventListener("change", applyEdit);
 
   waitAdd.addEventListener("click", () => {
     const at = Number(waitAt.value);
@@ -626,12 +823,16 @@ function boot(): void {
     problemNote.textContent = "";
     waits.push({ at_m: at, seconds });
     renderWaits();
-    refresh();
+    touch();
+  });
+
+  deleteButton.addEventListener("click", () => {
+    if (selected >= 0) removeActor(selected);
   });
 
   undoButton.addEventListener("click", () => {
     drawn.pop();
-    refresh();
+    touch();
   });
 
   clearButton.addEventListener("click", () => {
@@ -639,10 +840,18 @@ function boot(): void {
     waits.length = 0;
     problemNote.textContent = "";
     renderWaits();
+    // Not `touch`: an empty buffer is not a shape, so the actor keeps the geometry it has
+    // until enough points are back. Clear is "draw it again", not "delete it".
     refresh();
   });
 
   addButton.addEventListener("click", () => {
+    // Doubles as Done editing. There is nothing to commit - the edit already is - so this
+    // only puts the form back to laying out a new actor.
+    if (editing()) {
+      deselect();
+      return;
+    }
     const name = nameInput.value.trim();
     const problem = nameProblem(name, actors.map((actor) => actor.name));
     problemNote.textContent = problem ?? "";
@@ -705,8 +914,11 @@ function boot(): void {
           : `Loaded ${loaded.length} actor${loaded.length === 1 ? "" : "s"}; the file records ` +
             "no seed, so it was drawn by hand or written before seeds were saved.";
         listNote.textContent = "";
-        selected = -1;
+        // The list this edit indexed into has just been replaced wholesale.
+        clearSelection();
+        renderWaits();
         renderList();
+        refresh();
       } catch (error) {
         listNote.textContent =
           error instanceof ActorsFileError ? error.message : "Could not read that file.";

@@ -280,8 +280,28 @@ needed no `actors_version` bump and a file carrying it opens in any version.
 The timing is an **estimate** — the page works out
 when the car arrives from the distance along the route and the average speed in the box,
 which is why a walker waits either side of it rather than stepping out on a stopwatch.
-Everything it places is an ordinary entry: select it, remove it, or edit the file.
-Pressing Generate again replaces what it placed and leaves anything you drew alone.
+Everything it places is an ordinary entry: select it and change it, remove it, or edit
+the file. Pressing Generate again replaces what it placed and leaves anything you drew alone.
+
+**Changing one you have already placed.** Click an actor — its row in the list, or the
+actor itself on the map — and the form at the top becomes an editor for it: kind, name,
+speed, delay, waits, heading and crossing all fill in, and its path or position turns
+dashed orange so you can see which one you have. **Delete &lt;name&gt;** appears with them,
+so removing the one you are looking at does not mean hunting for its row. **There is no Save.** Every change lands
+as you make it, so picking a different actor or clicking away can never strand a
+half-finished edit. Press **Done editing**, or click the same row again, to stop.
+
+The geometry is edited in the same buffer a new actor is drawn in, so the controls that
+already existed do the work: clicking the map adds a corner at the end of the path,
+**Undo last point** takes one off, **Clear** starts the shape again. What is momentarily
+invalid is simply not committed — while the path is under two points, or the name is blank
+or already taken, the actor keeps what it had. Changing a walker into a cone stands it on
+the first corner of its own path, and changing it back brings the rest of the path with it.
+
+Editing an actor that came from Generate does not make it yours: it is still one the
+button placed, so the next press replaces it along with the rest, and a rename follows it
+rather than leaving a stray behind. The panel says so when you select one. Draw it by hand
+if it needs to survive a press.
 
 ```bash
 uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yaml \
