@@ -2,8 +2,8 @@
   "artifacts": {
     "actor_builder_html": {
       "path": "inspection/stage-6-actor-builder.html",
-      "sha256": "7492e7dc406bac56fd9cbff26dfa89236e2a9dbd7eb08d10534e9222898d6fc8",
-      "size_bytes": 96797
+      "sha256": "4c810556ed84a659d88bca1ef109ebf9f22166d40148a637aaf56c355190f00e",
+      "size_bytes": 133080
     },
     "dataset_mapping": {
       "path": "scenarionet-10hz/dataset_mapping.pkl",
@@ -12,7 +12,7 @@
     },
     "dataset_summary": {
       "path": "scenarionet-10hz/dataset_summary.pkl",
-      "sha256": "c269fafb44e607351700bfabea601728ecd4254868160b39ec0b3b6e8a050b5f",
+      "sha256": "082d1f8c103dff448253ca0bc2e199507e2a441ac3774ab84f27ae7c751b41c0",
       "size_bytes": 6296
     },
     "reachability_html": {
@@ -22,13 +22,13 @@
     },
     "route_builder_html": {
       "path": "inspection/stage-6-route-builder.html",
-      "sha256": "1c355b74d79fb21e03d41c76f8080c6ed5cd5810eaa7355c11102b86c774a1cc",
+      "sha256": "75c6377d2f03641c6130f64e0b9b4c1e1b4c82b280b97f1867286bb0ea27a736",
       "size_bytes": 193192
     },
     "scenario:junction-1-57dcd345d17e5a86-route-1": {
       "path": "scenarionet-10hz/sd_osm-scenario_v1_junction-1-57dcd345d17e5a86-route-1.pkl",
-      "sha256": "64964295847c6e8024d131ced49fbdb1631fc5ce18fbbf0cc1a440bf61b4cd3b",
-      "size_bytes": 967913
+      "sha256": "76355919a0d881d5bcd689234172ce9be92a47dcef16173ab444dd1ffa9187aa",
+      "size_bytes": 1472365
     },
     "signal_builder_html": {
       "path": "inspection/stage-6-signal-builder.html",
@@ -37,7 +37,7 @@
     }
   },
   "converted": {
-    "actors": 6,
+    "actors": 24,
     "connectors_active": 82,
     "connectors_total": 116,
     "crosswalks": 0,
@@ -51,7 +51,7 @@
     "stop_lines": 0
   },
   "dataset_dir": "scenarionet-10hz",
-  "generated_at": "2026-08-31T06:03:56.876173+00:00",
+  "generated_at": "2026-08-31T07:13:41.150326+00:00",
   "inputs": {
     "actors": "actors.json",
     "reviewed_lane_model": "lane-model/reviewed.json",

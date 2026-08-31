@@ -18,10 +18,21 @@ import {
   pathLengthM,
   serializeActors,
 } from "./actors-file.js";
-import type { ActorBuilderPayload, ActorKind, ActorWait, DrawnActor } from "./types.js";
+import {
+  DENSITIES,
+  WHOLE_MAP_CAP,
+  generateActors,
+  lineLengthM,
+  type Density,
+} from "./randomise.js";
+import type { ActorBuilderPayload, ActorKind, ActorLane, ActorWait, DrawnActor } from "./types.js";
+import { RouteGraph } from "../route/path.js";
+import { RoutesFileError, parseRoutes } from "../route/routes-file.js";
+import type { ChosenRoute } from "../route/types.js";
 import type { LeafletLayer, LeafletMap, LeafletMouseEvent } from "../types-dom.js";
 
 const LANE = { color: "#adb5bd", weight: 2, opacity: 0.6 };
+const CORRIDOR = { color: "#1c7ed6", weight: 5, opacity: 0.5 };
 const DRAWING = { color: "#7048e8", weight: 4, opacity: 0.95, dashArray: "6 4" };
 const PLACED = { color: "#0ca678", weight: 4, opacity: 0.9 };
 const SELECTED = { color: "#e8590c", weight: 6, opacity: 1 };
@@ -158,6 +169,68 @@ function boot(): void {
   loadInput.accept = "application/json,.json";
   loadLabel.append(loadInput);
 
+  // --- randomise ---------------------------------------------------------------------
+  const densities: Record<ActorKind, Density> = {
+    pedestrian: "medium",
+    cyclist: "low",
+    cone: "none",
+    barrier: "low",
+  };
+  const densityRows: HTMLElement[] = [];
+  for (const kind of KINDS) {
+    const select = element("select");
+    for (const density of DENSITIES) {
+      const option = element("option", undefined, density);
+      option.value = density;
+      select.append(option);
+    }
+    select.value = densities[kind];
+    select.addEventListener("change", () => {
+      densities[kind] = select.value as Density;
+    });
+    const row = element("div", "row");
+    row.append(element("label", undefined, kind), select);
+    densityRows.push(row);
+  }
+
+  const routeLabel = element("label", "loadbtn", "Load a routes.json");
+  const routeInput = element("input");
+  routeInput.type = "file";
+  routeInput.accept = "application/json,.json";
+  routeLabel.append(routeInput);
+  const routeSelect = element("select");
+  const routeRow = element("div", "row");
+  routeRow.hidden = true;
+  routeRow.append(element("label", undefined, "route"), routeSelect);
+  const routeNote = element("p", "caption");
+
+  const seedInput = numberInput(1, "1", "72px");
+  const paceInput = numberInput(30, "1", "72px");
+  const seedRow = element("div", "row");
+  seedRow.append(
+    element("label", undefined, "seed"),
+    seedInput,
+    element("label", undefined, "ego averages km/h"),
+    paceInput,
+  );
+  const zebraCheck = element("input");
+  zebraCheck.type = "checkbox";
+  const zebraRow = element("div", "row");
+  zebraRow.append(zebraCheck, element("label", undefined, "paint a crossing at each walker"));
+  const generateButton = element("button", "primary", "Generate");
+  const generateNote = element("p", "caption");
+
+  // The route's lanes, in travel order, or null while none is loaded. Kept as the payload's
+  // own lane objects rather than ids: the placement needs each one's width and index.
+  let corridor: ActorLane[] | null = null;
+  let loadedRoutes: ChosenRoute[] = [];
+  const corridorLayers: LeafletLayer[] = [];
+  // Which entries in `actors` this button put there, so pressing it again replaces its own
+  // work and leaves anything drawn by hand alone.
+  const generated = new Set<string>();
+  const byId = new Map(payload.lanes.map((lane) => [lane.id, lane]));
+  const graph = new RouteGraph(payload.lanes);
+
   document
     .getElementById("panel")
     ?.append(
@@ -174,6 +247,15 @@ function boot(): void {
       addButton,
       problemNote,
       buttons,
+      element("h2", undefined, "Randomise"),
+      ...densityRows,
+      routeLabel,
+      routeRow,
+      routeNote,
+      seedRow,
+      zebraRow,
+      generateButton,
+      generateNote,
       element("h2", undefined, "Actors to build"),
       list,
       listNote,
@@ -287,6 +369,9 @@ function boot(): void {
       const remove = element("button", "link", "remove");
       remove.addEventListener("click", (event) => {
         event.stopPropagation();
+        // Also forgotten as generated, so a hand-drawn actor that later takes the same name
+        // is not swept up by the next Generate.
+        generated.delete(actor.name);
         actors.splice(index, 1);
         if (selected >= actors.length) selected = -1;
         renderList();
@@ -306,6 +391,119 @@ function boot(): void {
         : `${actors.length} actor${actors.length === 1 ? "" : "s"}, ${zebras} painted crossing${zebras === 1 ? "" : "s"}. Every one is written into every scenario in the dataset.`;
     redrawPlaced();
   }
+
+  function redrawCorridor(): void {
+    for (const layer of corridorLayers.splice(0)) layer.remove?.();
+    for (const lane of corridor ?? []) {
+      corridorLayers.push(L.polyline(lane.line, { ...CORRIDOR, renderer }).addTo(map));
+    }
+  }
+
+  /** Resolve the selected route into a corridor, and say what happened.
+   *
+   * `routes.json` names only a route's two ends, so the lane sequence is found here with the
+   * same search and the same weights `ego_route` uses at convert time - a second path-finder
+   * would be a page offering a drive the converter would not build.
+   */
+  function chooseRoute(): void {
+    corridor = null;
+    const chosen = loadedRoutes[routeSelect.selectedIndex];
+    if (!chosen) {
+      routeNote.textContent = "";
+      redrawCorridor();
+      return;
+    }
+    const found = graph.find(chosen.start_lane, chosen.end_lane);
+    if (!found) {
+      routeNote.textContent =
+        `No drive from ${chosen.name}'s start to its end on this map. Actors will be ` +
+        "spread over the whole network instead.";
+      redrawCorridor();
+      return;
+    }
+    const lanes = found.lanes
+      .map((id) => byId.get(id))
+      .filter((lane): lane is ActorLane => lane !== undefined);
+    corridor = lanes;
+    const metres = lanes.reduce((total, lane) => total + lineLengthM(lane.line), 0);
+    routeNote.textContent =
+      `route ${chosen.name} · ${lanes.length} lanes · about ${metres.toFixed(0)} m. ` +
+      "Actors will be placed along it, so the car meets all of them.";
+    redrawCorridor();
+  }
+
+  routeInput.addEventListener("change", () => {
+    const file = routeInput.files?.[0];
+    if (!file) return;
+    void file.text().then((raw) => {
+      try {
+        loadedRoutes = parseRoutes(raw, payload.identity, payload.routes_version);
+        routeSelect.replaceChildren();
+        for (const route of loadedRoutes) {
+          const option = element("option", undefined, route.name);
+          option.value = route.name;
+          routeSelect.append(option);
+        }
+        // One route needs no picker; more than one does, and hiding it either way would
+        // leave a file with three routes silently using whichever is first.
+        routeRow.hidden = loadedRoutes.length < 2;
+        chooseRoute();
+      } catch (error) {
+        loadedRoutes = [];
+        corridor = null;
+        routeRow.hidden = true;
+        redrawCorridor();
+        routeNote.textContent =
+          error instanceof RoutesFileError ? error.message : "Could not read that file.";
+      }
+      routeInput.value = "";
+    });
+  });
+
+  routeSelect.addEventListener("change", chooseRoute);
+
+  generateButton.addEventListener("click", () => {
+    // Its own previous work, and only that. A hand-drawn actor is never swept up, so the
+    // button composes with the map rather than replacing it.
+    for (let index = actors.length - 1; index >= 0; index -= 1) {
+      const actor = actors[index];
+      if (actor && generated.has(actor.name)) actors.splice(index, 1);
+    }
+    generated.clear();
+    selected = -1;
+
+    const route = corridor !== null && corridor.length > 0 ? corridor : null;
+    const onRoute = route !== null;
+    const pace = Number(paceInput.value);
+    const made = generateActors({
+      corridor: route ?? payload.lanes,
+      densities,
+      seed: Math.trunc(Number(seedInput.value)) || 0,
+      taken: actors.map((actor) => actor.name),
+      speeds: {
+        pedestrian_mps: payload.defaults.pedestrian_mps,
+        cyclist_mps: payload.defaults.cyclist_mps,
+      },
+      egoMps: onRoute && pace > 0 ? pace / 3.6 : null,
+      crossings: zebraCheck.checked,
+      crossingWidthM: payload.defaults.crossing_width_m,
+      cap: onRoute ? undefined : WHOLE_MAP_CAP,
+    });
+    for (const actor of made) {
+      generated.add(actor.name);
+      actors.push(actor);
+    }
+    generateNote.textContent = made.length
+      ? `${made.length} actor${made.length === 1 ? "" : "s"} placed ` +
+        (onRoute
+          ? "along the loaded route. Every start delay is an estimate of when the car gets " +
+            "there - edit any of them below or in the file."
+          : `across the whole map, capped at ${WHOLE_MAP_CAP}. Load a routes.json to put ` +
+            "them where the car actually drives.") +
+        " Generate again to replace them; anything you drew by hand is left alone."
+      : "Nothing to place: every kind is set to none.";
+    renderList();
+  });
 
   map.on("click", (event: LeafletMouseEvent) => {
     if (!moving() && drawn.length >= 1) drawn.length = 0;
@@ -404,6 +602,9 @@ function boot(): void {
       try {
         const loaded = parseActors(raw, payload.identity, payload.actors_version);
         actors.splice(0, actors.length, ...loaded);
+        // A loaded file replaces the list, so nothing in it is this button's to replace -
+        // otherwise a loaded actor sharing a generated name would vanish on the next press.
+        generated.clear();
         listNote.textContent = "";
         selected = -1;
         renderList();

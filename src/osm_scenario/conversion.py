@@ -2290,6 +2290,7 @@ def convert_scenario(
             workspace_name=workspace.name,
             model_sha256=model_sha256,
             actors_version=ACTORS_VERSION,
+            routes_version=ROUTES_VERSION,
         ),
     )
 

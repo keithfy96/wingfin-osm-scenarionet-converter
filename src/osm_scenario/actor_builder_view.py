@@ -94,13 +94,30 @@ _TEMPLATE = """<!doctype html>
 <div id="wrap"><div id="map"></div><div id="side">
 <h1>Stage 6 - actor builder</h1>
 <p class='caption'>Pick a kind, then click the map where the actor goes - each click adds a
-corner, in the order it is walked. Name it, add it, and download <code>actors.json</code>.</p>
+corner, in the order it is walked. Name it, add it, and download <code>actors.json</code>.
+Or start from a whole scene with <em>Randomise</em> and edit it down.</p>
 <div id="panel"></div>
 <h2>Colours</h2>
 <div class='key'><span class='sw' style='border-top-color:#adb5bd'></span> a lane, drawn for context</div>
 <div class='key'><span class='sw' style='border-top-color:#7048e8;border-top-style:dashed'></span> the actor you are laying out now</div>
 <div class='key'><span class='sw' style='border-top-color:#0ca678'></span> an actor already added</div>
 <div class='key'><span class='sw' style='border-top-color:#e8590c'></span> the one selected in the list</div>
+<div class='key'><span class='sw' style='border-top-color:#1c7ed6'></span> the loaded route, which is what actors are placed along</div>
+<h2>Randomising a starting scene</h2>
+<p class='caption'>Set a density per kind and press <em>Generate</em>. The rates are per
+kilometre - pedestrians 1, 4 or 10; cyclists 1, 3 or 8; cones 2, 8 or 20; barriers 1, 3 or 8 -
+so what you get depends on how long the road is. Everything it places is an ordinary entry in
+the list below: select it, remove it, or edit the downloaded file. Pressing Generate again
+replaces what it placed last time and leaves anything you drew by hand alone.</p>
+<h2>Load a route first</h2>
+<p class='caption'>Without one, actors are scattered over the whole map - capped, because
+every lane at <em>dense</em> is thousands of them - and most will be nowhere near the car.
+Load the same <code>routes.json</code> you convert with and the route is drawn in blue, every
+actor is placed on or beside a lane it actually drives, and each walker is timed to be
+standing at the kerb as the car arrives. That timing is an <em>estimate</em>: the page works
+it out from the distance along the route and the average speed in the box, which is why a
+walker waits twenty seconds either side rather than stepping out on a stopwatch. Edit any
+delay you want to be exact.</p>
 <h2>What MetaDrive does with these</h2>
 <p class='caption'>Each actor becomes a <code>tracks</code> entry that MetaDrive's own
 <code>ScenarioTrafficManager</code> spawns and replays. Nothing at drive time has to be told
@@ -165,23 +182,39 @@ def render_actor_builder_html(
     workspace_name: str,
     model_sha256: str,
     actors_version: int,
+    routes_version: int,
 ) -> str:
     """Draw the reviewed map so a person can place the actors on it.
 
     `neighbours` and `moves` are passed in rather than recomputed, for the reason the other
     two Stage 6 pages give: the page must be drawn from the objects the scenario was built
-    from. Here it buys less than it does there - this page never asks where a lane leads - but
-    a page drawing a different set of lanes from the dataset would still be a page showing a
-    road that is not in the file.
+    from. Here that is load-bearing rather than a formality - the page resolves an imported
+    `routes.json` through the same lane graph the converter plans routes on, so a page built
+    from different neighbours would offer a corridor the drive never takes.
 
-    Only the geometry and the labels are carried across. The lanes are context for placing an
-    actor, not something to pick, so `exits`, `sideways` and the connectors are dropped rather
-    than shipped unused: the payload is inlined into the HTML, and on `mosque` that is 405
-    lanes' worth of it.
+    `exits` and `sideways` were dropped from this payload while the page only ever drew lanes
+    for context. The randomiser reads them, through `route/path.ts`'s `RouteGraph`, because
+    `routes.json` names only a route's two ends. `width_m`, `index` and `count` come with them
+    and are added here rather than in `build_lane_payload`: the route and signal pages have no
+    use for them, and the payload is inlined into the HTML - on `mosque` that is 405 lanes'
+    worth. The connectors stay out, because the corridor is drawn from lane centrelines.
     """
     payload = build_lane_payload(model=model, neighbours=neighbours, moves=moves)
+    # Centre-out lane geometry, which is what says where the kerb is on a lane the page has
+    # only a centreline for. Keyed by identifier because `build_lane_payload` sorts its own.
+    geometry = {
+        lane.identifier: {
+            "width_m": lane.width_m,
+            "index": lane.lane_index,
+            "count": lane.lane_count,
+        }
+        for lane in model.lanes
+    }
     lanes = [
-        {key: lane[key] for key in ("id", "short", "label", "line")}
+        {
+            **{key: lane[key] for key in ("id", "short", "label", "line", "exits", "sideways")},
+            **geometry[lane["id"]],
+        }
         for lane in payload["lanes"]
     ]
     data = embed(
@@ -194,6 +227,7 @@ def render_actor_builder_html(
                 "reviewed_lane_model_sha256": model_sha256,
             },
             "actors_version": actors_version,
+            "routes_version": routes_version,
             "suggested_filename": ACTORS_FILENAME,
             "defaults": {
                 "pedestrian_mps": DEFAULT_PEDESTRIAN_MPS,

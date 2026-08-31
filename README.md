@@ -223,6 +223,30 @@ crossing** where it should leave a zebra. Name it, press add, repeat. It downloa
 You click the map here rather than picking a lane, unlike the other two Stage 6 pages,
 for the reason the whole thing is drawn by hand: an actor walks where no lane is.
 
+**Or start from a whole scene.** The **Randomise** panel takes a density per kind and
+places them for you:
+
+| per km of road | low | medium | dense |
+|---|---|---|---|
+| pedestrian | 1 | 4 | 10 |
+| cyclist | 1 | 3 | 8 |
+| cone | 2 | 8 | 20 |
+| barrier | 1 | 3 | 8 |
+
+**Load your `routes.json` into it first.** The route is drawn in blue and every actor
+goes on or beside a lane it actually drives, so the car meets all of them — walkers
+standing at the kerb and stepping into the road as it arrives, riders on the road ahead
+of it, cones and barriers at the kerb. Without a route they are scattered over the whole
+map, capped at 150, and most will be nowhere near the drive. That is not hypothetical:
+a pedestrian placed by hand on `junction-1` sat 137 m off the route the entire time it
+existed, and nothing but a measurement of the pickle said so.
+
+The seed makes a scene repeatable and the timing is an **estimate** — the page works out
+when the car arrives from the distance along the route and the average speed in the box,
+which is why a walker waits either side of it rather than stepping out on a stopwatch.
+Everything it places is an ordinary entry: select it, remove it, or edit the file.
+Pressing Generate again replaces what it placed and leaves anything you drew alone.
+
 ```bash
 uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yaml \
   --routes workspaces/junction-1/routes/routes.json \

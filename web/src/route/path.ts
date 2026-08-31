@@ -47,15 +47,29 @@ export function lineLength(line: [number, number][]): number {
   return total;
 }
 
-export function laneLength(lane: RouteLane): number {
+/** Only what the graph reads.
+ *
+ * `RouteLane` satisfies it, so this page and its tests are unchanged. The actor builder's
+ * lanes carry no `ways`, and resolving an imported route there has to go through this exact
+ * search - a second path-finder with the same job is how the page and the converter would
+ * come to offer different routes.
+ */
+export interface GraphLane {
+  id: string;
+  line: [number, number][];
+  exits: string[];
+  sideways: string[];
+}
+
+export function laneLength(lane: GraphLane): number {
   return lineLength(lane.line);
 }
 
-export class RouteGraph {
+export class RouteGraph<Lane extends GraphLane = RouteLane> {
   private readonly steps = new Map<string, Step[]>();
-  readonly lanes = new Map<string, RouteLane>();
+  readonly lanes = new Map<string, Lane>();
 
-  constructor(lanes: RouteLane[]) {
+  constructor(lanes: Lane[]) {
     for (const lane of lanes) this.lanes.set(lane.id, lane);
     const lengths = new Map<string, number>();
     for (const lane of lanes) lengths.set(lane.id, laneLength(lane));
