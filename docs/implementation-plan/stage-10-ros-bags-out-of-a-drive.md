@@ -148,8 +148,27 @@ enough to look right in a report, wrong enough to miss a filter.
   would be 442 KB - 62x, or ~41 GB against the rig's 0.67 GB for a six-camera 780 s drive. The
   mount conversion and `/tf_static` are built and tested; the encoder is not.
 
-- [ ] **Phase B - ROS 2 humble in the container**, for rviz2 and an independent `ros2 bag info`.
-  `ros-humble-ros-base` on the existing 22.04 image is roughly +0.7-1 GB against 13.2 GB.
+- [ ] **Phase B - rviz2, and an independent `ros2 bag info`.** The viewer is **built and
+  connected**; the visual check it exists for **has not been made by anyone**. See
+  `docs/fixes/2026-09-01-20:19:21-phase-b-was-marked-done-on-log-silence.md`.
+  Built as a **separate** image (`docker/ros-viewer/`, `scripts/ros-view.sh`) rather than ROS
+  inside `wingfin-sim`: a bag is a file, and looking at one needs ROS and a display, not
+  MetaDrive and 13.3 GB of CUDA. The independent `ros2 bag info` came free from a stock
+  `ros:jazzy-ros-base` and **is** done.
+  *Two corrections to the original scoping, both measured:* it must be **jazzy, not humble** -
+  humble's rosbag2 cannot parse our format-v9 metadata at all - and it needs
+  `vision-msgs-rviz-plugins` plus a built `wingfin_msgs`, without which rviz2 subscribes to the
+  two most valuable topics and silently draws nothing.
+  *Verified:* rviz2 opens through XWayland at `OpenGl 4.6`, plays all 11 topics with no
+  `Ignoring a topic`, and **actually subscribes** - `ros2 topic info` against a live viewer
+  reports 1 subscriber each on `/tf`, `/localization/odometry`, `/planning/route` and
+  `/perception/objects`. That rules out a mistyped topic, an unloaded plugin or a QoS mismatch.
+  It says nothing about whether a pixel is in the right place.
+  *Not verified, and this is the point of the tier:* whether the boxes sit on the road, move
+  with the people, and share the car's instant. **No screenshot exists.**
+  *Found on the way, and fixed:* every pose claimed `covariance[0] = -1` -
+  `sensor_msgs/Imu`'s "not produced", on exact ground truth - and a QoS durability mismatch made
+  the route topic deliver nothing. 21 rviz2 warnings a run before, 0 after.
 
 ## Known limits, stated rather than hidden
 

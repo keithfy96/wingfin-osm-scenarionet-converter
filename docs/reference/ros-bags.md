@@ -115,7 +115,7 @@ Read out of the pickles, not assumed:
 
 | | `mosque/scenarionet-10hz` | `junction-1/scenarionet-10hz` |
 |---|---|---|
-| pedestrians / cyclists / static | 2 / 1 / 1 cone | 202 / 49 / 49 barriers |
+| pedestrians / cyclists / static | 2 / 1 / 1 cone | **101 / 25 / 24 barriers** (was 202/49/49 before the 2026-09-02 re-convert) |
 | traffic lights (`dynamic_map_states`) | **0** | **0** |
 | `coordinate_system_wkt` | yes | yes |
 
@@ -144,7 +144,7 @@ with a substitute type, because a subscriber expecting `wingfin_msgs/VehicleStat
 
 Every tier of `docs/testing-ros.md`, run end to end on `junction-1` a month after the figures
 above were first taken. **They reproduced exactly** - 364 frames, 3,641 messages, 32 chunks,
-39.4x, all 10 probe checks, every channel at 10.00 Hz.
+39.4x, all 10 probe checks (13 since the lights landed), every channel at 10.00 Hz.
 
 | tier | result |
 |---|---|
@@ -175,6 +175,151 @@ Two things the run turned up that reading could not:
   the tape bound is exactly as documented; the ego is a separate question, and the probe's
   heading check passes vacuously on a car that never moved.
 
+## The container, measured 2026-09-01
+
+`wingfin-sim` synced `sim gpu model` and **not `ros`** from the day it was built, so `rosbags`
+was absent and every bag the container was pointed at was refused - while `ros-bag.sh`'s header,
+the interpreter trap below and `refuse_if_unsupported`'s own message all named the container as
+the way out of the host's 3.8. Right about the interpreter, wrong about the library.
+
+Fixed by a second `uv sync` layer below the big one, so nothing above it rebuilds:
+
+| | |
+|---|---|
+| image | 13.2 GB -> **13.3 GB** |
+| the `ros` group | rosbags 0.11.5, apsw, lz4, ruamel-yaml, zstandard - **39.3 MB, installed in 0.8 s** |
+| interpreter | Python **3.10.21**, numpy 2.2.6, importable as the non-root runtime uid |
+
+The ladder then ran in there and **reproduced the host exactly**: 364 frames, 3,641 messages,
+11 topics, 32 chunks, `compression=['zstd']`, every channel 10.00 Hz / 100.00 ms, **all 10 probe
+checks**, 300 object ids, 51-257 boxes a frame, 364 of 364 fixes on the map.
+
+The two `.mcap` files are **973,314 bytes on the host against 974,603 in the container**, 0.13%
+apart on identical message counts. Physics is not bit-reproducible across the two environments
+and nothing here claims it is; what matters is that every count, rate and check matches.
+
+## Looking at one, and the two faults that found, 2026-09-01
+
+`./scripts/ros-view.sh bags/<name>` — rviz2 in `wingfin-ros-viewer`, a **separate** image from
+`wingfin-sim` (a bag is a file; looking at one needs ROS and a display, not 13.3 GB of CUDA).
+It plays the bag on a loop under `use_sim_time`, with displays for the car, the route, the TF
+tree and the object boxes.
+
+**The viewer is built and connected; the picture has not been checked by anyone.** rviz2 opens at
+`OpenGl 4.6` and `ros2 topic info` against a live viewer reports 1 subscriber each on `/tf`,
+`/localization/odometry`, `/planning/route` and `/perception/objects` — which rules out a
+mistyped topic, an unloaded plugin and a QoS mismatch, and says nothing about whether a box is in
+the right place. There is no screenshot.
+`docs/fixes/2026-09-01-20:19:21-phase-b-was-marked-done-on-log-silence.md` has what is left.
+
+`/perception/traffic_lights` gets **0 subscribers**: no rviz plugin exists for `wingfin_msgs`.
+Free today, since `dynamic_map_states` is 0 everywhere, and a hole the moment lights land.
+
+Two things the image must carry, and both are silent when missing:
+
+- **`vision-msgs-rviz-plugins`, not just `vision_msgs`.** With the types and no plugin, rviz2
+  subscribes to `/perception/objects` and draws nothing — indistinguishable from a bag with no
+  objects in it.
+- **`wingfin_msgs` as a built colcon package.** MCAP's embedded schema text is enough for
+  `ros2 bag info` to *list* the topic and not enough for anything to subscribe: `ros2 bag play`
+  in a stock `ros:jazzy-ros-base` reports `Ignoring a topic '/perception/traffic_lights',
+  reason: package 'wingfin_msgs' not found`. `tools/ros_msgs_package.py` generates the package
+  from `ros_schema.EXTRA_DEFINITIONS`, so the definition in a bag and the definition a
+  subscriber builds against cannot drift.
+
+**The first run found two faults that all ten probe checks pass straight over.**
+
+**Every pose claimed to be invalid.** `UNKNOWN_COVARIANCE` was `[-1.0] + [0.0] * 35`, on
+odometry pose, odometry twist and every detection. -1 in element 0 is defined by
+`sensor_msgs/Imu` alone and means *this publisher does not produce this quantity* — not "I am
+unsure of it". On a pose that is exact ground truth it tells a consumer to discard it, and a -1
+on the diagonal is not positive-semidefinite, so rviz2 logged `Negative eigenvalue found for
+position` once a frame and drew no ellipse. `gnss_fix_message` in the same file had it right the
+whole time: zeros with `position_covariance_type: 0`.
+
+Now zeros everywhere except `linear_acceleration_covariance`, the one quantity genuinely not
+synthesised. **21 warnings a run before, 0 after**, on a re-recorded bag whose 10 probe checks
+still pass and whose counts are unchanged (364 frames, 3,641 messages).
+
+**The route never drew.** The rviz config asked for Transient Local because the topic is latched;
+a bag records `offered_qos_profiles: []` and `ros2 bag play` republishes **volatile**, and DDS
+answers an incompatible request by delivering nothing at all. It says so once —
+`No messages will be sent to it. Last incompatible policy: DURABILITY_QOS_POLICY` — and then
+looks exactly like a topic with no data. Fixed in the config, not the writer; `--loop` is what
+makes volatile sufficient for a once-per-episode message.
+
+**A `TF_OLD_DATA` warning once per lap is the loop**, not a fault: the bag's clock restarts at
+zero and rviz2 clears its TF buffer.
+
+## Traffic lights, and the latched-topic delivery problem, 2026-09-02
+
+Keith converted `signals.json` into `junction-1`, so `dynamic_map_states` went 0 -> **8** and a
+code path that had never once executed finally ran.
+
+**All 8 lights reached the bag** - which was the thing at risk, because
+`ScenarioLightManager.after_reset` drops any light whose lane is missing from the road network,
+warns, and carries on (`skip_missing_light` defaults True), so 5 lights out of 8 would have
+looked perfectly healthy. Two complementary phases, straight out of the bag:
+
+```
+ 6 lights   GREENx269 -> YELLOWx30 -> REDx65      at (-27.6..-2.8, 75.5..84.9)
+ 2 lights   REDx299   -> GREENx65                 at (-17.1..-13.7, 67.2..68.0)
+```
+
+The handover is clean: the six turn red on the same frame the two turn green, so no two
+conflicting approaches are ever green together. **No numeric check can see that** - the bag does
+not carry which movements conflict - which is the strongest argument yet for the viewer existing.
+
+`ros_probe.py` gained three checks (10 -> 13), all reachable failures rather than theatre: no
+light disappears part-way, every light has a non-empty id and colour (`ros_frame.lights_of` reads
+them through `getattr` defaults, so a MetaDrive rename yields empty strings and nothing raises),
+and every light changes colour at least once (a frozen light is what a tape that never advanced
+looks like). Positions deliberately get **no** extent check: a light's position comes off the live
+engine in the same frame as everything else, so there is no separate shift for it to miss.
+
+### A latched topic is not delivered by a delay-free `ros2 bag play`
+
+`/planning/route` is one message at t=0. rviz2 takes ~2 s to start, so it never saw it, and the
+route drew only because playback looped and brought it round 36 s later.
+
+Two things were needed, and **the obvious one alone is not enough**:
+
+| | |
+|---|---|
+| the bag recorded `offered_qos_profiles: []` | fixed - `ros_bag._latched_qos` records transient-local for the topics `TOPICS` already labels `"latched"`, and `metadata.yaml` now reads `durability: transient_local` |
+| **`ros2 bag play` still does not deliver it** | measured **3 trials of 3**: a transient-local subscriber joining 5 s in received nothing, with **no warning**, because the QoS now matches. The player does not serve the retained sample to a late joiner |
+| `--delay` does | **3 trials of 3**: a subscriber joining 2 s into a 4 s delay received the whole 29,325-byte route |
+
+So `ros-view.sh` plays once after a 4 s head start, and `--loop` is a flag rather than the only
+thing that made the route appear. The QoS fix still matters on its own: a consumer *asking* for
+transient-local is no longer refused outright, and the bag stops describing a latched topic as
+volatile.
+
+## Which ROS distro can read these bags, measured 2026-09-01
+
+**jazzy yes, humble no** - and the reason is the container format, not the messages.
+
+`ros_bag.py` writes rosbag2 **format version 9**. In v9 a topic's `offered_qos_profiles` is a
+sequence and every topic carries a `type_description_hash`; humble's rosbag2 expects that field
+to be a *string* and refuses the metadata before it ever opens the `.mcap`:
+
+```
+Exception on parsing info file: yaml-cpp: error at line 34, column 29: bad conversion
+```
+
+Line 34 is `offered_qos_profiles: []`. Humble also does not ship the mcap storage plugin by
+default, which is the next wall behind that one.
+
+**This is counter-intuitive and cost a rebuild.** `ros_schema` writes its message definitions
+against `Stores.ROS2_HUMBLE`, so matching a viewer to humble looks obviously right - and the
+definitions *are* humble's. The container holding them is not. Tier 4's `ros:jazzy-ros-base`
+check was never merely a portability nicety: jazzy is the only distro either half of this has
+been shown to work on.
+
+Nothing here argues for downgrading the writer. A v9 bag is what current rosbag2 produces and
+what the rig's own tooling will move to; it means a consumer on humble needs `rosbags` (which
+reads the file directly, distro-free) rather than `ros2 bag`.
+
 ## Traps
 
 - **`CompressionMode.FILE` destroys the index-only read** the rig's own audit depends on.
@@ -200,6 +345,37 @@ Two things the run turned up that reading could not:
   is shared so the two cannot drift. The ladder reads in one tier what it recorded in the one
   before, so "there is no bag there yet" is the likeliest thing to be wrong, and it happened
   twice before the guard existed.
+- **A latched topic needs the QoS *and* a head start.** Recording transient-local stops the
+  incompatibility; it does not move the message. `ros2 bag play` never serves a retained sample
+  to a late joiner, and once the QoS matches it does not warn either - the silence looks like
+  success. Play with `--delay`, or subscribe before playback starts.
+- **A traffic light whose lane is missing is dropped silently** - `skip_missing_light` defaults
+  True, so a bag with 5 lights of 8 looks healthy. Count what came out against the dataset.
+- **"Unknown" covariance is all zeros; -1 means "not produced at all".** Only
+  `sensor_msgs/Imu` defines the -1, and only `linear_acceleration_covariance` here earns it.
+  Putting it on a pose says "discard this", is not positive-semidefinite, and no numeric check
+  reads a covariance - the fault is in what the number claims, not in what it is.
+- **A humble viewer cannot open these bags at all** - format v9 against a rosbag2 that reads v8.
+  Matching a viewer to `Stores.ROS2_HUMBLE` is the natural mistake and it is the wrong axis: the
+  messages are humble's, the container is not.
+- **`ros2 bag play` needs `--clock`, and rviz2 needs `use_sim_time:=true`, or the screen is
+  empty with no error.** Every stamp in a bag is simulator time starting at epoch zero; a viewer
+  on the wall clock puts all of it ~56 years in the past and tf silently discards the lot.
+  Neither half works without the other.
+- **`vision_msgs` in rviz2 needs `vision_msgs-rviz-plugins`, not just `vision_msgs`.** With the
+  types but no plugin, rviz2 subscribes to `/perception/objects` and draws nothing - which looks
+  exactly like a bag holding no objects, and the objects are the point of ours.
 - **`rosbags` needs Python 3.10** and `drive.py` runs on `METADRIVE_PYTHON`, which is 3.8 on the
   host. The container is one 3.10 interpreter and it works there;
   `ros_frame.refuse_if_unsupported()` says so before the terrain is built.
+- **The container needs `--no-model`, or a replay drive refuses before it opens a bag.**
+  `compose.yaml` always sets `MODEL_CHECKPOINT`, `drive.py` takes it as the default for
+  `--model-checkpoint`, and a checkpoint implies `--agent-policy remote`. `sim.sh --no-model`
+  passes `-e MODEL_CHECKPOINT=`, which is the only way to clear it - compose substitutes its
+  default for an empty value as readily as for an unset one.
+- **A `chmod -R` on `/opt/venv` in a later Docker layer writes a second copy of the venv.**
+  chmod modifies, and modifying a file from a lower layer copies it up - so it turns a 39 MB
+  layer into a 13 GB one. Measured: the `ros` sync installs 5 packages in 0.8 s and the chmod
+  was still running two and a half minutes later. It is not needed either; uv writes 644/755
+  under the build's umask. The *first* sync layer keeps its chmod, for `/opt/python`, whose
+  managed CPython arrives mode 700.

@@ -143,9 +143,24 @@ TOPICS: dict[str, tuple[str, str]] = {
 MAP_FRAME = "map"
 BASE_FRAME = "base_link"
 
+#: **"Unknown" is all zeros. -1 means something else entirely, and the two are not swappable.**
 #: MetaDrive has no notion of a sensor's own uncertainty and inventing one would be inventing a
-#: fact, so covariances are published as "unknown" the way REP-105 asks: -1 in element 0.
-UNKNOWN_COVARIANCE = [-1.0] + [0.0] * 35
+#: fact, so every quantity here that we *do* publish carries a zero covariance - the ROS
+#: convention for "measured, uncertainty not modelled". `sensor_msgs/NavSatFix` has said so since
+#: this file was written (`position_covariance_type: 0`, zeros); odometry and the detections said
+#: -1, which does not mean the same thing.
+#:
+#: -1 in element 0 is defined only by `sensor_msgs/Imu`, and it means *this publisher does not
+#: produce this quantity at all*. Putting it on a pose we produce exactly says "ignore my pose",
+#: and a -1 on the diagonal is not positive-semidefinite: rviz2's Odometry display reports
+#: `Negative eigenvalue found for position` once a frame and draws no ellipse. That warning is
+#: how this was found - no numeric check in `ros_probe.py` reads a covariance, and none should,
+#: because the fault is in what the number *claims* rather than in what it is.
+UNKNOWN_COVARIANCE = [0.0] * 36
+UNKNOWN_COVARIANCE_3X3 = [0.0] * 9
+
+#: The one quantity we genuinely do not produce. See `imu_message`.
+ABSENT_QUANTITY_3X3 = [-1.0] + [0.0] * 8
 
 
 @dataclass(frozen=True)
@@ -469,18 +484,22 @@ def imu_message(frame: Frame) -> dict:
 
     Linear acceleration is **not** synthesised: MetaDrive exposes velocity, and differencing it
     across a frame to fake an accelerometer would put simulation noise into a field a real IMU
-    measures directly. Left at zero with the covariance marked unknown, which is what REP-145
-    asks a publisher to do when it has no such data.
+    measures directly. It is the one field here carrying `ABSENT_QUANTITY_3X3`, the -1 that
+    `sensor_msgs/Imu` defines as "this publisher does not produce this quantity".
+
+    Orientation and angular velocity are produced, and exactly, so they carry zeros - "measured,
+    uncertainty not modelled" - and not the -1 they used to. A -1 there told every consumer to
+    discard a heading that is ground truth.
     """
     ego = frame.ego
     return {
         "header": header(frame.sim_time_s, BASE_FRAME),
         "orientation": quaternion(ego.heading, ego.pitch, ego.roll),
-        "orientation_covariance": [-1.0] + [0.0] * 8,
+        "orientation_covariance": list(UNKNOWN_COVARIANCE_3X3),
         "angular_velocity": _point(0.0, 0.0, ego.yaw_rate),
-        "angular_velocity_covariance": [-1.0] + [0.0] * 8,
+        "angular_velocity_covariance": list(UNKNOWN_COVARIANCE_3X3),
         "linear_acceleration": _point(0.0, 0.0, 0.0),
-        "linear_acceleration_covariance": [-1.0] + [0.0] * 8,
+        "linear_acceleration_covariance": list(ABSENT_QUANTITY_3X3),
     }
 
 

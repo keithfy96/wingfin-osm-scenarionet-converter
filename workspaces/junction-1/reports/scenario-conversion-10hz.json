@@ -2,8 +2,8 @@
   "artifacts": {
     "actor_builder_html": {
       "path": "inspection/stage-6-actor-builder.html",
-      "sha256": "884ce7cd14d66ffb3df61ab0dd4231f2c27c8a45540fe4b6a9ec3947e019a059",
-      "size_bytes": 138824
+      "sha256": "6235b627aed6e9444a849f5fddae319220c213039781ee4fcd08d9570498084d",
+      "size_bytes": 142943
     },
     "dataset_mapping": {
       "path": "scenarionet-10hz/dataset_mapping.pkl",
@@ -12,8 +12,8 @@
     },
     "dataset_summary": {
       "path": "scenarionet-10hz/dataset_summary.pkl",
-      "sha256": "c250b2047a3ec8cbee5354eb8b27ff522d72233a43694f1488728b1edb323136",
-      "size_bytes": 6297
+      "sha256": "34544af94a2b77cb82e6ff7e28c44648fb18b30d2dd3cd6a6cc26e1767853ad9",
+      "size_bytes": 7296
     },
     "reachability_html": {
       "path": "inspection/stage-6-reachability.html",
@@ -27,8 +27,8 @@
     },
     "scenario:junction-1-57dcd345d17e5a86-route-1": {
       "path": "scenarionet-10hz/sd_osm-scenario_v1_junction-1-57dcd345d17e5a86-route-1.pkl",
-      "sha256": "7b6d9bb61e38d03f47655e6a65889836261e17b9fc16e559ceba56767597ab32",
-      "size_bytes": 10583501
+      "sha256": "ecfa70477bc09428873c34cc0aff115c8c1af648492c6610411317b374b9987b",
+      "size_bytes": 5710759
     },
     "signal_builder_html": {
       "path": "inspection/stage-6-signal-builder.html",
@@ -37,27 +37,27 @@
     }
   },
   "converted": {
-    "actors": 300,
+    "actors": 150,
     "connectors_active": 82,
     "connectors_total": 116,
     "crosswalks": 0,
     "junction_lanes": 149,
     "lane_boundaries": 540,
     "lanes": 285,
-    "phase_groups": 0,
+    "phase_groups": 3,
     "restrictions": 8,
-    "signalled_lanes": 0,
+    "signalled_lanes": 8,
     "signals": 1,
     "stop_lines": 0
   },
   "dataset_dir": "scenarionet-10hz",
-  "generated_at": "2026-08-31T09:44:28.722863+00:00",
+  "generated_at": "2026-09-01T16:30:53.859585+00:00",
   "inputs": {
     "actors": "actors.json",
     "reviewed_lane_model": "lane-model/reviewed.json",
     "reviewed_lane_model_sha256": "fc205bca2305a0cc3cb68e7a7ee83b5c8d8a200622d6a1749dde0b258cab65fb",
     "routes": "routes.json",
-    "signals": null
+    "signals": "signals.json"
   },
   "map_features": 974,
   "report_version": 1,
@@ -128,7 +128,106 @@
     "sd_osm-scenario_v1_junction-1-57dcd345d17e5a86-route-1.pkl"
   ],
   "scenario_id": "junction-1-57dcd345d17e5a86",
-  "signals": null,
+  "signals": {
+    "cycle_seconds": 60.0,
+    "groups": [
+      {
+        "green_seconds": 27.0,
+        "lanes": [
+          {
+            "lane_id": "9f83d567b07605dc",
+            "stop_point": [
+              64.03797988344095,
+              -107.3246419483404,
+              0.0
+            ]
+          },
+          {
+            "lane_id": "bf35774542bb44d6",
+            "stop_point": [
+              64.97040635641017,
+              -110.69815360127807,
+              0.0
+            ]
+          },
+          {
+            "lane_id": "d20282ae0fe3c37e",
+            "stop_point": [
+              65.90283282937938,
+              -114.07166525421573,
+              0.0
+            ]
+          }
+        ],
+        "name": "phase-a",
+        "offset_seconds": 0.0,
+        "red_seconds": 30.0,
+        "yellow_seconds": 3.0
+      },
+      {
+        "green_seconds": 27.0,
+        "lanes": [
+          {
+            "lane_id": "0b0e7cdbfeb471c7",
+            "stop_point": [
+              86.3406624600143,
+              -110.1551196989672,
+              0.0
+            ]
+          },
+          {
+            "lane_id": "c388e30ffb2cf461",
+            "stop_point": [
+              87.625334435546,
+              -113.41082513946446,
+              0.0
+            ]
+          },
+          {
+            "lane_id": "7c442504fa5d1766",
+            "stop_point": [
+              88.91000641107769,
+              -116.66653057996173,
+              0.0
+            ]
+          }
+        ],
+        "name": "phase-b",
+        "offset_seconds": 0.0,
+        "red_seconds": 30.0,
+        "yellow_seconds": 3.0
+      },
+      {
+        "green_seconds": 27.0,
+        "lanes": [
+          {
+            "lane_id": "027a3ef89e3e7b88",
+            "stop_point": [
+              74.5482905906191,
+              -125.01664121683413,
+              0.0
+            ]
+          },
+          {
+            "lane_id": "1831f85bcfe6bd84",
+            "stop_point": [
+              77.95197999937781,
+              -124.2012281873186,
+              0.0
+            ]
+          }
+        ],
+        "name": "phase-c",
+        "offset_seconds": 30.0,
+        "red_seconds": 30.0,
+        "yellow_seconds": 3.0
+      }
+    ],
+    "note": "OSM records only that a signal exists; it carries no cycle, split or offset. Every number here was chosen in the Stage 6 signal builder, not surveyed.",
+    "signals_version": 1,
+    "source": "synthesised",
+    "time_step_s": 0.1
+  },
   "status": "converted",
   "step_hz": 10.0
 }

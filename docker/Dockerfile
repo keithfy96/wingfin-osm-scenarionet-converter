@@ -141,6 +141,33 @@ RUN mkdir -p /usr/share/glvnd/egl_vendor.d \
         '    }' \
         '}' > /usr/share/glvnd/egl_vendor.d/10_nvidia.json
 
+# `ros` (rosbags, apsw, lz4, ruamel-yaml, zstandard -- 39 MB) in its **own layer, deliberately
+# below the big one**. Adding it to the `uv sync` above would invalidate that layer, and that
+# layer ends in `uv cache clean`: rebuilding it re-downloads torch, TensorRT and CuPy and re-runs
+# the 168 MB `metadrive.pull_asset`, so four small pure-Python wheels would cost most of a 13 GB
+# re-sync. Here, every layer above stays cached.
+#
+# **Why the image needs it at all.** `tools/drive.py --ros-bag` runs on METADRIVE_PYTHON, which on
+# the host is the MetaDrive checkout's 3.8 and has no `rosbags` wheel; the documented way out --
+# in `ros-bag.sh`'s header, in `docs/reference/ros-bags.md`, and in the refusal
+# `ros_frame.refuse_if_unsupported` prints -- is "run it in the container, one 3.10 interpreter".
+# That was true of the interpreter and false of the library until this line existed, so the
+# container refused every bag it was pointed at.
+#
+# All four groups named, never `--group ros` alone: syncing one group removes the others, which
+# is the same trap `uv sync --group model` sets on the host.
+#
+# **And no `chmod -R` here, unlike the layer above.** chmod modifies every file it touches, and on
+# overlayfs modifying a file in a lower layer copies it up into this one -- so `chmod -R a+rX
+# /opt/venv` would write a fresh 13 GB copy of the venv into a layer whose actual content is
+# 39 MB. Measured: the sync installs its 5 packages in 0.8 s and the chmod was still running two
+# and a half minutes later. It is not needed either: uv writes as root under the build's 022
+# umask, so the files land 644 and the directories 755, which the non-root runtime uid reads. The
+# layer above needs its chmod for /opt/python, whose managed CPython arrives mode 700; nothing
+# here touches that.
+RUN uv sync --frozen --group sim --group gpu --group model --group ros \
+    && uv cache clean
+
 # The container runs as the host's uid, which has no /etc/passwd entry and so no home. panda3d
 # caches compiled shaders and matplotlib writes a font list; both need somewhere to go.
 ENV HOME=/tmp \
@@ -149,10 +176,12 @@ ENV HOME=/tmp \
 
 CMD ["bash"]
 
-# The three groups from the `uv sync` line above, where a caller can read them back without
-# starting a container. **Last in the file on purpose**: a LABEL invalidates the build cache for
-# everything after it, and editing this line should never cost a re-download of the asset pack
-# or a re-sync of a 13 GB venv. Nothing may be added below it.
+# The four groups from the two `uv sync` lines above, where a caller can read them back without
+# starting a container. `sim.sh` unions the `--group` flags across every uv sync line, so a group
+# added in its own layer is picked up here without the check being told about the split.
+# **Last in the file on purpose**: a LABEL invalidates the build cache for everything after it,
+# and editing this line should never cost a re-download of the asset pack or a re-sync of a
+# 13 GB venv. Nothing may be added below it.
 # `scripts/sim.sh` compares this against the --group flags above and says so when the running
 # image is missing one, because nothing else does: `docker compose run` reuses whatever holds the
 # `wingfin-sim` tag and never rebuilds, and a `docker compose build` run before the `git pull`
@@ -171,4 +200,4 @@ CMD ["bash"]
 # CONTENT SIZE and DISK USAGE, which are different measurements and not comparable to it. Labels
 # read the same on both, through `docker image inspect`, in milliseconds. **Keep in step with the
 # line above.**
-LABEL wingfin.groups="sim gpu model"
+LABEL wingfin.groups="sim gpu model ros"

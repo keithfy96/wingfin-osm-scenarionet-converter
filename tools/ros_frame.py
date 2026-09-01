@@ -62,10 +62,30 @@ def refuse_if_unsupported():
     try:
         import rosbags  # noqa: F401
     except ImportError:
-        raise RosFrameError(
-            "--ros-bag needs the `ros` dependency group: uv sync --group sim --group ros "
-            "(name every group you want - syncing one alone removes the others)."
-        ) from None
+        # Two different fixes, and telling a caller the wrong one costs a rebuild or a resync.
+        # In the container the environment is baked into the image, so `uv sync` there edits an
+        # environment the next `docker compose run` throws away; the image is what has to change.
+        # This branch is not hypothetical in here: the image synced `sim gpu model` and not `ros`
+        # from the day it was built, while three other places named the container as the way out
+        # of the host's 3.8.
+        import os
+
+        raise RosFrameError(missing_group_message(os.path.exists("/.dockerenv"))) from None
+
+
+def missing_group_message(in_container):
+    """What to do about a missing `rosbags`, which is not the same thing in the two places."""
+    if in_container:
+        return (
+            "--ros-bag needs the `ros` dependency group, and this image does not carry it. "
+            "A `uv sync` in here would not survive the container: rebuild the image instead, "
+            "with `docker compose build` on the host, after checking docker/Dockerfile syncs "
+            "--group ros."
+        )
+    return (
+        "--ros-bag needs the `ros` dependency group: uv sync --group sim --group ros "
+        "(name every group you want - syncing one alone removes the others)."
+    )
 
 
 def projection_of(scenario):

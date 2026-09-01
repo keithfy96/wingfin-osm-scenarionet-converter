@@ -36,6 +36,59 @@ from pathlib import Path
 
 import ros_schema
 
+
+def _latched_qos():
+    """The QoS a latched topic is offered with: transient-local, so a late subscriber still gets it.
+
+    **A latched topic has to say it is latched, in the bag.** `/planning/route` and `/tf_static`
+    carry exactly one message, written at the first frame. In ROS that is a transient-local
+    publisher, and the durability is the whole mechanism by which a subscriber joining later
+    still receives it. A bag recording `offered_qos_profiles: []` claims the default - volatile -
+    so `ros2 bag play` republishes volatile, that one message goes out while a viewer is still
+    starting, and **nothing ever receives it again**.
+
+    It is silent at both ends: the player says nothing, and a subscriber asking for
+    transient-local is simply never delivered to. Found through rviz2, where the route never
+    drew; the first fix was to ask rviz for volatile and loop the playback so the message came
+    round every 36 s, which works and hides the defect from everything that is not a looping
+    viewer.
+
+    **This makes the QoS correct; it does not on its own get the message to a late subscriber.**
+    Measured 3 trials of 3 against a bag written with this: `ros2 bag play` does not serve the
+    retained sample to a subscriber that joins after playback starts, and because the QoS now
+    matches there is no warning either. A player needs `--delay` (which is what `ros-view.sh`
+    does), or the reader has to be listening before playback begins. What this buys is that a
+    consumer *asking* for transient-local is no longer refused outright, and that the bag stops
+    describing a latched topic as volatile.
+
+    Imported here rather than at module scope, like every other `rosbags` import in this file:
+    `ros_frame.refuse_if_unsupported` is what turns a missing library into a sentence, and it
+    cannot do that if importing this module is itself the ImportError.
+    """
+    from rosbags.interfaces import (
+        Qos,
+        QosDurability,
+        QosHistory,
+        QosLiveliness,
+        QosReliability,
+        QosTime,
+    )
+
+    return (
+        Qos(
+            history=QosHistory.KEEP_LAST,
+            depth=1,
+            reliability=QosReliability.RELIABLE,
+            durability=QosDurability.TRANSIENT_LOCAL,
+            deadline=QosTime(sec=0, nsec=0),
+            lifespan=QosTime(sec=0, nsec=0),
+            liveliness=QosLiveliness.AUTOMATIC,
+            liveliness_lease_duration=QosTime(sec=0, nsec=0),
+            avoid_ros_namespace_conventions=False,
+        ),
+    )
+
+
 #: What `bag_audit.html` measured, so a reader of our bag can compare like for like without
 #: going back to the page. Not used in any calculation - it is provenance for a person.
 REFERENCE_BAG = {
@@ -153,7 +206,16 @@ class BagWriter:
     def _connection(self, topic, msgtype):
         found = self._connections.get(topic)
         if found is None:
-            found = self._writer.add_connection(topic, msgtype, typestore=self._store)
+            # The rate family `ros_schema.TOPICS` already carries is what decides this: a
+            # "latched" topic is offered transient-local, everything else takes the default.
+            # One source for "is this latched", rather than a second list here to fall behind it.
+            family = ros_schema.TOPICS.get(topic, ("", ""))[1]
+            found = self._writer.add_connection(
+                topic,
+                msgtype,
+                typestore=self._store,
+                offered_qos_profiles=_latched_qos() if family == "latched" else (),
+            )
             self._connections[topic] = found
         return found
 

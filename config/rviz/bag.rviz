@@ -1,0 +1,152 @@
+# rviz2 for a bag this repo wrote. `scripts/ros-view.sh` passes it.
+#
+# A default rviz2 opens on Fixed Frame `map` with nothing subscribed, which against our bag looks
+# identical to a bag with nothing in it -- so this file is the difference between "it runs" and
+# "you can see it". Every topic named here is one `docs/testing-ros.md` tier 2 already checks
+# numerically; the point of looking is the relationships a number cannot state, above all whether
+# the boxes sit on the road and move with the people rather than hovering or lagging a frame.
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded: ~
+    Tree Height: 600
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Name: root
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 10
+      Plane Cell Count: 40
+      Color: 100; 100; 100
+      Alpha: 0.3
+    # `map` -> `base_link` every frame. `ros_probe` checks this against the odometry to 0.00e+00;
+    # what it cannot say is whether the car crawls along the road or teleports.
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Marker Scale: 5
+      Show Names: true
+      Show Axes: true
+      Show Arrows: false
+    - Class: rviz_default_plugins/Odometry
+      Name: Odometry
+      Enabled: true
+      Topic:
+        Value: /localization/odometry
+        Depth: 500
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Keep: 200
+      Position Tolerance: 0.5
+      Angle Tolerance: 0.5
+      Shape:
+        Value: Arrow
+        Alpha: 1
+        Color: 255; 170; 0
+        Shaft Length: 1.5
+        Shaft Radius: 0.15
+        Head Length: 0.5
+        Head Radius: 0.3
+    # Written once at the first frame, so it is on screen from the start rather than appearing
+    # when the car reaches the end.
+    #
+    # **Transient Local, matching what the bag now offers.** A latched topic is one message at
+    # t=0, and transient-local durability is the whole mechanism by which a subscriber that joins
+    # two seconds later still receives it. This asked for Transient Local first, got
+    #
+    #     [WARN] [rviz]: New publisher discovered on topic '/planning/route', offering
+    #     incompatible QoS. No messages will be sent to it. Last incompatible policy: DURABILITY
+    #
+    # and was changed to Volatile to silence it -- which needed `ros-view.sh --loop` so the one
+    # message came round every 36 s, and left every non-looping consumer with no route at all.
+    # The writer was recording `offered_qos_profiles: []` for a topic it already labels "latched";
+    # `ros_bag._latched_qos` fixes that and this side is correct as written.
+    #
+    # **That alone still does not deliver it.** Measured 3 trials of 3: `ros2 bag play` does not
+    # serve a latched message from a durability cache to a subscriber that joins late -- it
+    # arrives at neither a volatile nor a transient-local late joiner, and with the QoS now
+    # matching there is no warning to say so. What works is `--delay`, in `ros-view.sh`, which
+    # holds playback until rviz2 is up. Compatible QoS and a head start are both required.
+    - Class: rviz_default_plugins/Path
+      Name: Route
+      Enabled: true
+      Topic:
+        Value: /planning/route
+        Depth: 5
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+      Keep: 200
+      Position Tolerance: 0.5
+      Angle Tolerance: 0.5
+      Shape:
+        Value: Arrow
+        Alpha: 1
+        Color: 255; 170; 0
+        Shaft Length: 1.5
+        Shaft Radius: 0.15
+        Head Length: 0.5
+        Head Radius: 0.3
+      Color: 0; 255; 127
+      Line Style: Lines
+      Alpha: 1
+    # The reason this repo's bags are worth more than the rig's recording: 300 ids, 51-257 boxes
+    # a frame, every one labelled. Needs `ros-jazzy-vision-msgs-rviz-plugins`, which the viewer
+    # image installs -- without it rviz2 subscribes and draws nothing at all.
+    - Class: vision_msgs_rviz_plugins/Detection3DArray
+      Name: Objects
+      Enabled: true
+      Topic:
+        Value: /perception/objects
+        Depth: 100
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Alpha: 0.7
+    # `/perception/traffic_lights` is `wingfin_msgs/TrafficLightArray` and rviz2 has no plugin
+    # for it, so `light_markers.py` in the viewer image republishes it as markers. A sphere per
+    # light coloured by its state, with the state word above it -- which is the one thing here
+    # that is genuinely easier to check by eye than by number: two conflicting approaches green
+    # at the same moment is a broken signal plan, and no numeric check can see it, because the
+    # bag does not carry which movements conflict.
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Traffic lights
+      Enabled: true
+      Topic:
+        Value: /perception/traffic_lights/markers
+        Depth: 100
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+  Global Options:
+    Background Color: 33; 33; 33
+    Fixed Frame: map
+    Frame Rate: 30
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Distance: 120
+      Pitch: 0.9
+      Yaw: 3.1
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Near Clip Distance: 0.01
+    Saved: ~
+Window Geometry:
+  Height: 900
+  Width: 1500
+  Displays:
+    collapsed: false
+  Views:
+    collapsed: false

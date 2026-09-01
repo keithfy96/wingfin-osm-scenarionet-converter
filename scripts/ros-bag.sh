@@ -14,23 +14,30 @@
 # `rosbags` has no 3.8 wheel and does not need one -- MetaDrive runs perfectly well on 3.10.
 # Two ways round it, and the script checks before anything is built:
 #
-#   ./scripts/sim.sh ./scripts/ros-bag.sh ...          # the container: one 3.10 interpreter
+#   ./scripts/sim.sh --no-model ./scripts/ros-bag.sh ...   # the container: one 3.10 interpreter
 #   METADRIVE_PYTHON=.venv/bin/python ./scripts/ros-bag.sh ...
 #       after: uv sync --group sim --group ros         # name every group -- one alone removes
 #                                                        the others
+#
+# **`--no-model` is not optional in the container.** compose.yaml always sets MODEL_CHECKPOINT to
+# the mounted /models path, drive.py takes it as the default for --model-checkpoint, and a
+# checkpoint implies --agent-policy remote -- so a plain replay drive in there refuses with
+# "needs --agent-policy remote, not replay" before it opens a bag. `sim.sh --no-model` passes
+# `-e MODEL_CHECKPOINT=`, which is the only way to clear it: compose's `${MODEL_CHECKPOINT:-...}`
+# substitutes the default for an empty value as readily as for an unset one.
 #
 # **The preflight is the point of having a script at all.** A bag whose traffic-light topic is
 # empty because the dataset was converted without --signals is, months later, indistinguishable
 # from a junction that genuinely had no lights. So this reads the dataset first and says what is
 # actually in it -- and refuses --lights against a dataset carrying none, rather than recording
-# an empty channel. Measured on the two workspaces as they stand: junction-1 holds 202
-# pedestrians, 49 cyclists and 49 barriers and **no lights**; mosque holds 2/1/1 and no lights.
-# junction-1 has a signals/signals.json that was never converted in:
+# an empty channel. Measured on the two workspaces as they stand: junction-1 holds 101
+# pedestrians, 25 cyclists, 24 barriers and **8 traffic lights** (converted in 2026-09-02);
+# mosque holds 2/1/1 and still no lights, so --lights is still refused there:
 #
-#   uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yaml \
-#       --routes workspaces/junction-1/routes/routes.json \
-#       --signals workspaces/junction-1/signals/signals.json \
-#       --actors workspaces/junction-1/actors/actors.json
+#   uv run osm-scenario convert -w workspaces/mosque --config config/default.yaml \
+#       --routes workspaces/mosque/routes/routes.json \
+#       --signals workspaces/mosque/signals/signals.json \
+#       --actors workspaces/mosque/actors/actors.json
 #
 # Convert-time arguments are deliberately not ConverterConfig fields, so that re-run does not
 # move generation_fingerprint and the Stage 3 review keeps applying.
@@ -52,7 +59,10 @@ PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --) shift; PASSTHROUGH=("$@"); break ;;
-        -h|--help) sed -n '2,38p' "$SELF" | sed 's/^#\s\?//'; exit 0 ;;
+        # The header block, whose last line is `Read from .env`. A hardcoded range silently
+        # truncates --help the moment a paragraph is added above it, which is what happened when
+        # the container's --no-model note went in; `sed` stops at the first non-comment instead.
+        -h|--help) sed -n '2,/^[^#]/p' "$SELF" | sed '/^[^#]/d; s/^#\s\?//'; exit 0 ;;
         -*) die "unknown option: $1
   This script takes a workspace, or --audit. To pass $1 to drive.py, put it after --:
     ./scripts/ros-bag.sh ${POSITIONAL:-<workspace>} -- $1" ;;

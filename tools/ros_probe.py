@@ -24,6 +24,7 @@ import argparse
 import math
 import sys
 from collections import defaultdict
+from itertools import groupby
 from pathlib import Path
 
 import ros_audit
@@ -204,6 +205,58 @@ def probe(path, workspace=None, out=sys.stdout):
             f"max {max(per_frame_counts)} last {per_frame_counts[-1]}",
             file=out,
         )
+
+    # --- 6b. the traffic lights, which until 2026-09-02 had never carried a message ------
+    #
+    # Not extent checks: a light's position comes off the live engine in the same frame as
+    # everything else, so there is no separate shift for it to miss. What *can* go wrong is
+    # quieter. `ros_frame.lights_of` reads `.id`, `.status` and `.position` with `getattr`
+    # defaults, so a MetaDrive rename yields empty strings and zero positions and nothing raises;
+    # and `ScenarioLightManager.after_reset` drops any light whose lane is missing from the road
+    # network, warns, and carries on, because `skip_missing_light` defaults True.
+    lights = by_topic.get(ros_schema.TRAFFIC_LIGHTS, [])
+    if lights:
+        per_frame = [len(m.lights) for _, m in lights]
+        phases = defaultdict(list)
+        for _, message in lights:
+            for light in message.lights:
+                phases[light.id].append(light.status)
+        checks.check(
+            "no traffic light disappears part-way through",
+            len(set(per_frame)) == 1,
+            f"{per_frame[0]} lights on every one of {len(lights)} frames"
+            if len(set(per_frame)) == 1
+            else f"count varies: {sorted(set(per_frame))}",
+        )
+        named = [
+            light_id
+            for light_id, states in phases.items()
+            if light_id and all(state for state in states)
+        ]
+        checks.check(
+            "every light has an id and a colour",
+            len(named) == len(phases),
+            f"{len(named)} of {len(phases)} - an empty one means a getattr default fired",
+        )
+        # A light frozen on one colour for a whole recording is what a tape that never advanced
+        # looks like, and it is indistinguishable from a working light in every other check.
+        frozen = sorted(light_id for light_id, states in phases.items() if len(set(states)) < 2)
+        checks.check(
+            "every light changes colour at least once",
+            not frozen,
+            f"{len(phases) - len(frozen)} of {len(phases)} change"
+            + (f"; frozen: {', '.join(f[:8] for f in frozen)}" if frozen else ""),
+        )
+        # Printed, not checked: which lights share a phase is a property of the signal plan, and
+        # whether two conflicting approaches are ever green together is the question the rviz2
+        # view exists to answer. Asserting it here would need the conflict matrix, which the bag
+        # does not carry.
+        for light_id, states in sorted(phases.items()):
+            runs = [(state, len(list(group))) for state, group in groupby(states)]
+            shown = " -> ".join(f"{s.replace('TRAFFIC_LIGHT_', '')}x{n}" for s, n in runs)
+            print(f"        light {light_id[:8]}  {shown}", file=out)
+    else:
+        print("        no traffic lights in this bag", file=out)
 
     # --- 7. GNSS is the same car, in the real world -------------------------------------
     fixes = by_topic.get(ros_schema.GNSS_FIX, [])

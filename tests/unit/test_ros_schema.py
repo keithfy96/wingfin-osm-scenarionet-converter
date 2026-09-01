@@ -156,13 +156,20 @@ class TestOdometry:
         assert message["child_frame_id"] == BASE_FRAME
         assert message["pose"]["pose"]["position"]["x"] == 100.0
 
-    def test_covariance_is_marked_unknown_rather_than_invented(self):
+    def test_covariance_is_unknown_zeros_and_never_the_minus_one(self):
+        """Zeros mean "measured, uncertainty not modelled". -1 means "not produced at all".
+
+        rviz2's Odometry display found this: a -1 on the diagonal is not positive-semidefinite,
+        so it warned `Negative eigenvalue found for position` once a frame and drew no ellipse.
+        Worse than the warning is what the -1 claims - that a pose which is exact ground truth
+        should be discarded. `sensor_msgs/NavSatFix` in this same file had it right all along.
+        """
         message = ros_schema.odometry_message(_frame())
-        assert message["pose"]["covariance"][0] == -1.0
-        assert len(message["pose"]["covariance"]) == 36
+        for field in ("pose", "twist"):
+            covariance = message[field]["covariance"]
+            assert len(covariance) == 36
+            assert covariance == [0.0] * 36, f"{field} covariance still claims to be invalid"
 
-
-class TestObjects:
     def test_only_what_the_frame_carries_is_labelled(self):
         """No phantom labels: the boxes are exactly `frame.boxes`, never a superset.
 
@@ -264,6 +271,33 @@ class TestGnss:
         imu = ros_schema.imu_message(_frame())
         assert imu["linear_acceleration"] == {"x": 0.0, "y": 0.0, "z": 0.0}
         assert imu["linear_acceleration_covariance"][0] == -1.0
+
+    def test_only_the_quantity_we_do_not_produce_carries_the_minus_one(self):
+        """The -1 is `sensor_msgs/Imu`'s "I do not produce this", not "I am unsure of this".
+
+        Orientation and angular velocity are exact here, so a -1 on them told every consumer to
+        throw away ground truth - and rviz2 refused to draw the covariance at all. Only the
+        acceleration, which is genuinely not synthesised, keeps it.
+        """
+        imu = ros_schema.imu_message(_frame())
+        assert imu["orientation_covariance"] == [0.0] * 9
+        assert imu["angular_velocity_covariance"] == [0.0] * 9
+        assert imu["linear_acceleration_covariance"] == [-1.0] + [0.0] * 8
+
+    def test_no_message_this_module_writes_claims_an_invalid_pose(self):
+        """One sweep over every builder, so a new one cannot reintroduce the -1 unnoticed."""
+        frame = _frame(projection=Projection(3.15, 101.6, 0.0, 0.0))
+        poses = [
+            ros_schema.odometry_message(frame)["pose"]["covariance"],
+            ros_schema.odometry_message(frame)["twist"]["covariance"],
+            *[
+                detection["results"][0]["pose"]["covariance"]
+                for detection in ros_schema.objects_message(frame)["detections"]
+            ],
+        ]
+        assert poses, "no pose covariances were checked - the sweep found nothing"
+        for covariance in poses:
+            assert covariance == [0.0] * 36
 
 
 class TestTheTopicTable:
@@ -468,3 +502,165 @@ class TestTheArgumentLoopInTheScript:
 
         absent = run("--agent-policy", "idm")
         assert absent.stdout.strip() == "|0|--agent-policy idm"
+
+
+class TestTheContainerCarriesTheRosGroup:
+    """The container was the documented way out of the host's Python 3.8, and could not do it.
+
+    `--ros-bag` runs on `METADRIVE_PYTHON`, which on the host is the MetaDrive checkout's 3.8 and
+    has no `rosbags` wheel. Three places name the container as the answer - `ros-bag.sh`'s header,
+    the last trap in `docs/reference/ros-bags.md`, and the refusal `refuse_if_unsupported` prints -
+    and all three were right about the interpreter and wrong about the library: the image synced
+    `sim gpu model` and never `ros`, so every bag it was pointed at was refused.
+
+    Nothing caught it because nothing compares what the tools need against what the image holds.
+    """
+
+    @staticmethod
+    def _sync_groups():
+        """The union of `--group` flags across every uv sync line, exactly as `sim.sh` reads it.
+
+        `scripts/sim.sh:97` unions them with awk rather than reading one line, which is what lets
+        a group live in its own layer. This mirrors that, so the two cannot disagree about what
+        the recipe asks for.
+        """
+        import re
+
+        found = set()
+        for line in (REPO / "docker" / "Dockerfile").read_text().splitlines():
+            head, _, _ = line.partition("uv sync")
+            if not _ or "#" in head:
+                continue
+            found.update(re.findall(r"--group ([a-z]+)", line))
+        return found
+
+    def test_the_image_recipe_installs_rosbags(self):
+        assert "ros" in self._sync_groups(), (
+            "docker/Dockerfile does not sync the `ros` group, so `rosbags` is not in the image "
+            "and `./scripts/sim.sh ./scripts/ros-bag.sh ...` refuses - which is the command "
+            "ros_frame.refuse_if_unsupported tells a 3.8 host to run."
+        )
+
+    def test_the_groups_label_matches_the_recipe(self):
+        """`sim.sh` warns off this label, so a group it does not name is a group it cannot check.
+
+        The label is last in the Dockerfile precisely so keeping it in step costs no build cache;
+        this is what notices when someone adds a group above and forgets it.
+        """
+        import re
+
+        text = (REPO / "docker" / "Dockerfile").read_text()
+        found = re.search(r'LABEL wingfin\.groups="([^"]*)"', text)
+        assert found, "no wingfin.groups LABEL in docker/Dockerfile"
+        assert set(found.group(1).split()) == self._sync_groups(), (
+            f"the label says {found.group(1)!r} and the uv sync lines ask for "
+            f"{' '.join(sorted(self._sync_groups()))!r}"
+        )
+
+    def test_the_group_exists_and_is_locked(self):
+        """`--frozen` in the image means an unlocked group fails the build, not the run.
+
+        Read with a regex rather than `tomllib`, which is 3.11 and this repo is 3.10.
+        """
+        import re
+
+        block = re.search(
+            r"^ros = \[(.*?)\]", (REPO / "pyproject.toml").read_text(), re.S | re.M
+        )
+        assert block and "rosbags" in block.group(1), "no `ros` dependency group in pyproject.toml"
+        assert 'name = "rosbags"' in (REPO / "uv.lock").read_text(), (
+            "`rosbags` is not in uv.lock, so the image's `uv sync --frozen` fails at build time"
+        )
+
+    def test_the_refusal_names_the_right_fix_in_each_place(self):
+        """`uv sync` is the fix on the host and is useless in the container.
+
+        A container's environment is baked into the image, so a sync inside one edits something
+        the next `docker compose run` discards. Telling a caller the wrong one of these costs a
+        rebuild either way; naming both is the whole value of the message.
+        """
+        import ros_frame
+
+        inside = ros_frame.missing_group_message(True)
+        outside = ros_frame.missing_group_message(False)
+        # On the instruction, not on the word: the container message may *mention* `uv sync` to
+        # say why it will not help, so what must not appear there is the command itself.
+        assert "docker compose build" in inside and "uv sync --group" not in inside
+        assert "uv sync --group sim --group ros" in outside
+        assert "docker compose build" not in outside
+
+
+class TestTheScriptsOwnHelp:
+    """`--help` printed a fixed line range, so adding a paragraph truncated it silently."""
+
+    def test_help_prints_the_whole_header(self):
+        import subprocess
+
+        printed = subprocess.run(
+            ["bash", str(REPO / "scripts" / "ros-bag.sh"), "--help"],
+            capture_output=True,
+            text=True,
+            cwd=REPO,
+        )
+        assert printed.returncode == 0, printed.stderr
+        # The last line of the comment block, so a range that stops early fails here rather
+        # than quietly dropping whatever was added most recently.
+        for wanted in ("--no-model", "The preflight is the point", "Read from .env"):
+            assert wanted in printed.stdout, f"--help stops before {wanted!r}"
+
+
+class TestTheGeneratedMessagePackage:
+    """`tools/ros_msgs_package.py` - the same `.msg` text, as something a subscriber can build.
+
+    MCAP carries the definition text, which is why a stock `ros:jazzy-ros-base` can *list*
+    `wingfin_msgs/msg/TrafficLightArray`. Anything that wants the messages as objects - rviz2,
+    or any node - needs generated type support instead, and that needs a colcon package. The
+    package is emitted from `EXTRA_DEFINITIONS` rather than written beside it, because two copies
+    of one definition drift silently: the bag keeps carrying what the writer registered while the
+    package says something else, and a subscriber deserialises garbage without raising.
+    """
+
+    def test_the_msg_files_are_the_definitions_the_writer_registers(self):
+        import ros_msgs_package
+
+        files = ros_msgs_package.package_files("wingfin_msgs")
+        for name, text in EXTRA_DEFINITIONS.items():
+            if not name.startswith("wingfin_msgs/msg/"):
+                continue
+            short = name[len("wingfin_msgs/msg/") :]
+            assert files[f"msg/{short}.msg"] == text, f"{short}.msg is not what the writer uses"
+
+    def test_dependencies_are_read_off_the_fields_not_hardcoded(self):
+        import ros_msgs_package
+
+        messages = ros_msgs_package.messages_of("wingfin_msgs")
+        found = ros_msgs_package.dependencies_of(messages, "wingfin_msgs")
+        assert found == ["geometry_msgs", "std_msgs"]
+        # A definition that grows a field must carry its package with it.
+        grown = dict(messages, TrafficLight=messages["TrafficLight"] + "sensor_msgs/Image thumb\n")
+        assert "sensor_msgs" in ros_msgs_package.dependencies_of(grown, "wingfin_msgs")
+
+    def test_the_package_does_not_depend_on_itself(self):
+        """`wingfin_msgs/TrafficLight[] lights` names its own package; ament fails on the cycle."""
+        import ros_msgs_package
+
+        messages = ros_msgs_package.messages_of("wingfin_msgs")
+        assert "wingfin_msgs/TrafficLight[]" in messages["TrafficLightArray"]
+        assert "wingfin_msgs" not in ros_msgs_package.dependencies_of(messages, "wingfin_msgs")
+
+    def test_every_message_and_dependency_reaches_the_build_files(self):
+        import ros_msgs_package
+
+        files = ros_msgs_package.package_files("wingfin_msgs")
+        for short in ros_msgs_package.messages_of("wingfin_msgs"):
+            assert f'"msg/{short}.msg"' in files["CMakeLists.txt"]
+        for dependency in ("geometry_msgs", "std_msgs"):
+            assert f"<depend>{dependency}</depend>" in files["package.xml"]
+            assert f"find_package({dependency} REQUIRED)" in files["CMakeLists.txt"]
+        assert "<name>wingfin_msgs</name>" in files["package.xml"]
+
+    def test_a_package_with_no_messages_is_refused(self):
+        import ros_msgs_package
+
+        with pytest.raises(ValueError, match="no nothing_msgs messages"):
+            ros_msgs_package.package_files("nothing_msgs")

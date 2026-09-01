@@ -24,12 +24,14 @@ Run everything from the repo root.
 | **0** | nothing — `uv run` and the existing `.venv` |
 | **1–3** | a converted dataset (the repo has `junction-1`) and a GPU for the offscreen render |
 | **4** | `docker`, and the `ros:jazzy-ros-base` image — 889 MB, and **nothing to build** |
+| **5** | `docker compose build` for `wingfin-sim` — cached except one 39 MB layer |
+| **6** | `wingfin-ros-viewer` (built by the script), an X display, and a few GB of disk |
 
 **The one thing that catches people out is the interpreter.** `scripts/ros-bag.sh` runs
 `drive.py` on `METADRIVE_PYTHON`, which defaults to the MetaDrive checkout's **Python 3.8**,
 and `rosbags` has no 3.8 wheel. This repo's own `.venv` is 3.10 and already carries both
 `metadrive` and `rosbags`, so every command below names it. Two other ways round it, if you
-prefer: `./scripts/sim.sh` once the container carries the `ros` group, or exporting
+prefer: the container (tier 5, which carries the `ros` group as of 2026-09-01), or exporting
 `METADRIVE_PYTHON` in `.env`.
 
 > **Do not run a bare `uv sync`.** It removes the `sim` and `ros` groups that are already in
@@ -73,8 +75,8 @@ the exit status is non-zero, something died before the first `note` — run it a
 ```
   workspace  workspaces/junction-1
   dataset    scenarionet-10hz  (1 scenario(s))
-  tracks     CYCLIST=49 PEDESTRIAN=202 TRAFFIC_BARRIER=49 VEHICLE=1
-  lights     0 in the dataset
+  tracks     CYCLIST=25 PEDESTRIAN=101 TRAFFIC_BARRIER=24 VEHICLE=1
+  lights     8 in the dataset
   out        /.../wingfin-osm-scenarionet-converter/bags/j1-001
 ```
 
@@ -86,7 +88,7 @@ Before a frame is written, the preflight reads the dataset and says what is actu
 because a bag whose traffic-light topic is empty for want of a `convert --signals` is, months
 later, indistinguishable from a junction that genuinely had none.
 
-**Expect** on `junction-1`: `PEDESTRIAN=202 CYCLIST=49 TRAFFIC_BARRIER=49`, **`lights 0`**,
+**Expect** on `junction-1`: `PEDESTRIAN=101 CYCLIST=25 TRAFFIC_BARRIER=24`, **`lights 8`**,
 `gnss  real lat/lon available`, and at the end
 `ros bag  ~364 frames, ~3641 messages across 11 topics`.
 
@@ -119,7 +121,7 @@ against the change in position, `/tf` against the odometry it was derived beside
 those can be wrong in isolation and look fine; they cannot all agree while any is wrong.
 
 **Expect** from the audit: `32 chunks`, `compression=['zstd']`, every channel at
-`10.00 Hz / 100.00 ms` median. From the probe: `all 10 checks passed`, with GNSS spanning lat
+`10.00 Hz / 100.00 ms` median. From the probe: `all 13 checks passed`, with GNSS spanning lat
 `3.1842..3.1864`, lon `101.6110..101.6124` — Kuala Lumpur, on the junction.
 
 **Writes** nothing; both print to the terminal.
@@ -173,6 +175,95 @@ that is a claim to test, not to state.
 
 ---
 
+## 5. The same ladder, in the container (~3 min)
+
+```bash
+./scripts/sim.sh --no-model ./scripts/ros-bag.sh junction-1 -- --out bags/j1-container
+./scripts/sim.sh --no-model ./scripts/ros-bag.sh --audit bags/j1-container
+./scripts/sim.sh --no-model uv run python tools/ros_probe.py bags/j1-container --workspace workspaces/junction-1
+```
+
+This is the environment a rig would use, and the only one where MetaDrive and `rosbags` share a
+single interpreter rather than being two venvs that have to agree. Tiers 1 and 2 on the host
+prove the code; this proves the image.
+
+**`--no-model` is required and its absence is not obvious.** `compose.yaml` always sets
+`MODEL_CHECKPOINT` to the mounted `/models` path, `drive.py` takes it as the default for
+`--model-checkpoint`, and a checkpoint implies `--agent-policy remote` — so without it a replay
+drive refuses with *"needs --agent-policy remote, not replay"* before it opens a bag. Exporting
+an empty `MODEL_CHECKPOINT` does not help: compose's `${MODEL_CHECKPOINT:-...}` substitutes its
+default for an empty value too. `sim.sh --no-model` passes `-e MODEL_CHECKPOINT=` into the
+container, which is the only thing that clears it.
+
+**Expect the host's figures, exactly**: 364 frames, 3,641 messages, 11 topics, 32 chunks,
+`compression=['zstd']`, all 13 probe checks. The `.mcap` files differ by about 0.1% in size —
+physics is not bit-reproducible across the two environments — but every count, rate and check
+matches, and a difference in any of *those* is the finding.
+
+**If it refuses with `--ros-bag needs the ros dependency group`**, the image predates
+2026-09-01. Rebuild with `docker compose build`; only the last 39 MB layer is uncooked, so it
+takes about a minute. `./scripts/sim.sh` warns about this on every run by comparing the image's
+`wingfin.groups` label against the Dockerfile.
+
+**Writes** `bags/j1-container/`, owned by your own uid — compose runs the container as
+`DOCKER_UID`, so nothing lands root-owned.
+
+---
+
+## 6. Look at it (~1 min)
+
+```bash
+./scripts/ros-view.sh bags/j1-001
+```
+
+**Every other tier is numeric. This is the only one that is not**, and on its first run it found
+two faults that all ten probe checks pass straight over.
+
+> **Nobody has yet completed this tier.** The viewer is built and rviz2 demonstrably subscribes
+> to every display topic — `ros2 topic info` reports 1 subscriber each on `/tf`,
+> `/localization/odometry`, `/planning/route` and `/perception/objects` — but no person has
+> looked at the result, and there is no screenshot. Everything below is what to **check**, not
+> what has been confirmed. See
+> `docs/fixes/2026-09-01-20:19:21-phase-b-was-marked-done-on-log-silence.md`.
+
+rviz2 plays the bag on a loop with `use_sim_time`. What to look for — each is a claim no number
+in tier 2 makes, and each fails with a completely clean log:
+
+- **the car crawls along the road rather than teleporting** between frames
+- **the boxes sit *on* the road and move *with* the people**, not hovering, not a frame behind
+- **the route runs where the car actually went**
+- **`base_link` stays under `map`** and the axes point the way the car is going
+
+Set the view's **Target Frame** to `base_link` so the camera rides with the car: a constant lag
+or a z-offset is obvious from on board and invisible from a fixed viewpoint.
+
+**The lights are markers, not the typed topic.** rviz2 has no plugin for `wingfin_msgs`, so the
+viewer image runs `light_markers.py`, which republishes `/perception/traffic_lights` as
+`visualization_msgs/MarkerArray` — a sphere per light coloured by its state, with the word above
+it. Display only; the bag keeps the real typed topic.
+
+The container is jazzy and builds `wingfin_msgs` from `ros_schema.EXTRA_DEFINITIONS`; it installs
+`vision_msgs` **and** `vision-msgs-rviz-plugins`, because with the types but no plugin rviz2
+subscribes to `/perception/objects` and silently draws nothing.
+
+**What it caught, first run:**
+
+- **Every pose claimed to be invalid.** Odometry, twist and every detection carried
+  `covariance[0] = -1`. That is `sensor_msgs/Imu`'s "I do not produce this quantity", not
+  "I am unsure of it" — so a consumer is being told to discard a pose that is exact ground truth.
+  It is also not positive-semidefinite, which is how it surfaced: rviz2 logged
+  `Negative eigenvalue found for position` once a frame and drew no ellipse. `NavSatFix` in the
+  same file had it right all along, with zeros and `position_covariance_type: 0`.
+- **The route never drew.** The rviz config asked for Transient Local durability because the
+  topic is latched; `ros2 bag play` republishes volatile, and DDS answers an incompatible request
+  by delivering nothing. `No messages will be sent to it` appears once and never again.
+
+**One warning is normal.** At the end of each `--loop` pass the bag's clock restarts at zero and
+rviz2 says so — `TF_OLD_DATA ignoring data from the past`, then `Detected jump back in time.
+Clearing TF buffer`. It happens once per lap and is the loop, not a fault.
+
+**Writes** nothing. The bag is mounted read-only.
+
 ## Where the outputs are
 
 | path | what | size |
@@ -223,22 +314,16 @@ that is a claim to test, not to state.
 
 ## What is not checked here
 
-- **Traffic lights have never once run.** `/perception/traffic_lights` and
-  `wingfin_msgs/TrafficLightArray` are built and unit-tested, but `dynamic_map_states` is 0 in
-  both datasets, so no bag has ever carried one — which is why tier 1 reports `lights 0` and
-  why `--lights` is refused. `junction-1` has a `signals/signals.json` that was never
-  converted in:
+- **`mosque` still has no lights.** `junction-1` gained 8 on 2026-09-02; `mosque` has a
+  `signals/signals.json` that was never converted in, so `--lights` is still refused there:
 
   ```bash
-  uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yaml --routes workspaces/junction-1/routes/routes.json --signals workspaces/junction-1/signals/signals.json --actors workspaces/junction-1/actors/actors.json
+  uv run osm-scenario convert -w workspaces/mosque --config config/default.yaml --routes workspaces/mosque/routes/routes.json --signals workspaces/mosque/signals/signals.json --actors workspaces/mosque/actors/actors.json
   ```
 
   Convert-time arguments are deliberately not `ConverterConfig` fields, so this does **not**
-  move `generation_fingerprint` and the Stage 3 lane review keeps applying. It does rewrite
-  `workspaces/junction-1/scenarionet-10hz`, which is tracked in git.
-
-- **Nobody has looked at a bag in rviz2.** Every check above is numeric, and `ros-base`
-  carries no rviz2.
+  move `generation_fingerprint` and the Stage 3 lane review keeps applying. It does rewrite the
+  workspace's dataset, which is tracked in git.
 
 - **No cameras.** `image_raw/ffmpeg` is 18 of the rig's 55 topics and the encoder is not
   written — no pixel has ever reached a bag. The mount conversion and `/tf_static` are built
