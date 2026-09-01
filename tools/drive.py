@@ -2079,7 +2079,15 @@ def main() -> int:
         # Before anything is built. `rosbags` needs 3.10 and `tools/` also runs on the MetaDrive
         # checkout's 3.8, so an unsupported interpreter has to be a refusal at the top rather
         # than an ImportError three hundred frames into a recording.
-        ros_frame.refuse_if_unsupported()
+        #
+        # Caught rather than raised, in the `result FAILED:` form every other refusal in this
+        # file uses. The message already names both ways out; a traceback above it only buries
+        # them, and the interpreter is the single most common thing to have wrong here.
+        try:
+            ros_frame.refuse_if_unsupported()
+        except ros_frame.RosFrameError as error:
+            print(f"result       FAILED: {error}")
+            return 1
 
     recorder = None
     if arguments.record:

@@ -89,9 +89,31 @@ def records(blob):
         offset += 9 + length
 
 
+def refuse_if_missing(path):
+    """Refuse a path nothing has written, naming the command that writes one.
+
+    Shared with `ros_probe`, because both are *readers* and pointing either at a bag that does
+    not exist yet is the single likeliest mistake anyone makes with this stage - the ladder in
+    `docs/testing-ros.md` reads in one tier what it recorded in the one before. Left to the
+    library it is eleven lines of stack ending in `pathlib.read_bytes` or
+    `rosbags/rosbag2/reader.py`, naming neither the bag nor anything to do about it. Measured on
+    a real user twice, from both tools, before this existed.
+    """
+    path = Path(path)
+    if path.exists():
+        return path
+    raise ValueError(
+        f"no bag at {path} - nothing has written one there yet.\n"
+        "  Record one first, on ONE line (a wrapped line pastes fine; a backslash may not):\n"
+        "    METADRIVE_PYTHON=.venv/bin/python ./scripts/ros-bag.sh junction-1 "
+        f"-- --out {path}\n"
+        f"  The path is relative to the current directory, so that writes {Path(path).resolve()}"
+    )
+
+
 def read(path):
     """Channels, per-channel timestamps, chunk compression, all without inflating a payload."""
-    path = Path(path)
+    path = refuse_if_missing(path)
     if path.is_dir():
         found = sorted(path.glob("*.mcap"))
         if not found:
@@ -198,7 +220,14 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("bag", help="a rosbag2 directory, or the .mcap inside one")
     arguments = parser.parse_args(argv)
-    found = report(arguments.bag)
+    # A refusal, not a traceback. Every ValueError raised in `read` is a sentence written for
+    # whoever typed the command - a missing bag, a directory with no .mcap, a CompressionMode.FILE
+    # bag - and a stack trace above it only buries the sentence.
+    try:
+        found = report(arguments.bag)
+    except ValueError as error:
+        print(f"\n  {error}\n", file=sys.stderr)
+        return 1
     if found["compression"] and found["compression"] != {"zstd"}:
         print(
             f"\n  NOTE: chunks are {sorted(found['compression'])}, not zstd - the reference "

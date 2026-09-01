@@ -8,6 +8,9 @@ Everything below was produced by running it on 2026-08-31, against
 `workspaces/junction-1/scenarionet-10hz` and `bag_audit.html`'s audit of the rig's own
 `ros2_mig_phase_5_p1`.
 
+The ladder for checking it — five tiers, cheapest first, and what each failure means — is
+`docs/testing-ros.md`. This file is the baseline those tiers are checked against.
+
 ## Running it
 
 ```bash
@@ -137,6 +140,41 @@ plan doc. The fifteen omitted for want of a `.msg` definition are listed in code
 with a substitute type, because a subscriber expecting `wingfin_msgs/VehicleState` fails on a
 `geometry_msgs/TwistStamped` wearing that topic name, which is worse than an absent topic.
 
+## What a full ladder run measured, 2026-09-01
+
+Every tier of `docs/testing-ros.md`, run end to end on `junction-1` a month after the figures
+above were first taken. **They reproduced exactly** - 364 frames, 3,641 messages, 32 chunks,
+39.4x, all 10 probe checks, every channel at 10.00 Hz.
+
+| tier | result |
+|---|---|
+| 0 - unit tests | 32 passed; ruff clean |
+| 1 - a real bag | 364 frames, 3,641 messages, 11 topics, 0.97 MB / 34.98 MB payload |
+| 2 - audit + probe | 32 chunks, `compression=['zstd']`, **all 10 checks passed** |
+| 3 - tape bound | **379 frames written of 824 steps driven**; `--ros-bag-past-tape` wrote 824 |
+| 4 - refusals | all three refuse, and now none of them tracebacks |
+| 5 - `ros2 bag info` | **jazzy read all 11 topics and every count**, `wingfin_msgs` included |
+
+**`ros2 bag info` is the result worth keeping.** ROS's own rosbag2, in a stock
+`ros:jazzy-ros-base`, opened a bag written by `rosbags` and listed
+`wingfin_msgs/msg/TrafficLightArray` - a type that exists nowhere but this repo, with no package
+installed anywhere in that container. MCAP carries the schema text, so the invented message is
+as readable as `nav_msgs/msg/Odometry`. It reports `ROS Distro: rosbags` and
+`Storage id: mcap`, and the duration starts at epoch zero because the stamps are simulator time.
+
+Two things the run turned up that reading could not:
+
+- **`scripts/ros-bag.sh` had never worked as documented.** Its argument loop skipped past `--out`
+  with `((i++))`; a bare `((expr))` returns status 1 when the expression is zero, and
+  post-increment yields the **old** value, so `--out` in first position (`i == 0`) tripped
+  `set -e` and the script died silently - exit 1, no stdout, no stderr, no bag. Every example in
+  the README, the script's own help and `docs/testing-ros.md` put `--out` first. Fixed to
+  `i=$((i + 1))`.
+- **`--agent-policy idm` on junction-1 does not move.** Tier 3's drives report
+  `completion 0.001` and the probe finds **one** moving frame in 379. The bags are correct and
+  the tape bound is exactly as documented; the ego is a separate question, and the probe's
+  heading check passes vacuously on a car that never moved.
+
 ## Traps
 
 - **`CompressionMode.FILE` destroys the index-only read** the rig's own audit depends on.
@@ -155,6 +193,13 @@ with a substitute type, because a subscriber expecting `wingfin_msgs/VehicleStat
 - **A GNSS fix can legitimately land outside the OSM extent** - 10 m past `minlat` on junction-1,
   because osmnx clips ways while lane geometry is offset outward. The containment check pads by
   50 m: wide enough for the overhang, far under the 93.8 m error it exists to catch.
+- **A bare `((i++))` under `set -e` is a silent exit 1.** It is how the only documented form of
+  `ros-bag.sh` failed for a month with no output at all. Nothing else in `scripts/` uses that
+  form; `i=$((i + 1))` is an assignment and carries the assignment's status.
+- **Both readers refuse a missing bag** rather than tracebacking, and `ros_audit.refuse_if_missing`
+  is shared so the two cannot drift. The ladder reads in one tier what it recorded in the one
+  before, so "there is no bag there yet" is the likeliest thing to be wrong, and it happened
+  twice before the guard existed.
 - **`rosbags` needs Python 3.10** and `drive.py` runs on `METADRIVE_PYTHON`, which is 3.8 on the
   host. The container is one 3.10 interpreter and it works there;
   `ros_frame.refuse_if_unsupported()` says so before the terrain is built.

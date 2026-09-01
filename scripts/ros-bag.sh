@@ -76,7 +76,14 @@ FILTERED=()
 WANT_LIGHTS=0
 for ((i = 0; i < ${#PASSTHROUGH[@]}; i++)); do
     case "${PASSTHROUGH[$i]}" in
-        --out) OUT="${PASSTHROUGH[$((i + 1))]:-}"; ((i++)) ;;
+        # `i=$((i + 1))` and never `((i++))`. A bare `((expr))` returns exit status 1 when expr
+        # evaluates to zero, and post-increment evaluates to the OLD value -- so with `set -e`
+        # above, skipping past `--out` when it is the FIRST argument after `--` (i == 0) killed
+        # the script silently: exit 1, not one byte on stdout or stderr, no bag. Which is the
+        # form this script's own help, the README and docs/testing-ros.md all show, so the
+        # documented command was the one that could not work. `i=$(( ))` is an assignment and
+        # its status is the assignment's, not the arithmetic's.
+        --out) OUT="${PASSTHROUGH[$((i + 1))]:-}"; i=$((i + 1)) ;;
         --lights) WANT_LIGHTS=1; FILTERED+=("${PASSTHROUGH[$i]}") ;;
         *) FILTERED+=("${PASSTHROUGH[$i]}") ;;
     esac
@@ -130,10 +137,8 @@ if [[ "$WANT_LIGHTS" == "1" && "$LIGHTS" == "0" ]]; then
   dynamic_map_states is empty, so the lights topic would be recorded empty -- which months
   later is indistinguishable from a junction that genuinely had none.
   Convert them in first (this does NOT move the fingerprint, so the Stage 3 review still
-  applies):
-    uv run osm-scenario convert -w $WS --config $CONFIG \\
-      --routes $WS/routes/routes.json --signals $WS/signals/signals.json \\
-      --actors $WS/actors/actors.json"
+  applies). One line -- a backslash continuation does not survive every paste:
+    uv run osm-scenario convert -w $WS --config $CONFIG --routes $WS/routes/routes.json --signals $WS/signals/signals.json --actors $WS/actors/actors.json"
 fi
 if [[ "$ACTORS" == "0" ]]; then
     note "warning    no pedestrians, cyclists or static objects -- the labels will be cars only"
@@ -147,7 +152,18 @@ if [[ -n "${DECISION_HZ:-}" ]]; then ARGS+=(--decision-hz "$DECISION_HZ"); fi
 ARGS+=(${FILTERED[@]+"${FILTERED[@]}"})
 
 note "python     $MD_PY"
-note "out        $OUT"
+# The absolute path, not the relative one the caller typed. `--out` is resolved against the
+# current directory and nothing here changes directory, so a relative name is unambiguous to the
+# script and not to the person reading the scroll-back an hour later -- who then greps for a
+# `bags/` that is one `cd` away. Printed before the drive rather than after because
+# `exec_with_gpu` below **execs**: bash is replaced by python, so nothing after it runs, and it
+# stays that way -- putting a shell back between the terminal and python is what breaks the
+# Ctrl-C handling that ends a drive at a frame boundary and still exports it.
+# `realpath -m` and not a `cd`: the bag does not exist yet and neither does `bags/`, so
+# anything that resolves by entering the directory prints "/j1-001". -m resolves a path that is
+# not there. The fallback covers a system without coreutils' realpath.
+OUT_ABS="$(realpath -m "$OUT" 2>/dev/null || echo "$PWD/$OUT")"
+note "out        $OUT_ABS"
 printf '\n'
 
 exec_with_gpu "$MD_PY" "${ARGS[@]}"

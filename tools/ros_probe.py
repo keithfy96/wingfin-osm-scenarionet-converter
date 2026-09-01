@@ -26,6 +26,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+import ros_audit
 import ros_schema
 
 EXTENT_PAD_M = 50.0
@@ -48,6 +49,11 @@ def _typestore():
 
 def load(path):
     """Every message, deserialised, grouped by topic - and by the stamp it claims."""
+    # Before `Reader`, which raises a bare FileNotFoundError from inside the library. This tier
+    # reads what the tier before it recorded, so "there is no bag there yet" is the likeliest
+    # thing to be wrong; `ros_audit` owns the message so the two readers cannot drift.
+    ros_audit.refuse_if_missing(path)
+
     from rosbags.rosbag2 import Reader
 
     store = _typestore()
@@ -274,7 +280,12 @@ def main(argv=None):
         "source OSM extent rather than merely being self-consistent",
     )
     arguments = parser.parse_args(argv)
-    return 0 if probe(arguments.bag, arguments.workspace) else 1
+    # A refusal, not a traceback -- see the same guard in `ros_audit.main`.
+    try:
+        return 0 if probe(arguments.bag, arguments.workspace) else 1
+    except ValueError as error:
+        print(f"\n  {error}\n", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

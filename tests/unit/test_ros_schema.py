@@ -384,3 +384,87 @@ class TestTheVersionGate:
         assert ros_frame.projection_of({"metadata": {}}) is None
         assert ros_frame.projection_of({}) is None
         assert ros_frame.projection_of(None) is None
+
+
+class TestPointingAReaderAtNothing:
+    """The likeliest mistake anyone makes with this stage, and it happened twice before this.
+
+    `docs/testing-ros.md` reads in one tier what it recorded in the tier before, so a bag that
+    is not there yet is the ordinary way to get it wrong - not an exotic one. Left to the
+    libraries it is eleven lines of stack ending in `pathlib.read_bytes` or
+    `rosbags/rosbag2/reader.py`, naming neither the bag nor anything to do about it.
+    """
+
+    def test_a_missing_bag_is_refused_with_the_command_that_writes_one(self, tmp_path):
+        import ros_audit
+
+        with pytest.raises(ValueError) as raised:
+            ros_audit.refuse_if_missing(tmp_path / "not-a-bag")
+        message = str(raised.value)
+        assert "not-a-bag" in message
+        assert "ros-bag.sh" in message, "the refusal has to name how to produce one"
+
+    def test_both_readers_share_one_refusal_so_they_cannot_drift(self):
+        import ros_audit
+        import ros_probe
+
+        assert ros_probe.ros_audit.refuse_if_missing is ros_audit.refuse_if_missing
+
+    def test_a_bag_that_exists_is_returned_untouched(self, tmp_path):
+        import ros_audit
+
+        assert ros_audit.refuse_if_missing(tmp_path) == tmp_path
+
+
+class TestTheArgumentLoopInTheScript:
+    """`scripts/ros-bag.sh` could not run its own documented command, for a month.
+
+    A bare `((expr))` returns exit status 1 when the expression evaluates to zero, and
+    post-increment evaluates to the OLD value - so `((i++))` at `i == 0`, under the script's
+    `set -euo pipefail`, exited 1 before the first line of output. `--out` is the first argument
+    after `--` in every example in the README, the script's own help and the testing doc, which
+    put `i` at exactly 0. The symptom was nothing at all: no bag, no message, no stderr.
+    """
+
+    def test_no_shell_script_increments_with_a_bare_double_paren(self):
+        import re
+
+        pattern = re.compile(r"^(?!\s*#).*\(\(\s*\w+\s*(\+\+|--)\s*\)\)")
+        offenders = [
+            f"{script.name}:{number}: {line.strip()}"
+            for script in sorted((REPO / "scripts").glob("*.sh"))
+            for number, line in enumerate(script.read_text().splitlines(), 1)
+            if pattern.match(line) and "for ((" not in line
+        ]
+        assert not offenders, (
+            "a bare ((i++)) is exit status 1 whenever i is 0, and every script here runs under "
+            "set -e. Use i=$((i + 1)):\n  " + "\n  ".join(offenders)
+        )
+
+    def test_out_is_parsed_out_of_the_passthrough_wherever_it_sits(self):
+        """Including first, which is the position that used to kill the script."""
+        import subprocess
+        import textwrap
+
+        loop = (REPO / "scripts" / "ros-bag.sh").read_text()
+        start = loop.index('OUT=""')
+        end = loop.index("[[ -n \"$OUT\" ]]")
+        script = textwrap.dedent(f"""
+            set -euo pipefail
+            PASSTHROUGH=("$@")
+            {loop[start:end]}
+            echo "$OUT|$WANT_LIGHTS|${{FILTERED[*]-}}"
+        """)
+        run = lambda *args: subprocess.run(  # noqa: E731
+            ["bash", "-c", script, "_", *args], capture_output=True, text=True
+        )
+
+        first = run("--out", "bags/j1-001")
+        assert first.returncode == 0, f"the loop exited {first.returncode} with no output"
+        assert first.stdout.strip() == "bags/j1-001|0|"
+
+        later = run("--traffic", "live", "--out", "bags/x", "--lights", "tape")
+        assert later.stdout.strip() == "bags/x|1|--traffic live --lights tape"
+
+        absent = run("--agent-policy", "idm")
+        assert absent.stdout.strip() == "|0|--agent-policy idm"

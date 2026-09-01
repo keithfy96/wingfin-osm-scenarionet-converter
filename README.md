@@ -306,7 +306,8 @@ if it needs to survive a press.
 ```bash
 uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yaml \
   --routes workspaces/junction-1/routes/routes.json \
-  --actors workspaces/junction-1/actors/actors.json
+  --actors workspaces/junction-1/actors/actors.json \
+  --signals workspaces/junction-1/signals/signals.json
 ```
 
 **`--actors` needs `--routes`.** Without a route the dataset is one frame long and
@@ -1684,6 +1685,9 @@ Out comes a **rosbag2** — MCAP with per-chunk zstd, under the same topic names
 types the vehicle rig records, so a simulated bag and a real one are interchangeable to whatever
 reads them. Every flag a drive already has works: `--traffic live`, `--agent-policy`,
 `--step-hz`, `--camera-rig`.
+
+**How to check any of that yourself is `docs/testing-ros.md`** — five tiers, cheapest first,
+with what each one proves and what each failure means.
 
 **And it carries what a recorded drive cannot: the answers.** A 3D box on every pedestrian,
 cyclist, cone and car actually in the scene, the colour of every traffic light, the ego's pose,
