@@ -154,6 +154,67 @@ prints nothing new. The input is **one `.mcap` file**, not the rig running and n
 source package. Its one honest failure: a definition is written by the recorder, so a bag whose
 writer supplied none carries none - those topics come back under "no definition recorded".
 
+## The camera topics, measured 2026-09-02 (stage 11 phase 1)
+
+`sensor_msgs/CameraInfo` is core, so the six `camera_info_latched` topics needed no message
+definition - only a rig. They are declared always and written only on a `--camera-rig` drive,
+exactly like `/tf_static`, which had never once reached a bag until this.
+
+```bash
+METADRIVE_PYTHON=.venv/bin/python ./scripts/ros-bag.sh junction-1 -- \
+    --out bags/phase1-cams --camera-rig rigs/cams.txt --render offscreen
+```
+
+| | without a rig | with `rigs/cams.txt` |
+|---|---|---|
+| messages | 3,641 | **3,648** |
+| channels | 11 | **18** |
+| `camera_info_latched` | 0 | 6, one message each |
+| `/tf_static` | absent | 1 message, **7** transforms |
+| coverage | 7 / 45 (14 declared) | **14 / 45** |
+
+Seven transforms against six topics, and the difference is deliberate: `cams.txt`'s seventh
+camera `cam_front_wide` has no channel on the vehicle, so it is mounted, rendered and in the
+transform tree, and given no `cam_sync_rig` topic. Inventing one would put a channel in our bag
+that the rig's bag cannot have.
+
+**The intrinsics, recovered from `k` rather than read off the spec:** `f=365.6 px`, `fov 70.0 deg`
+horizontal and `43.0 deg` vertical, on all six 512x288 cameras. That is `(width/2) / tan(fov/2)`
+back out again, and it is the check worth having - `camera_rig.mount` sets the lens with panda3d's
+one-argument `setFov`, which is the **horizontal** angle, and reading it as vertical on a 16:9
+frame is a 1.78x error in `fx` that changes no picture and reprojects every box wrong.
+
+`d` is empty against an empty `distortion_model`, not `plumb_bob` with five zeros: five zeros
+would claim a calibration was performed and came out perfect, which is the same untruth
+`UNKNOWN_COVARIANCE` exists to avoid.
+
+`ros_probe` on that bag: **all 16 checks passed**, two of them new - every `camera_info` latched
+at exactly one message, and every one joining a `/tf_static` transform by `frame_id`. A camera
+present in one and absent from the other is a half-converted rig, and both topics deserialise
+perfectly on their own, so nothing else notices.
+
+### The two cameras whose name and aim disagree
+
+`rigs/cams.txt` reads `+yaw` as **right** on its front pair and as **left** on its back pair, so
+two of its four side cameras are named backwards under either reading. MetaDrive's own rig
+description says so independently, from the same file:
+
+```
+cam_back_left   H -125.0  aims 125 deg to the right, i.e. rear-right
+cam_back_right  H +125.0  aims 125 deg to the left,  i.e. rear-left
+```
+
+So `cam_back_left` publishes on `.../rear_left/camera_info_latched` and is mounted aiming
+rear-right. **This is reported, never corrected.** Renaming the topic would contradict the spec's
+own labels; rotating the mount would put a camera somewhere the drive never rendered from. Three
+sources, each right about something different: `RIG_CAMERA_NAMES` follows the labels, `/tf_static`
+carries the geometry, and `camera_side_disagreements` names every camera where they part company -
+printed by `drive.py` as the recording starts and by `ros_probe.py` off the bag. Exactly two rows
+on `cams.txt`; **none on `rigs/av3.txt`**, whose header claims both columns agree by construction
+and which is now tested for it.
+
+Follow `frame_id` into the transform, not the topic name.
+
 ## What a full ladder run measured, 2026-09-01
 
 Every tier of `docs/testing-ros.md`, run end to end on `junction-1` a month after the figures
@@ -344,6 +405,11 @@ reads the file directly, distro-free) rather than `ros2 bag`.
   from (`camera_rig.py:130`). x is RIGHT, y is FORWARD, `+heading` is LEFT. ROS `base_link` is x
   forward, y left, `+yaw` left - so forward and lateral swap, the lateral one negates, and the
   yaw sign is already correct and must be left alone.
+- **A camera's topic name is not its aim.** `rigs/cams.txt` reads `+yaw` as right at the front
+  and as left at the back, so `cam_back_left` publishes as `rear_left` and is mounted aiming
+  rear-right. `/tf_static` carries the geometry; follow `frame_id` into the transform rather than
+  trusting the topic. Both `drive.py` and `ros_probe.py` print a `NAME/AIM` line for every camera
+  where the two disagree - two on `cams.txt`, none on `av3.txt`.
 - **Two attributes name a kind:** `TYPE_NAME` on traffic participants, `CLASS_NAME` on static
   objects. Reading only the first gives `TrafficBarrier` where the dataset says
   `TRAFFIC_BARRIER`.

@@ -295,6 +295,94 @@ def probe(path, workspace=None, out=sys.stdout):
     else:
         print("        no GNSS in this bag (the dataset carried no projection)", file=out)
 
+    # --- 8. the cameras: a lens on one topic and a mount on another, checked against each
+    # other rather than against the spec they were both built from ------------------------
+    infos = {
+        topic: by_topic[topic][-1][1]
+        for topic in ros_schema.CAMERA_INFO_TOPICS
+        if by_topic.get(topic)
+    }
+    if infos:
+        transforms = {
+            t.child_frame_id: t
+            for _, message in by_topic.get(ros_schema.TF_STATIC, [])
+            for t in message.transforms
+        }
+        checks.check(
+            "every camera_info is latched - exactly one message, not one per frame",
+            all(len(by_topic[topic]) == 1 for topic in infos),
+            ", ".join(f"{t.split('/')[-2]}={len(by_topic[t])}" for t in sorted(infos)),
+        )
+        # The join. `camera_info` names a frame and `tf_static` defines one, and the two were
+        # built from opposite ends of `camera_rig.Camera` - so a camera present in one and
+        # absent from the other is a rig that was only half converted. Nothing else notices:
+        # both topics deserialise perfectly on their own.
+        orphans = sorted(
+            m.header.frame_id for m in infos.values() if m.header.frame_id not in transforms
+        )
+        checks.check(
+            "every camera_info's frame has a transform in tf_static",
+            not orphans,
+            f"{len(infos)} cameras, {len(transforms)} static transforms"
+            + (f"; no transform for {', '.join(orphans)}" if orphans else ""),
+        )
+        # The intrinsics, checked as a relationship rather than against a remembered focal
+        # length: a square-pixel pinhole has fx == fy, its principal point at the centre of the
+        # image, and `p` equal to `k` with a zero translation column. Get the FOV-to-focal
+        # conversion wrong and every one of those still holds - so the horizontal angle each
+        # `k` implies is printed, to be read against the spec's own `fov`.
+        bad = []
+        for topic, message in sorted(infos.items()):
+            fx, fy = message.k[0], message.k[4]
+            cx, cy = message.k[2], message.k[5]
+            square = abs(fx - fy) < 1e-6
+            centred = (
+                abs(cx - message.width / 2.0) < 1e-6 and abs(cy - message.height / 2.0) < 1e-6
+            )
+            projected = (
+                abs(message.p[0] - fx) < 1e-6
+                and abs(message.p[2] - cx) < 1e-6
+                and abs(message.p[3]) < 1e-12
+                and abs(message.p[7]) < 1e-12
+            )
+            if not (square and centred and projected):
+                bad.append(topic.split("/")[-2])
+            fov = 2.0 * math.degrees(math.atan((message.width / 2.0) / fx)) if fx else 0.0
+            vertical = 2.0 * math.degrees(math.atan((message.height / 2.0) / fx)) if fx else 0.0
+            print(
+                f"        {topic.split('/')[-2]:<14} {message.width}x{message.height}  "
+                f"f={fx:.1f}px  fov {fov:.1f} deg h / {vertical:.1f} deg v  "
+                f"frame {message.header.frame_id}",
+                file=out,
+            )
+        checks.check(
+            "each K is a square-pixel pinhole centred on its image, and P agrees with it",
+            not bad,
+            "fx==fy, principal point at the centre, P = K with a zero translation column"
+            + (f"; wrong on {', '.join(bad)}" if bad else ""),
+        )
+        # Printed and deliberately **not** checked. Which way a camera faces is the spec file's
+        # business, and `rigs/cams.txt` contradicts itself about it - `+yaw` is right on its
+        # front pair and left on its back pair, so two of its four side cameras are named
+        # backwards under either reading (`camera_rig.Camera.aim` has the measurement). Failing
+        # a bag for faithfully carrying that would be blaming the writer for the input; hiding
+        # it would be worse. `rigs/av3.txt`, generated with both columns agreeing, prints none.
+        mounts = {}
+        for topic, message in infos.items():
+            found = transforms.get(message.header.frame_id)
+            if found is not None:
+                yaw = _yaw(found.transform.rotation)
+                mounts[topic.split("/")[-2]] = (message.header.frame_id, yaw)
+        for name, claimed, aimed in ros_schema.camera_side_disagreements(mounts):
+            print(
+                f"        NAME/AIM  {mounts[name][0]} publishes as {name}, which claims "
+                f"{claimed}, and is mounted aiming {aimed} - the spec's labels disagree with "
+                "its yaw column. tf_static carries the geometry.",
+                file=out,
+            )
+    else:
+        print("        no cameras in this bag (the drive mounted no --camera-rig)", file=out)
+
     print(file=out)
     if checks.failed:
         print(f"  {len(checks.failed)} FAILED: {', '.join(checks.failed)}", file=out)
@@ -325,10 +413,16 @@ def coverage(path=None, out=sys.stdout):
     produced, declared = len(ledger["produced"]), len(ledger["declared"])
 
     note = ""
+    quiet = []
     if written is not None and produced < declared:
         quiet = [row.topic for row in ledger["declared"] if row.topic not in written]
-        note = f"   ({declared} declared; {', '.join(quiet)} not on the wire)"
+        note = f"   ({declared} declared, {len(quiet)} not on the wire)"
     print(f"\n  rig topics produced      {produced} / {total}{note}", file=out)
+    # Listed on their own lines rather than inline: a drive with no `--camera-rig` leaves seven
+    # declared topics unwritten, and seven full `cam_sync_rig` paths on one line is a wrapped
+    # mess that hides the one thing this note exists to say.
+    for topic in quiet:
+        print(f"      declared, not written   {topic}", file=out)
 
     print("\n  absent, by the phase that lands it", file=out)
     for phase, rows in ledger["absent"].items():

@@ -52,9 +52,9 @@ Measured rates are from `bag_audit.html`; `latched` means a single message at th
 | `/sensing/camera/cam_sync_rig/rear_middle/image_raw/ffmpeg` | 20 | ✅ |
 | `/sensing/camera/cam_sync_rig/rear_right/image_raw/ffmpeg` | 20 | ✅ |
 | `…/front_left/meta` … `…/rear_right/meta` (6) | 20 | ✅ |
-| `…/front_left/camera_info_latched` … `…/rear_right/camera_info_latched` (6) | latched | ✅ intrinsics come off the rig spec's `width` / `height` / `fov` |
+| `…/front_left/camera_info_latched` … `…/rear_right/camera_info_latched` (6) | latched | ✅ **written** (stage 11 phase 1). Intrinsics come off the rig spec's `width` / `height` / `fov`; needs a `--camera-rig` drive |
 | `/tf` | 86.6 | ✅ |
-| `/tf_static` | latched | ✅ |
+| `/tf_static` | latched | ✅ **written** on a `--camera-rig` drive (stage 11 phase 1) |
 | `/localization/odometry` | 43.9 | ✅ |
 | `/vehicle/state` | 100 | ✅ |
 | `/vehicle/actuators_output` | 100 | ✅ |

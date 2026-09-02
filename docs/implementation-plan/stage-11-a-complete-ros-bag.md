@@ -2,8 +2,9 @@
 
 ## Status
 
-**Nothing here is built.** Stage 10 produces a bag that real ROS 2 reads and rviz2 renders; this
-stage is about how much of the vehicle rig's bag it actually covers, which is **8 of 45**.
+**Phases 0 and 1 are built; 2 to 5 are not.** Stage 10 produces a bag that real ROS 2 reads and
+rviz2 renders; this stage is about how much of the vehicle rig's bag it actually covers, which
+was **8 of 45** when this was written and is **14 of 45** now that phase 1 has landed.
 
 Written 2026-09-02, after the question *"so it should generate all 45 topics already?"* could not
 be answered by any command in the repo. Every count below was derived by script against
@@ -16,10 +17,10 @@ The reference throughout is `bag_audit.html` at the repo root, the audit of the 
 ## Summary
 
 ```text
-Stage 10: the drive written out as a ROS 2 bag  (8 of the rig's 45 topics)
+Stage 10: the drive written out as a ROS 2 bag  (8 of the rig's 45 topics)  <- where this began
   -> Stage 11: the rest of the bag, in six phases, each one testable on its own
        phase 0  the ledger and the definition extractor      8 / 45   done
-       phase 1  camera_info_latched + tf_static             14 / 45
+       phase 1  camera_info_latched + tf_static             14 / 45   done
        phase 2  the SBG GNSS family                         23 / 45
        phase 3  /sensing/lidar/points                       24 / 45
        phase 4  image_raw/ffmpeg - the encoder              30 / 45
@@ -49,7 +50,12 @@ producible.** The ten are CAN (`can_rx`, `can_tx` - there is no bus), the cabin 
 
 **55 - 10 = 45**, and that is the target.
 
-### What Stage 10 covers: 8 declared, 7 on the wire
+### What Stage 10 covered: 8 declared, 7 on the wire
+
+The state this plan was written against. **Phase 1 has since made it 14 and 7** - it added the
+six `camera_info_latched` topics, which are declared always and written only on a
+`--camera-rig` drive, exactly like `/tf_static`. The table below is left as it stood so the
+starting point stays legible; `tools/ros_probe.py --coverage` is the live figure.
 
 | | count |
 |---|---|
@@ -183,6 +189,8 @@ exists to have avoided.
   uv run python tools/ros_probe.py bags/j1-lights --coverage     # what reached the wire
   ```
 
+  As it printed the day 0b landed, with phase 1 still ahead of it:
+
   ```text
     rig topics produced      8 / 45
 
@@ -229,22 +237,78 @@ exists to have avoided.
   *Acceptance criterion for everything after:* a phase is done when this count moves by the
   number it claimed, and `uv run pytest` still passes.
 
-- [ ] **Phase 1 - `camera_info_latched` ×6, and `/tf_static` finally exercised.** `+6`
-  `sensor_msgs/CameraInfo` is core, and every intrinsic it needs - `width`, `height`, `fov` - is
-  already parsed into `camera_rig.Camera`. One latched message each. The same drive lights up
-  `/tf_static`, whose mount conversion is built and tested (`ros_frame.mounts_from_rig`) and has
-  **never once been written into a bag**.
+- [x] **Phase 1 - `camera_info_latched` ×6, and `/tf_static` finally exercised.** `+6`
+  **7 / 45 -> 14 / 45 declared. Done 2026-09-02.**
 
-  Needs a name map. `rigs/cams.txt` declares seven cameras -
-  `cam_left` · `cam_front` · `cam_right` · `cam_back_left` · `cam_back` · `cam_back_right`, plus
-  `cam_front_wide`, a spare with no rig topic - against the rig's six,
-  `front_left` · `front_middle` · `front_right` · `rear_left` · `rear_middle` · `rear_right`.
+  ```bash
+  METADRIVE_PYTHON=.venv/bin/python ./scripts/ros-bag.sh junction-1 -- \
+      --out bags/phase1-cams --camera-rig rigs/cams.txt --render offscreen
+  uv run python tools/ros_probe.py bags/phase1-cams --workspace workspaces/junction-1
+  uv run python tools/ros_probe.py bags/phase1-cams --coverage
+  ```
 
-  *Verify:* `--camera-rig rigs/cams.txt` writes six `camera_info_latched` and a `/tf_static`; a
-  probe check that each `CameraInfo`'s `K` is consistent with the FOV and size it was built from;
-  and **that the left and right cameras have not traded places** - `cam_left` is spec `yaw: -55`,
-  stored by `camera_rig.py:414` as `hpr[0] = +55`, and `+55` in ROS is 55° to the left. Every
-  part of that is silent when wrong.
+  `sensor_msgs/CameraInfo` is core, so unlike everything still absent these needed **no message
+  definition at all** - only a rig. Every intrinsic was already in `camera_rig.Camera`:
+  `focal_length_px` is `(width/2) / tan(fov/2)`, because `camera_rig.mount` sets the lens with
+  panda3d's one-argument `setFov`, which takes the **horizontal** angle. `fy == fx`, the
+  principal point is the image centre, `p` is `k` with a zero translation column, and `d` is
+  **empty against an empty `distortion_model`** - `plumb_bob` with five zeros would claim a
+  calibration was done and came out perfect, which is the same untruth `UNKNOWN_COVARIANCE`
+  exists to avoid.
+
+  The same drive lights up `/tf_static`, which had never once been written into a bag.
+
+  Measured on `bags/phase1-cams`, a 364-frame replay of junction-1:
+
+  ```
+  3641 messages, 11 channels   ->   3648 messages, 18 channels
+  +6 camera_info_latched (one each, latched) +1 tf_static (7 transforms)
+  ```
+
+  **The name map, and the one place it is contested.** `rigs/av3.txt` was generated from the
+  checkpoint's own `camera_order`, so its six names are already the rig's and the map is the
+  identity. `rigs/cams.txt` names its cameras after the file and needs a translation - and
+  **contradicts itself about which way two of them face.** `camera_rig.Camera.aim` had already
+  measured it: that file reads `+yaw` as right on its front pair and as left on its back pair, so
+  two of its four side cameras are named backwards under either reading, and `cam_back_left` is
+  mounted aiming rear-**right**.
+
+  Three sources, none allowed to overrule another in silence: `RIG_CAMERA_NAMES` follows the
+  spec's labels, `/tf_static` carries the geometry, and `camera_side_disagreements` names every
+  camera where the two part company - printed by `drive.py` as the recording starts and by
+  `ros_probe.py` off the bag afterwards. It is **printed and never checked**, because the
+  disagreement is a property of the input file and failing a bag for faithfully carrying it would
+  be blaming the writer for the spec. `rigs/cams.txt` yields exactly two rows; `rigs/av3.txt`
+  yields none, which is its own header's claim, now tested.
+
+  `cam_front_wide` gets a `/tf_static` transform and **no rig topic**: it is a seventh buffer with
+  no channel on the vehicle, and inventing a seventh `cam_sync_rig` topic would put something in
+  our bag the rig's bag cannot have. Six lenses, seven transforms - and the probe checks each
+  `camera_info`'s `frame_id` against a real transform, since a camera in one and not the other is
+  a half-converted rig that deserialises perfectly on both topics.
+
+  *Verified.* `ros_probe` on the bag: **all 16 checks passed**, two of them new - every
+  `camera_info` latched at exactly one message, and every one joining a `tf_static` transform -
+  plus the intrinsics check (`fx == fy`, principal point centred, `p` agreeing with `k`) and the
+  recovered angle printed per camera, `f=365.6 px, fov 70.0° h / 43.0° v` on all six, which is
+  the spec's own 70 back out of `k`. In `tests/unit/test_ros_schema.py`, 19 new tests across
+  `TestTheCameraIntrinsics`, `TestTheRigCameraNames` and `TestTheCameraTopicsInAWrittenBag` - the
+  last writing a real MCAP from `rigs/cams.txt` itself, so a change to that file cannot quietly
+  invalidate them, and asserting the six topics are offered **transient-local** like the route.
+  `uv run pytest`: **881 passed, 2 skipped** (from 862). `uv run ruff check .` clean.
+
+  **One defect found on the way, and it is the one this phase made worth fixing.**
+  `--ros-topics` says "the subset of the `--ros-bag` topics to write", and
+  `ros_bag.start_episode` never consulted it: the route and `/tf_static` went in unconditionally,
+  so `--ros-topics /tf` produced a bag of three channels. That was two surprises and would have
+  become eight. `_wanted` now gates all three kinds of latched topic, pinned by a test that
+  selects `/tf` plus one camera and asserts the bag holds exactly those two. The flag is what
+  makes per-phase testing cheap, so a flag that quietly keeps eight other channels is worth more
+  than a cosmetic fix.
+
+  *The count moved by exactly the 6 it claimed*, and the two numbers stay apart: 14 declared,
+  and 7 on the wire for a drive with no rig - `tools/ros_probe.py bags/j1-lights --coverage` now
+  lists all seven declared-but-unwritten topics by name.
 
 - [ ] **Phase 2 - the SBG GNSS family.** `+9`
   `sbg_ros2_driver` is public; copy the `.msg` text **verbatim** into `EXTRA_DEFINITIONS`. Seven
@@ -339,6 +403,14 @@ uv run pytest && uv run ruff check .
   kind of thing nothing downstream would question.
 - **45 of 45 is not parity.** The ten ❌ topics stay absent on purpose, and `/vehicle/can_tx` was
   empty in the rig's bag anyway. A bag that claimed 55 would be claiming a CAN bus.
+- **`rigs/cams.txt` contradicts itself about which way two of its cameras face**, and phase 1
+  reports that rather than resolving it. Its front pair reads `+yaw` as right and its back pair
+  reads it as left, so `cam_back_left` publishes as `rear_left` and is mounted aiming rear-right.
+  The transform carries the geometry and a consumer that follows `frame_id` gets the truth; one
+  that trusts the topic name alone does not. Nothing here can fix that - **the spec file is what
+  disagrees** - and the only two honest moves are to say so on every run, which `drive.py` and
+  `ros_probe.py` now do, or to correct `cams.txt`, which would reprice every step-timing figure
+  in the repo. `rigs/av3.txt` has both columns agreeing by construction and yields no rows.
 
 ## Related
 

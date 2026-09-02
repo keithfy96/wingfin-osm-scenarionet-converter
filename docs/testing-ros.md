@@ -371,9 +371,18 @@ the row.
   move `generation_fingerprint` and the Stage 3 lane review keeps applying. It does rewrite the
   workspace's dataset, which is tracked in git.
 
-- **No cameras.** `image_raw/ffmpeg` is 18 of the rig's 55 topics and the encoder is not
-  written — no pixel has ever reached a bag. The mount conversion and `/tf_static` are built
-  and tested, so what is missing is the encoding, not the geometry.
+- **No pixels.** `image_raw/ffmpeg` is 6 of the rig's 55 topics and the encoder is not written —
+  no picture has ever reached a bag. Everything *around* the pictures now has: as of stage 11
+  phase 1 a `--camera-rig` drive writes the six `camera_info_latched` topics and the `/tf_static`
+  transform tree, so a consumer has each camera's intrinsics and its mount before a single frame
+  exists. What is missing is the encoding, not the geometry.
+
+- **`rigs/cams.txt` disagrees with itself about which way two cameras face**, and the bag reports
+  that rather than picking a side. Its front pair reads `+yaw` as right and its back pair reads it
+  as left, so `cam_back_left` publishes as `rear_left` and is mounted aiming rear-**right**.
+  `drive.py` prints a `NAME/AIM` line as the recording starts and `ros_probe.py` prints one off
+  the bag; `/tf_static` carries the geometry, so follow `frame_id` rather than the topic name.
+  `rigs/av3.txt` has no such rows.
 
 - **24 of the rig's 55 topics stay omitted** for want of a `.msg` definition
   (`ros_schema.MISSING_DEFINITIONS`; `tools/ros_probe.py --coverage` counts them), omitted rather than published under a substitute type: a

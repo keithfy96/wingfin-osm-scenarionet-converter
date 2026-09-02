@@ -1203,6 +1203,42 @@ def _ground_around(engine, path, radius_m=25):
     return highest, above / total
 
 
+def _report_camera_topics(cameras, mounts, unmapped):
+    """Which rig topic each mounted camera went out on, and every place the two disagree.
+
+    Printed at the start of a recording rather than left to a probe afterwards, because both
+    things it reports are properties of the *spec file*, and the moment to see them is while the
+    file is still the thing under discussion.
+
+    Two distinct reports, and neither is a fault in the bag:
+
+      * a spec camera with no counterpart on the vehicle gets a `/tf_static` transform and no
+        `camera_info` - `rigs/cams.txt`'s `cam_front_wide`, a spare with no rig channel.
+      * a camera whose rig topic and whose mount disagree about which side it faces.
+        `rigs/cams.txt` yields exactly two, its back pair, because that file reads `+yaw` as
+        right at the front and as left at the back (`camera_rig.Camera.aim` records the
+        measurement). The transform carries the geometry; the topic carries the label; this
+        line is what stops either of them being taken for the other.
+    """
+    import ros_schema
+
+    for camera in cameras:
+        print(f"ros cameras  {camera.frame_id:<16} -> {ros_schema.camera_topic(camera.name)}")
+    if unmapped:
+        print(
+            f"             no rig topic for {', '.join(unmapped)} "
+            "- mounted and in /tf_static, but not one of the rig's six"
+        )
+    yaws = {camera.name: (camera.frame_id, mounts[camera.frame_id][3]) for camera in cameras}
+    for name, claimed, aimed in ros_schema.camera_side_disagreements(yaws):
+        frame_id = yaws[name][0]
+        print(
+            f"             NAME/AIM  {frame_id} publishes as {name}, which claims {claimed}, "
+            f"but it is mounted aiming {aimed}. The spec's own labels disagree with its yaw "
+            "column; /tf_static carries the geometry."
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("dataset", help="Directory holding dataset_summary.pkl")
@@ -2315,11 +2351,20 @@ def main() -> int:
                 # scenario, and the shift is the 93.8 m trap - carried once here rather than
                 # subtracted at every call site.
                 ros_projection = ros_frame.projection_of(scenario)
+                # A rig supplies both halves of what a consumer needs about a camera: where it is
+                # bolted on (`/tf_static`) and what its lens does (`camera_info_latched`). Neither
+                # is written on a drive with no rig, which is why the coverage report says
+                # "declared" and "on the wire" as two numbers.
+                ros_mounts = ros_frame.mounts_from_rig(rig) if rig is not None else None
+                ros_cameras = ros_frame.cameras_from_rig(rig) if rig is not None else ()
                 ros_bag.start_episode(
                     ros_frame.read(env, 0, 0.0, ros_projection),
                     route=ros_frame.route_of(env),
-                    mounts=ros_frame.mounts_from_rig(rig) if rig is not None else None,
+                    mounts=ros_mounts,
+                    cameras=ros_cameras,
                 )
+                if rig is not None:
+                    _report_camera_topics(ros_cameras, ros_mounts, ros_frame.unmapped_cameras(rig))
             if recorder is not None:
                 recorder.start_episode(scenario_id)
             if remote is not None:

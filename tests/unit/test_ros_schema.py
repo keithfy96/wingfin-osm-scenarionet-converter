@@ -302,9 +302,13 @@ class TestGnss:
 
 class TestTheTopicTable:
     def test_every_per_frame_topic_has_a_builder_and_the_reverse(self):
-        latched = {ros_schema.ROUTE, ros_schema.TF_STATIC}
+        latched = {ros_schema.ROUTE, ros_schema.TF_STATIC, *ros_schema.CAMERA_INFO_TOPICS}
         assert set(BUILDERS) == set(TOPICS) - latched
         assert set(BUILDERS) <= set(TOPICS)
+        # The other half of the same rule: a latched topic is one `ros_bag.start_episode` writes,
+        # and the family in `TOPICS` is what decides its QoS. A topic with no builder and the
+        # "state" family would be declared, offered volatile and never written at all.
+        assert all(TOPICS[topic][1] == "latched" for topic in latched)
 
     def test_topics_are_named_the_way_the_reference_bag_names_them(self):
         for topic in TOPICS:
@@ -404,15 +408,20 @@ class TestTheRigCoverageLedger:
 
         This is the acceptance criterion for phases 1-5 - each is done when the count moves by
         the number it claimed - so the claims live here rather than only in the plan's prose.
+
+        **Phase 1 landed, so 14 is now the floor and 1 is gone from the ladder.** A phase that
+        is done leaves the `absent` table entirely rather than lingering with a count of zero;
+        the running total starting at 14 is what says so.
         """
         ledger = ros_schema.rig_coverage()
         per_phase = {phase: len(rows) for phase, rows in ledger["absent"].items()}
-        assert per_phase == {1: 6, 2: 9, 3: 1, 4: 6, 5: 15}
+        assert per_phase == {2: 9, 3: 1, 4: 6, 5: 15}
         running, ladder = len(ledger["produced"]), []
+        assert running == 14
         for phase in sorted(per_phase):
             running += per_phase[phase]
             ladder.append(running)
-        assert ladder == [14, 23, 24, 30, 45]
+        assert ladder == [23, 24, 30, 45]
 
     def test_nothing_impossible_is_waiting_on_a_message_definition(self):
         """Defect two, made unrepresentable.
@@ -446,7 +455,7 @@ class TestTheRigCoverageLedger:
                 assert bool(row.needs) == (not row.produced), row.topic
                 assert (row.phase is None) == row.produced, row.topic
 
-    def test_the_declared_eight_are_the_rig_topics_this_module_actually_builds(self):
+    def test_the_declared_fourteen_are_the_rig_topics_this_module_actually_builds(self):
         ledger = ros_schema.rig_coverage()
         assert {row.topic for row in ledger["declared"]} == {
             "/tf",
@@ -457,15 +466,21 @@ class TestTheRigCoverageLedger:
             "/sensing/gnss/imu/velocity",
             "/sensing/gnss/imu/nav_sat_fix",
             "/sensing/lidar/imu",
+            *ros_schema.CAMERA_INFO_TOPICS,
         }
 
     def test_a_bag_is_counted_by_what_reached_the_wire_not_by_what_was_declared(self):
-        """8 declared, 7 written: `/tf_static` is guarded by `if mounts:` in `ros_bag.py`, so a
-        drive with no `--camera-rig` declares a transform tree and writes none. Reporting the
-        declared figure against a bag would hide exactly that."""
-        written = {row.topic for row in ros_schema.rig_coverage()["declared"]} - {"/tf_static"}
+        """14 declared, 7 written on a drive with no rig.
+
+        `/tf_static` is guarded by `if mounts:` in `ros_bag.py` and the six `camera_info_latched`
+        topics are written per camera, so a drive that mounts no `--camera-rig` declares a
+        transform tree and six lenses and writes none of them. Reporting the declared figure
+        against such a bag would hide exactly that, and phase 1 doubled how much it would hide.
+        """
+        rig_only = {"/tf_static", *ros_schema.CAMERA_INFO_TOPICS}
+        written = {row.topic for row in ros_schema.rig_coverage()["declared"]} - rig_only
         ledger = ros_schema.rig_coverage(written)
-        assert len(ledger["declared"]) == 8
+        assert len(ledger["declared"]) == 14
         assert len(ledger["produced"]) == 7
 
     def test_the_two_rates_above_the_simulator_tick_are_recorded_as_such(self):
@@ -484,7 +499,7 @@ class TestTheRigCoverageLedger:
         rendered = io.StringIO()
         assert ros_probe.coverage(None, out=rendered)
         text = rendered.getvalue()
-        assert "8 / 45" in text
+        assert "14 / 45" in text
         assert "phase 5" in text
         assert "24 direct, 21 approximate, 10 not producible" in text
 
@@ -937,3 +952,279 @@ class TestReadingDefinitionsBackOutOfABag:
         with pytest.raises(ValueError, match="no bag at"):
             ros_defs.read(tmp_path / "not-a-bag")
         assert ros_defs.main([str(tmp_path / "not-a-bag")]) == 1
+
+
+class TestTheCameraIntrinsics:
+    """`camera_info_message` - the six `camera_info_latched` topics stage 11 phase 1 landed.
+
+    These needed no message definition: `sensor_msgs/CameraInfo` is core, and every number in it
+    was already sitting in `camera_rig.Camera`. What they need is a rig, which is why they are
+    declared always and written only on a `--camera-rig` drive - the same shape as `/tf_static`,
+    and the reason the coverage report prints "declared" and "on the wire" as two numbers.
+
+    The fault to guard against is not a crash. A `CameraInfo` with the wrong focal length
+    deserialises perfectly, draws a frustum in rviz2 and reprojects every box a few degrees off
+    - so the checks below are on relationships (fx == fy, the principal point at the centre,
+    `p` agreeing with `k`) plus one arithmetic anchor, rather than on a remembered number.
+    """
+
+    def _info(self, width=512, height=288, fov=70.0):
+        return ros_schema.camera_info_message(
+            1.5,
+            ros_schema.CameraSpec(
+                name="front_middle", frame_id="cam_front", width=width, height=height,
+                fov_deg=fov,
+            ),
+        )
+
+    def test_the_focal_length_is_the_horizontal_fov_the_lens_was_set_to(self):
+        """`camera_rig.mount` calls panda3d's one-argument `setFov`, which is the HORIZONTAL
+        angle. Reading it as vertical on a 16:9 frame is a 1.78x error in fx that nothing
+        raises: the picture is unchanged and only the reprojection is wrong."""
+        focal = ros_schema.focal_length_px(512, 70.0)
+        assert focal == pytest.approx(256.0 / math.tan(math.radians(35.0)))
+        assert focal == pytest.approx(365.6, abs=0.1)
+        # The inverse has to come back, or a consumer recovering the FOV from K gets a different
+        # camera than the one that rendered.
+        recovered = 2.0 * math.degrees(math.atan((512 / 2.0) / focal))
+        assert recovered == pytest.approx(70.0)
+
+    def test_a_wider_lens_is_a_shorter_focal_length(self):
+        assert ros_schema.focal_length_px(512, 120.0) < ros_schema.focal_length_px(512, 70.0)
+
+    def test_the_pixels_are_square_and_the_principal_point_is_the_centre(self):
+        info = self._info()
+        assert info["k"][0] == info["k"][4]
+        assert (info["k"][2], info["k"][5]) == (256.0, 144.0)
+        assert info["k"][8] == 1.0
+        assert (info["width"], info["height"]) == (512, 288)
+
+    def test_p_is_k_with_a_zero_translation_column(self):
+        """There is no stereo baseline because there is no stereo pair. A non-zero `p[3]` would
+        tell a consumer this camera is offset from a rectified rig that does not exist."""
+        info = self._info()
+        k, p = info["k"], info["p"]
+        assert p == [k[0], 0.0, k[2], 0.0, 0.0, k[4], k[5], 0.0, 0.0, 0.0, 1.0, 0.0]
+        assert info["r"] == [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+
+    def test_no_distortion_is_claimed_rather_than_a_measured_zero(self):
+        """`plumb_bob` with five zeros would say a calibration was done and came out perfect,
+        which no calibration ever does. An empty model against an empty `d` is ROS's way of
+        saying the publisher does not model one - the same rule `UNKNOWN_COVARIANCE` follows."""
+        info = self._info()
+        assert info["distortion_model"] == ""
+        assert info["d"] == []
+
+    def test_the_frame_is_the_cameras_own_and_the_stamp_is_the_frames(self):
+        info = self._info()
+        assert info["header"]["frame_id"] == "cam_front"
+        assert info["header"]["stamp"] == stamp(1.5)
+
+
+class TestTheRigCameraNames:
+    """Which rig topic a spec's camera goes out on, and the one place the answer is contested.
+
+    `rigs/av3.txt` was generated from the checkpoint's own `camera_order`, so its six names are
+    already the rig's and the map is the identity. `rigs/cams.txt` names its cameras after the
+    file rather than the vehicle, needs a translation - and **contradicts itself about which way
+    two of them face.** `camera_rig.Camera.aim` has the measurement: that file reads `+yaw` as
+    right on its front pair and as left on its back pair, so two of its four side cameras are
+    named backwards under either reading.
+
+    The map follows the names; `/tf_static` carries the geometry; `camera_side_disagreements`
+    names every camera where the two part company. None of the three is allowed to silently
+    overrule another, because each is right about something different.
+    """
+
+    def _rig(self, name):
+        import camera_rig
+
+        return camera_rig.load_rig(REPO / "rigs" / name, read_interval_s=None)
+
+    def test_the_av3_rig_needs_no_translation_at_all(self):
+        import ros_frame
+
+        cameras = ros_frame.cameras_from_rig(self._rig("av3.txt"))
+        assert {camera.name for camera in cameras} == {
+            "front_left", "front_middle", "front_right",
+            "rear_left", "rear_middle", "rear_right",
+        }
+        assert all(camera.name == camera.frame_id for camera in cameras)
+        assert ros_frame.unmapped_cameras(self._rig("av3.txt")) == ()
+
+    def test_the_cams_rig_translates_to_the_same_six(self):
+        import ros_frame
+
+        cameras = ros_frame.cameras_from_rig(self._rig("cams.txt"))
+        assert {camera.name for camera in cameras} == {
+            "front_left", "front_middle", "front_right",
+            "rear_left", "rear_middle", "rear_right",
+        }
+        by_rig_name = {camera.name: camera.frame_id for camera in cameras}
+        assert by_rig_name["front_left"] == "cam_left"
+        assert by_rig_name["front_middle"] == "cam_front"
+
+    def test_the_spare_camera_gets_no_invented_topic(self):
+        """`cam_front_wide` is a seventh buffer with no channel on the vehicle. It is mounted,
+        rendered and in `/tf_static`, where it is honestly a seventh camera; giving it a
+        `cam_sync_rig` topic would put a channel in our bag that the rig's bag cannot have."""
+        import ros_frame
+
+        rig = self._rig("cams.txt")
+        assert len(rig.cameras) == 7
+        assert len(ros_frame.cameras_from_rig(rig)) == 6
+        assert ros_frame.unmapped_cameras(rig) == ("cam_front_wide",)
+
+    def test_every_rig_name_maps_to_a_topic_the_reference_bag_has(self):
+        rig_topics = {row.topic for row in ros_schema.RIG_TOPICS}
+        for rig_name in set(ros_schema.RIG_CAMERA_NAMES.values()):
+            assert ros_schema.camera_topic(rig_name) in rig_topics, rig_name
+
+    def test_a_side_is_read_off_a_yaw_the_way_the_rig_names_divide_the_car(self):
+        assert ros_schema.aim_side(math.radians(55.0)) == "left"
+        assert ros_schema.aim_side(math.radians(-55.0)) == "right"
+        assert ros_schema.aim_side(0.0) == "middle"
+        assert ros_schema.aim_side(math.pi) == "middle"
+        assert ros_schema.aim_side(math.radians(-179.0)) == "middle"
+        assert ros_schema.named_side("front_left") == "left"
+        assert ros_schema.named_side("rear_middle") == "middle"
+
+    def test_the_av3_rig_has_no_camera_whose_name_and_aim_disagree(self):
+        """Its header says both columns agree by construction. This is that claim, checked."""
+        import ros_frame
+
+        rig = self._rig("av3.txt")
+        mounts = ros_frame.mounts_from_rig(rig)
+        pairs = {
+            camera.name: (camera.frame_id, mounts[camera.frame_id][3])
+            for camera in ros_frame.cameras_from_rig(rig)
+        }
+        assert ros_schema.camera_side_disagreements(pairs) == []
+
+    def test_the_cams_rig_disagrees_about_exactly_its_back_pair(self):
+        """The known defect in the input file, pinned so it stays visible rather than becoming
+        folklore. `cam_back_left` is spec `yaw: 125`, which under the reading its own front pair
+        uses is 125 degrees to the RIGHT - so it publishes as `rear_left` and points rear-right.
+        Neither the topic nor the transform is altered to hide it."""
+        import ros_frame
+
+        rig = self._rig("cams.txt")
+        mounts = ros_frame.mounts_from_rig(rig)
+        pairs = {
+            camera.name: (camera.frame_id, mounts[camera.frame_id][3])
+            for camera in ros_frame.cameras_from_rig(rig)
+        }
+        assert ros_schema.camera_side_disagreements(pairs) == [
+            ("rear_left", "left", "right"),
+            ("rear_right", "right", "left"),
+        ]
+        # The front pair is not affected, and that is the half the plan called out by name.
+        assert pairs["front_left"][1] > 0
+        assert pairs["front_right"][1] < 0
+
+
+class TestTheCameraTopicsInAWrittenBag:
+    """The end of phase 1: six lenses and a transform tree, in a real MCAP file.
+
+    Written with `rigs/cams.txt` itself rather than a hand-built rig, so a change to that file
+    cannot quietly invalidate this - the same reason `TestTheCameraMountConversion` parses it.
+    """
+
+    @staticmethod
+    def _bag(tmp_path):
+        import camera_rig
+        import ros_bag
+        import ros_frame
+
+        rig = camera_rig.load_rig(REPO / "rigs" / "cams.txt", read_interval_s=None)
+        frame = _frame()
+        path = tmp_path / "camera-bag"
+        with ros_bag.BagWriter(path, topics=None, notes={}) as bag:
+            bag.start_episode(
+                frame,
+                mounts=ros_frame.mounts_from_rig(rig),
+                cameras=ros_frame.cameras_from_rig(rig),
+            )
+            bag.write(frame)
+        return path
+
+    @staticmethod
+    def _read(path):
+        import ros_probe
+
+        by_topic, _ = ros_probe.load(path)
+        return by_topic
+
+    def test_six_camera_infos_and_one_tf_static_reach_the_bag(self, tmp_path):
+        by_topic = self._read(self._bag(tmp_path))
+        for topic in ros_schema.CAMERA_INFO_TOPICS:
+            assert len(by_topic[topic]) == 1, topic
+        assert len(by_topic[ros_schema.TF_STATIC]) == 1
+
+    def test_the_transform_tree_carries_all_seven_cameras(self, tmp_path):
+        """Six on topics and one without. `cam_front_wide` has no rig channel, but it is on the
+        car and a bag that omitted its transform would be describing a rig it did not render."""
+        by_topic = self._read(self._bag(tmp_path))
+        _, message = by_topic[ros_schema.TF_STATIC][0]
+        assert len(message.transforms) == 7
+        assert all(t.header.frame_id == BASE_FRAME for t in message.transforms)
+
+    def test_every_camera_info_joins_its_own_transform_by_frame_id(self, tmp_path):
+        """The two halves a consumer needs - a lens and a mount - built from opposite ends of
+        `camera_rig.Camera`. A camera in one and not the other is a half-converted rig, and both
+        topics deserialise perfectly on their own, so nothing else would notice."""
+        by_topic = self._read(self._bag(tmp_path))
+        _, static = by_topic[ros_schema.TF_STATIC][0]
+        frames = {t.child_frame_id for t in static.transforms}
+        for topic in ros_schema.CAMERA_INFO_TOPICS:
+            _, info = by_topic[topic][0]
+            assert info.header.frame_id in frames, topic
+
+    def test_the_intrinsics_survive_cdr_as_the_spec_wrote_them(self, tmp_path):
+        """`k`, `r` and `p` are fixed-length float64 arrays and arrive as numpy, not as lists -
+        the same shape trap `conversion.py` pins for the dataset pickles."""
+        by_topic = self._read(self._bag(tmp_path))
+        _, info = by_topic[ros_schema.camera_topic("front_middle")][0]
+        assert (info.width, info.height) == (512, 288)
+        assert info.k[0] == pytest.approx(ros_schema.focal_length_px(512, 70.0))
+        assert info.k[0] == pytest.approx(info.k[4])
+        assert (info.k[2], info.k[5]) == pytest.approx((256.0, 144.0))
+        assert len(info.d) == 0
+
+    def test_the_camera_topics_are_offered_latched(self, tmp_path):
+        """Transient-local, like `/tf_static` and the route. One message per camera for a whole
+        drive: offered volatile it goes out once while a viewer is still starting and is never
+        seen again, and neither the player nor the subscriber says a word."""
+        from rosbags.rosbag2 import Reader
+
+        with Reader(self._bag(tmp_path)) as reader:
+            offered = {c.topic: c.ext.offered_qos_profiles for c in reader.connections}
+        for topic in ros_schema.CAMERA_INFO_TOPICS:
+            assert offered[topic], topic
+            assert offered[topic][0].durability.name == "TRANSIENT_LOCAL", topic
+
+    def test_the_topic_selection_reaches_the_latched_topics_too(self, tmp_path):
+        """`--ros-topics` says "the subset to write", and the latched three did not honour it.
+
+        `ros_schema.messages` filtered the per-frame topics from the day it was written; the route
+        and `/tf_static` were put unconditionally. That was two surprises and became eight once
+        phase 1 added the lenses - a `--ros-topics /tf` bag holding eight channels nobody asked
+        for. Nothing raises: the bag is valid and merely larger and stranger than requested.
+        """
+        import camera_rig
+        import ros_bag
+        import ros_frame
+
+        rig = camera_rig.load_rig(REPO / "rigs" / "cams.txt", read_interval_s=None)
+        frame = _frame()
+        path = tmp_path / "picked-bag"
+        picked = {ros_schema.TF, ros_schema.camera_topic("front_middle")}
+        with ros_bag.BagWriter(path, topics=picked, notes={}) as bag:
+            bag.start_episode(
+                frame,
+                route=((0.0, 0.0), (1.0, 1.0)),
+                mounts=ros_frame.mounts_from_rig(rig),
+                cameras=ros_frame.cameras_from_rig(rig),
+            )
+            bag.write(frame)
+        assert set(self._read(path)) == picked

@@ -142,8 +142,49 @@ class RigTopic:
 
 
 _WINGFIN = "wingfin message; recover with tools/ros_defs.py off a rig bag"
+
+#: The rig's six cameras, under the names its own bag gives them. Every camera topic is
+#: `/sensing/camera/cam_sync_rig/<one of these>/<channel>`.
 _CAMERAS = ("front_left", "front_middle", "front_right", "rear_left", "rear_middle", "rear_right")
 _CAM = "/sensing/camera/cam_sync_rig/{}/{}"
+
+#: A rig spec's camera names, translated to the rig's. **Only `rigs/cams.txt` needs a row here**
+#: - `rigs/av3.txt` was generated from the checkpoint's own `camera_order` and already uses the
+#: rig's six names, so it passes through this table untouched, and so will any future spec that
+#: names its cameras after the vehicle rather than after the file.
+#:
+#: A spec camera with no row gets **no rig topic at all**, which is the right answer for
+#: `cams.txt`'s seventh camera `cam_front_wide`: it is a spare 1280x720 buffer with no counterpart
+#: on the vehicle, and inventing a seventh `cam_sync_rig` channel for it would put a topic in the
+#: bag that the rig's bag cannot have. It is still mounted, still rendered, and still in
+#: `/tf_static`; it simply is not one of the six.
+#:
+#: **The names and the geometry disagree in `cams.txt`, and this table does not paper over it.**
+#: `camera_rig.Camera.aim` records why: that file reads `+yaw` as *right* on its front pair and
+#: as *left* on its back pair, so two of its four side cameras are named backwards whichever
+#: convention is chosen, and `cam_back_left` is mounted pointing rear-**right**. Mapping by name
+#: keeps the author's labelling; the mount that reaches `/tf_static` is the geometry either way,
+#: and `camera_side_disagreements` names every camera where the two do not agree rather than
+#: letting one of them win in silence.
+RIG_CAMERA_NAMES: dict[str, str] = {
+    "cam_front": "front_middle",
+    "cam_left": "front_left",
+    "cam_right": "front_right",
+    "cam_back": "rear_middle",
+    "cam_back_left": "rear_left",
+    "cam_back_right": "rear_right",
+    **{name: name for name in _CAMERAS},
+}
+
+
+def camera_topic(rig_name: str, channel: str = "camera_info_latched") -> str:
+    """One camera channel's topic, under the rig's own naming."""
+    return _CAM.format(rig_name, channel)
+
+
+def rig_camera_name(spec_name: str) -> str | None:
+    """The rig's name for a spec's camera, or None when it has no counterpart on the vehicle."""
+    return RIG_CAMERA_NAMES.get(spec_name)
 
 
 def _camera_rows() -> tuple[RigTopic, ...]:
@@ -169,15 +210,10 @@ def _camera_rows() -> tuple[RigTopic, ...]:
                 definition=_WINGFIN,
             )
         )
-        rows.append(
-            RigTopic(
-                _CAM.format(name, "camera_info_latched"),
-                None,
-                DIRECT,
-                needs="--camera-rig; every intrinsic is already in camera_rig.Camera",
-                phase=1,
-            )
-        )
+        # Written, as of phase 1 - but only on a drive that mounted a rig, exactly like
+        # `/tf_static`. `rig_coverage` reports "declared" and "on the wire" as two numbers for
+        # that reason; 14 declared and 8 written is a correct pair and not a discrepancy.
+        rows.append(RigTopic(_CAM.format(name, "camera_info_latched"), None, DIRECT))
     return tuple(rows)
 
 
@@ -320,6 +356,10 @@ GNSS_IMU = "/sensing/gnss/imu/data"
 GNSS_VELOCITY = "/sensing/gnss/imu/velocity"
 LIDAR_IMU = "/sensing/lidar/imu"
 
+#: The six `camera_info_latched` topics, in the rig's own order. Declared always and written only
+#: on a `--camera-rig` drive, because a camera that is not mounted has no intrinsics to state.
+CAMERA_INFO_TOPICS: tuple[str, ...] = tuple(camera_topic(name) for name in _CAMERAS)
+
 #: `topic -> (message type, rate family)`. The family is what `ros_bag.py` groups by and what a
 #: bag's own metadata reports, so a reader can tell a 10 Hz channel that was written at 10 Hz
 #: from one that merely happened to have ten messages a second.
@@ -336,6 +376,9 @@ TOPICS: dict[str, tuple[str, str]] = {
     GNSS_IMU: ("sensor_msgs/msg/Imu", "state"),
     GNSS_VELOCITY: ("geometry_msgs/msg/TwistStamped", "state"),
     LIDAR_IMU: ("sensor_msgs/msg/Imu", "state"),
+    # One per camera, latched: intrinsics do not change during an episode. `sensor_msgs/CameraInfo`
+    # is core, so unlike every other topic still absent these needed no definition - only a rig.
+    **{topic: ("sensor_msgs/msg/CameraInfo", "latched") for topic in CAMERA_INFO_TOPICS},
 }
 
 #: `topic -> RigTopic`, for the two callers that need to look one up by name.
@@ -475,6 +518,26 @@ class Light:
 
 
 @dataclass(frozen=True)
+class CameraSpec:
+    """One mounted camera, as much of it as `sensor_msgs/CameraInfo` describes.
+
+    `name` is the rig's - `front_left` - and decides the topic. `frame_id` is the spec's own
+    camera name, and is what `/tf_static` calls the same camera, so the two are joined by the
+    transform rather than by matching strings. **They are deliberately allowed to differ**: on
+    `rigs/cams.txt` the labels and the geometry disagree (see `RIG_CAMERA_NAMES`), and a reader
+    that wants to know where `rear_left` actually points follows `frame_id` into the transform
+    instead of trusting a name.
+    """
+
+    name: str
+    frame_id: str
+    width: int
+    height: int
+    fov_deg: float
+    """Horizontal, matching `camera_rig.Camera.fov` and panda3d's one-argument `setFov`."""
+
+
+@dataclass(frozen=True)
 class Projection:
     """What turns metres into latitude and longitude, with the origin shift already applied.
 
@@ -590,6 +653,94 @@ def tf_static_message(seconds: float, mounts: dict[str, tuple[float, float, floa
             for name, (x, y, z, yaw) in sorted(mounts.items())
         ]
     }
+
+
+def focal_length_px(width: int, fov_deg: float) -> float:
+    """The pinhole focal length, in pixels, of a camera `width` wide with a horizontal `fov_deg`.
+
+    `camera_rig.mount` sets the lens with panda3d's one-argument `Lens.setFov`, which takes the
+    **horizontal** angle and lets the vertical follow the aspect ratio - so this is the whole
+    intrinsic model, and `fy == fx` because the pixels are square. There is no distortion to
+    describe: MetaDrive's `RGBCamera` is rectilinear, which is why `rigs/av3.txt` records in its
+    own header that the four fisheye corners are rendered unwarped at a fallback FOV.
+    """
+    return (width / 2.0) / math.tan(math.radians(fov_deg) / 2.0)
+
+
+def camera_info_message(seconds: float, camera: CameraSpec) -> dict:
+    """One camera's intrinsics, latched.
+
+    **`d` is empty, and that is a statement, not an omission.** `plumb_bob` with five zeros would
+    say "measured a distortion and it came out zero", which no calibration ever does; an empty `d`
+    against an empty `distortion_model` is ROS's way of saying the publisher does not model one.
+    A rectilinear render genuinely has none, and a consumer that undistorts against five fabricated
+    zeros gets the same picture back - but one that reads the model as evidence the rig was
+    calibrated has been told something untrue, which is the same rule `UNKNOWN_COVARIANCE` follows.
+
+    `p` is `k` with a zero translation column: there is no stereo baseline, because there is no
+    stereo pair. `r` is the identity for the same reason - nothing here is rectified against
+    anything else.
+    """
+    focal = focal_length_px(camera.width, camera.fov_deg)
+    centre_x, centre_y = camera.width / 2.0, camera.height / 2.0
+    return {
+        "header": header(seconds, camera.frame_id),
+        "height": int(camera.height),
+        "width": int(camera.width),
+        "distortion_model": "",
+        "d": [],
+        "k": [focal, 0.0, centre_x, 0.0, focal, centre_y, 0.0, 0.0, 1.0],
+        "r": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        "p": [focal, 0.0, centre_x, 0.0, 0.0, focal, centre_y, 0.0, 0.0, 0.0, 1.0, 0.0],
+        "binning_x": 0,
+        "binning_y": 0,
+        "roi": {
+            "x_offset": 0,
+            "y_offset": 0,
+            "height": 0,
+            "width": 0,
+            "do_rectify": False,
+        },
+    }
+
+
+#: How far off straight ahead or straight behind a mount has to point before it counts as a side
+#: camera. `rigs/cams.txt` and `rigs/av3.txt` put their side cameras between 53.7 and 125 degrees,
+#: so nothing real is near this line and it exists only to keep a nominally-forward camera with a
+#: fraction of a degree of yaw from being called "left".
+SIDE_DEGREES = 10.0
+
+
+def aim_side(yaw_rad: float) -> str:
+    """Which side a mount actually points: `left`, `right`, or `middle` for fore-and-aft."""
+    turn = ((math.degrees(yaw_rad) + 180.0) % 360.0) - 180.0
+    if abs(turn) < SIDE_DEGREES or abs(abs(turn) - 180.0) < SIDE_DEGREES:
+        return "middle"
+    return "left" if turn > 0 else "right"
+
+
+def named_side(rig_name: str) -> str:
+    """Which side a rig camera's own name claims: `front_left` -> `left`."""
+    return rig_name.rsplit("_", 1)[-1]
+
+
+def camera_side_disagreements(mounts: dict[str, tuple[str, float]]) -> list[tuple[str, str, str]]:
+    """Every camera whose rig topic and whose mount disagree about which way it faces.
+
+    `mounts` is `{rig name: (frame_id, yaw in radians)}`. Returns `(rig name, claimed, aimed)`.
+
+    **This is reported and never corrected, in either direction.** Renaming the topic to match the
+    geometry would contradict the spec's own labels; rotating the mount to match the topic would
+    put a camera somewhere the drive never rendered from. `rigs/cams.txt` yields exactly two rows
+    here - its back pair - because that file reads `+yaw` as right at the front and as left at the
+    back and cannot be made self-consistent by choosing a convention. `rigs/av3.txt` yields none.
+    """
+    out = []
+    for name, (_frame_id, yaw) in sorted(mounts.items()):
+        claimed, aimed = named_side(name), aim_side(yaw)
+        if claimed != aimed:
+            out.append((name, claimed, aimed))
+    return out
 
 
 def odometry_message(frame: Frame) -> dict:
@@ -775,8 +926,9 @@ def velocity_message(frame: Frame) -> dict:
     }
 
 
-#: Topic -> builder, for everything written every frame. `ROUTE` and `TF_STATIC` are absent
-#: deliberately: they are latched, written once per episode by `ros_bag.py`.
+#: Topic -> builder, for everything written every frame. `ROUTE`, `TF_STATIC` and the six
+#: `CAMERA_INFO_TOPICS` are absent deliberately: they are latched, written once per episode by
+#: `ros_bag.py`.
 BUILDERS = {
     CLOCK: clock_message,
     TF: tf_message,

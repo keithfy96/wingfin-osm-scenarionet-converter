@@ -203,6 +203,18 @@ class BagWriter:
         return False
 
     # -- writing --------------------------------------------------------------------
+    def _wanted(self, topic):
+        """Is this topic in the `--ros-topics` selection, if there is one?
+
+        `ros_schema.messages` already honours the selection for everything written per frame; the
+        latched topics did not, so `--ros-topics /tf` produced a bag holding `/tf` *and* the route
+        *and* the transform tree. That was two surprises when this was written and became eight
+        when phase 1 added the camera lenses, which is what made it worth fixing: the flag says
+        "the subset of the `--ros-bag` topics to write", and a subset that quietly keeps eight
+        others is not one.
+        """
+        return self.topics is None or topic in self.topics
+
     def _connection(self, topic, msgtype):
         found = self._connections.get(topic)
         if found is None:
@@ -225,15 +237,20 @@ class BagWriter:
         self._writer.write(self._connection(topic, msgtype), nanoseconds, raw)
         self.counts[topic] = self.counts.get(topic, 0) + 1
 
-    def start_episode(self, frame, route=(), mounts=None):
-        """Write the latched topics: the route, and where the cameras are bolted on.
+    def start_episode(self, frame, route=(), mounts=None, cameras=()):
+        """Write the latched topics: the route, where the cameras are bolted on, and their lenses.
 
-        Written once, at the first frame, because neither changes during an episode. The bag
+        Written once, at the first frame, because none of them changes during an episode. The bag
         still carries a real stamp for them rather than zero, so a reader that sorts by time
         does not find them in 1970.
+
+        `mounts` and `cameras` describe the same cameras from the two ends a consumer needs both
+        of - extrinsics on `/tf_static`, intrinsics on `camera_info_latched` - and are joined by
+        `CameraSpec.frame_id`. They can differ in length: a spec camera with no counterpart on the
+        vehicle gets a transform and no `camera_info`, which is `rigs/cams.txt`'s seventh.
         """
         nanoseconds = _nanos(frame.sim_time_s)
-        if route:
+        if route and self._wanted(ros_schema.ROUTE):
             content = ros_schema.route_message(
                 ros_schema.Frame(
                     index=frame.index,
@@ -248,12 +265,22 @@ class BagWriter:
                 content,
                 nanoseconds,
             )
-        if mounts:
+        if mounts and self._wanted(ros_schema.TF_STATIC):
             content = ros_schema.tf_static_message(frame.sim_time_s, mounts)
             self._put(
                 ros_schema.TF_STATIC,
                 ros_schema.TOPICS[ros_schema.TF_STATIC][0],
                 content,
+                nanoseconds,
+            )
+        for camera in cameras:
+            topic = ros_schema.camera_topic(camera.name)
+            if not self._wanted(topic):
+                continue
+            self._put(
+                topic,
+                ros_schema.TOPICS[topic][0],
+                ros_schema.camera_info_message(frame.sim_time_s, camera),
                 nanoseconds,
             )
 

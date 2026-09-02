@@ -308,3 +308,43 @@ def mounts_from_rig(rig):
             math.radians(float(heading_deg)),
         )
     return out
+
+
+def cameras_from_rig(rig):
+    """The rig's cameras as `ros_schema.CameraSpec`, for the six `camera_info_latched` topics.
+
+    A camera the vehicle has no counterpart for is **left out rather than given an invented
+    topic** - `rigs/cams.txt`'s `cam_front_wide` is the only one in the repo, a spare buffer with
+    no channel on the rig. It is still mounted, still rendered and still in `/tf_static`, where it
+    is honestly a seventh camera; what it is not is one of `bag_audit.html`'s six, and adding a
+    seventh `cam_sync_rig` channel would put a topic in our bag that the rig's cannot have.
+
+    `frame_id` stays the spec's own name so that it matches `mounts_from_rig` exactly - the two
+    are joined through `/tf_static`, not by both happening to spell a camera the same way. See
+    `ros_schema.RIG_CAMERA_NAMES` for why that distinction has to survive.
+    """
+    out = []
+    for camera in getattr(rig, "cameras", ()):
+        rig_name = ros_schema.rig_camera_name(camera.name)
+        if rig_name is None:
+            continue
+        out.append(
+            ros_schema.CameraSpec(
+                name=rig_name,
+                frame_id=camera.name,
+                width=int(camera.width),
+                height=int(camera.height),
+                fov_deg=float(camera.fov),
+            )
+        )
+    out.sort(key=lambda camera: camera.name)
+    return tuple(out)
+
+
+def unmapped_cameras(rig):
+    """Spec cameras with no rig topic, so a caller can say so rather than silently drop them."""
+    return tuple(
+        camera.name
+        for camera in getattr(rig, "cameras", ())
+        if ros_schema.rig_camera_name(camera.name) is None
+    )
