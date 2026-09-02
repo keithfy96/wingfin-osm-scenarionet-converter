@@ -203,8 +203,14 @@ Two things to hold onto when timing that against the drive:
 
 ## Related
 
+**How many of these 55 are actually written today, and the plan for the rest:**
+`docs/implementation-plan/stage-11-a-complete-ros-bag.md`. The short version is **8 of the 45
+producible**, and this file is the ledger it works from — so a row changed here must be changed
+in `ros_schema.RIG_TOPICS` too, which is what Stage 11's phase 0 exists to make impossible.
+
 | file | covers |
 |---|---|
+| `docs/implementation-plan/stage-11-a-complete-ros-bag.md` | the gap between this table and what is written, in six testable phases |
 | `docs/reference/sensors-and-observations.md` | the four sensor modalities, the policy socket, what may cross the wire, what a recording holds |
 | `docs/reference/running-the-simulator.md` | the two clocks, `--step-hz` / `--decision-hz`, what a step costs, the step budget |
 | `docs/reference/openpilot-and-the-model.md` | the model at the wheel, and the six conversions between it and the car |

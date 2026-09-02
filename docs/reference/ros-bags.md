@@ -140,6 +140,19 @@ plan doc. The fifteen omitted for want of a `.msg` definition are listed in code
 with a substitute type, because a subscriber expecting `wingfin_msgs/VehicleState` fails on a
 `geometry_msgs/TwistStamped` wearing that topic name, which is worse than an absent topic.
 
+**"Type not in the audit" was the wrong place to look, and none of them is actually unobtainable.**
+`bag_audit.html` records rates; the only message type named anywhere in it is
+`geometry_msgs/TwistStamped`. But rosbag2 writes every type's full `.msg` text into the bag
+itself - which is the property that made it safe to invent `wingfin_msgs/TrafficLight` in the
+first place - so the rig's own `ros2_mig_phase_5_p1` bag carries the exact bytes for all fifteen.
+`tools/ros_defs.py` (stage 11, phase 0a) splits a connection's concatenated definition into one
+pasteable `EXTRA_DEFINITIONS` entry per type, normalises `MSG: geometry_msgs/Point` to the
+three-part spelling, and parses each one before printing it. Measured on `bags/j1-lights`: 27
+definitions across 11 connections, 7 outside the humble typestore, all 7 already known, so it
+prints nothing new. The input is **one `.mcap` file**, not the rig running and not the wingfin
+source package. Its one honest failure: a definition is written by the recorder, so a bag whose
+writer supplied none carries none - those topics come back under "no definition recorded".
+
 ## What a full ladder run measured, 2026-09-01
 
 Every tier of `docs/testing-ros.md`, run end to end on `junction-1` a month after the figures

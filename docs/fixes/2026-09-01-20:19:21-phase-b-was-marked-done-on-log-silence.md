@@ -5,8 +5,12 @@ answers describing Phase B did not match the claim that it was complete.
 
 **Update 2026-09-02:** Keith ran the viewer and reported *"the route looks like the route i have"*
 — the first real visual confirmation this stage has had, and it also exposed that the route only
-ever drew because playback was looping. Items 3 and 4 are done; the screenshot, the bags, and the
-by-eye check of the rviz config remain.
+ever drew because playback was looping. A later pass over `bags/j1-lights` ran with **no QoS
+warnings and no rviz warnings**, all six display topics at 1 subscriber.
+
+**Items 3, 4 and 5 are done. Two remain, and both need a person: the screenshot (item 2) and the
+by-eye check of the rviz config (item 6).** Neither can be closed by anything that reads a log,
+which is the whole point of this file.
 
 ---
 
@@ -90,15 +94,14 @@ display only; the bag keeps the real typed topic. Subscribers on
 Arguments now go in as arguments, after a `_` placeholder for `$0`, rather than interpolated into
 the `bash -c` string.
 
-### 5. Two of the three bags on disk have the invalid covariance
+### 5. ~~Three of the four bags on disk carry known defects~~ — DONE 2026-09-02
 
-`bags/j1-001` and `bags/j1-container` were recorded before the covariance correction, so every
-pose in them still claims `covariance[0] = -1` — "this publisher does not produce this quantity",
-on data that is exact ground truth. `bags/j1-fixed` is right but predates the traffic lights and
-the latched-QoS fix; **`bags/j1-lights` is the only current one.**
-
-`docs/testing-ros.md` points at `bags/j1-001` in tiers 2 and 4. Either re-record it or the doc
-sends a reader to a bag with a known defect in it.
+Deleted, and `docs/testing-ros.md` and `scripts/ros-view.sh` now name `bags/j1-lights`
+throughout. They were worse than "an old covariance": each also carried a **stale dataset**.
+`j1-fixed` held a median of 200 detections a frame and 49 barriers in its first busy frame;
+`j1-lights`, after the 2026-09-02 re-convert, holds 98 and 24 — which is what the `ros-bag.sh`
+preflight reports the workspace actually contains. A reader checking box placement against the
+old bags would have been checking it against actors that no longer exist.
 
 ### 6. The rviz config has never been checked by eye
 

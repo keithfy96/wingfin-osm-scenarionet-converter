@@ -170,7 +170,7 @@ note "python     $MD_PY"
 # stays that way -- putting a shell back between the terminal and python is what breaks the
 # Ctrl-C handling that ends a drive at a frame boundary and still exports it.
 # `realpath -m` and not a `cd`: the bag does not exist yet and neither does `bags/`, so
-# anything that resolves by entering the directory prints "/j1-001". -m resolves a path that is
+# anything that resolves by entering the directory prints "/j1-lights". -m resolves a path that is
 # not there. The fallback covers a system without coreutils' realpath.
 OUT_ABS="$(realpath -m "$OUT" 2>/dev/null || echo "$PWD/$OUT")"
 note "out        $OUT_ABS"

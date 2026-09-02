@@ -10,6 +10,13 @@ The reference throughout is `bag_audit.html` at the repo root - the audit of the
 own `ros2_mig_phase_5_p1` bag, 55 topics, 1,466,940 messages, 7.41 GB - and the goal is a
 simulated bag a training stack cannot tell apart, except that ours also carries labels.
 
+**What this stage covers of that goal: 8 of the rig's 45 producible topics**, and 7 on a drive
+without `--camera-rig`. The cameras, the SBG GNSS family, the point cloud and the `/vehicle` and
+`/control` topics are all absent. That is not a defect in what is built here - it is the
+remaining scope, now written down as
+`docs/implementation-plan/stage-11-a-complete-ros-bag.md`, which supersedes the **Cameras**
+checkbox below.
+
 ## Summary
 
 ```text
@@ -185,6 +192,10 @@ enough to look right in a report, wrong enough to miss a filter.
 - **15 of the rig's 55 topics are omitted for want of a `.msg`** (`MISSING_DEFINITIONS`), not
   because the data is unavailable. `/vehicle/state`, `/control/actuators` and the ten
   `sbg_driver` GNSS messages are all computable the moment their definitions exist.
+  **And the definitions are recoverable**: rosbag2 writes every type's `.msg` text into the bag,
+  so the rig's own bag carries them - see Stage 11, which also records two errors in this very
+  table (`/sensing/gnss/imu_data` is missing from it, and two of its entries are ❌ topics rather
+  than definition problems).
 - **No linear acceleration.** Differencing velocity across a frame would put simulation noise
   into a field a real IMU measures directly; it is published as zero with the covariance marked
   unknown, which is what REP-145 asks of a publisher that has no such data.

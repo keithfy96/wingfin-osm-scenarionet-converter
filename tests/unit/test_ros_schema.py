@@ -664,3 +664,113 @@ class TestTheGeneratedMessagePackage:
 
         with pytest.raises(ValueError, match="no nothing_msgs messages"):
             ros_msgs_package.package_files("nothing_msgs")
+
+
+class TestReadingDefinitionsBackOutOfABag:
+    """`tools/ros_defs.py` - the tool that unblocks the fifteen topics we have no `.msg` for.
+
+    `MISSING_DEFINITIONS` gives the reason for four of them as "type not in the audit", which is
+    true and points at the wrong place. `bag_audit.html` records *rates*; the only message type
+    named anywhere in it is `geometry_msgs/TwistStamped`. The definitions were never going to be
+    there.
+
+    **They are in the bag.** rosbag2 writes each type's full `.msg` text into the file so a
+    reader can decode it without the package that wrote it - which is the same property that made
+    it safe for `ros_schema` to invent `wingfin_msgs/TrafficLight` in the first place. So the
+    rig's own bag already carries the exact bytes for every type we lack, and Phase 5 of stage 11
+    needs one `.mcap` file rather than the rig running or the wingfin source package.
+
+    The gate below is a genuine self-test of that claim, and it needs no bag on disk: it writes
+    one from `EXTRA_DEFINITIONS`, reads it back with nothing but the file, and demands the text
+    come out identical. If ours survives the round trip the rig's will, because it is the same
+    record in the same container.
+    """
+
+    @staticmethod
+    def _bag(tmp_path):
+        """A one-message bag carrying the invented type, written the way `ros_bag.py` writes."""
+        import ros_bag
+
+        path = tmp_path / "defs-bag"
+        frame = Frame(
+            index=0,
+            sim_time_s=0.0,
+            ego=Ego(x=0.0, y=0.0, z=0.0, heading=0.0, velocity_east=1.0, velocity_north=0.0,
+                    speed=1.0),
+            lights=(Light(name="l0", status="LIGHT_GREEN", x=1.0, y=2.0),),
+        )
+        with ros_bag.BagWriter(path, topics=None, notes={}) as bag:
+            bag.write(frame)
+        return path
+
+    def test_our_own_definitions_come_back_byte_identical(self, tmp_path):
+        import ros_defs
+
+        found, undefined = ros_defs.read(self._bag(tmp_path))
+        assert undefined == [], "the writer recorded no definition for some connection"
+        for name in ("wingfin_msgs/msg/TrafficLightArray", "wingfin_msgs/msg/TrafficLight"):
+            assert name in found, f"{name} did not survive the round trip"
+            assert found[name].text == EXTRA_DEFINITIONS[name], f"{name} came back changed"
+
+    def test_the_dependencies_come_back_too_not_only_the_top_type(self, tmp_path):
+        """The point of the exercise: a type is useless without what its fields refer to."""
+        import ros_defs
+
+        found, _ = ros_defs.read(self._bag(tmp_path))
+        assert {"std_msgs/msg/Header", "geometry_msgs/msg/Point"} <= set(found)
+
+    def test_every_recovered_definition_parses(self, tmp_path):
+        """The gate that keeps a bad paste out of `EXTRA_DEFINITIONS`.
+
+        A field in the wrong order serialises silently and deserialises into nonsense, which is
+        worse than an absent topic - the whole reason these are copied rather than inferred.
+        """
+        import ros_defs
+
+        found, _ = ros_defs.read(self._bag(tmp_path))
+        for name, entry in found.items():
+            assert ros_defs.parses(name, entry.text) is None, f"{name} does not parse"
+
+    def test_it_reports_nothing_new_for_a_bag_of_types_we_already_have(self, tmp_path, capsys):
+        import ros_defs
+
+        assert ros_defs.report(self._bag(tmp_path)) is True
+        printed = capsys.readouterr().out
+        assert "nothing new" in printed
+
+    def test_a_rendered_entry_is_the_definition_it_came_from(self, tmp_path):
+        """`render` output has to be pasteable, so it must evaluate back to the same text."""
+        import ros_defs
+
+        found, _ = ros_defs.read(self._bag(tmp_path))
+        for name, entry in found.items():
+            recovered = eval("{" + ros_defs.render(entry) + "}")  # noqa: S307 - our own output
+            assert recovered == {name: entry.text}, f"{name} does not paste back"
+            for line in ros_defs.render(entry).splitlines():
+                assert len(line) <= 100, f"{name} renders past the line limit"
+
+    def test_dependency_headers_are_normalised_to_the_ros_2_spelling(self):
+        """`MSG: geometry_msgs/Point` and `geometry_msgs/msg/Point` are one type, not two.
+
+        Keying on both spellings is how a recovered definition ends up in the dict under a name
+        nothing ever looks up, so the type reads as still missing while sitting right there.
+        """
+        import ros_defs
+
+        assert ros_defs.normalise("geometry_msgs/Point") == "geometry_msgs/msg/Point"
+        assert ros_defs.normalise("geometry_msgs/msg/Point") == "geometry_msgs/msg/Point"
+        pieces = ros_defs.split(
+            "a_msgs/msg/Top",
+            "a_msgs/Leaf leaf\n"
+            + "=" * 80
+            + "\nMSG: a_msgs/Leaf\nfloat64 x\n",
+        )
+        assert pieces == {"a_msgs/msg/Top": "a_msgs/Leaf leaf\n", "a_msgs/msg/Leaf": "float64 x\n"}
+
+    def test_pointing_it_at_nothing_names_the_command_that_writes_a_bag(self, tmp_path):
+        """The same refusal as `ros_audit` and `ros_probe`; all three are readers."""
+        import ros_defs
+
+        with pytest.raises(ValueError, match="no bag at"):
+            ros_defs.read(tmp_path / "not-a-bag")
+        assert ros_defs.main([str(tmp_path / "not-a-bag")]) == 1

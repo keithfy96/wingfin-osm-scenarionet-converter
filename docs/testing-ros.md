@@ -11,6 +11,11 @@ published in the world frame is exactly correct while the car drives east. A GNS
 skipped MetaDrive's re-centring shift is 93.8 m along a road that really exists. That is why
 this ladder exists and why the cheap tiers are worth running before the expensive ones.
 
+**This ladder checks that the bag is right, not that it is complete.** It writes 11 topics, of
+which 8 are the rig's — against 45 the rig's bag has and a simulator could honestly produce. The
+gap and the plan for closing it are
+`docs/implementation-plan/stage-11-a-complete-ros-bag.md`.
+
 Background and measurements: `docs/implementation-plan/stage-10-ros-bags-out-of-a-drive.md`
 and `docs/reference/ros-bags.md`. What the simulator can and cannot put on the wire at all is
 `docs/rosbag.md`.
@@ -60,7 +65,7 @@ parsed for real.
 ## 1. A real bag off a real drive (~2 min)
 
 ```bash
-METADRIVE_PYTHON=.venv/bin/python ./scripts/ros-bag.sh junction-1 -- --out bags/j1-001
+METADRIVE_PYTHON=.venv/bin/python ./scripts/ros-bag.sh junction-1 -- --out bags/j1-lights
 ```
 
 **One line, and it is long on purpose.** It wraps in the terminal, and a wrapped line pastes as
@@ -77,7 +82,7 @@ the exit status is non-zero, something died before the first `note` — run it a
   dataset    scenarionet-10hz  (1 scenario(s))
   tracks     CYCLIST=25 PEDESTRIAN=101 TRAFFIC_BARRIER=24 VEHICLE=1
   lights     8 in the dataset
-  out        /.../wingfin-osm-scenarionet-converter/bags/j1-001
+  out        /.../wingfin-osm-scenarionet-converter/bags/j1-lights
 ```
 
 `out` is absolute on purpose: `--out` resolves against the current directory and nothing in the
@@ -92,7 +97,7 @@ later, indistinguishable from a junction that genuinely had none.
 `gnss  real lat/lon available`, and at the end
 `ros bag  ~364 frames, ~3641 messages across 11 topics`.
 
-**Writes** `bags/j1-001/` and nothing else. A drive writes no reports unless you pass
+**Writes** `bags/j1-lights/` and nothing else. A drive writes no reports unless you pass
 `--record` or `--export-drive`, and neither is used here.
 
 **Proves** `tools/ros_frame.py` — the one module `uv run pytest` cannot cover, because it
@@ -105,8 +110,8 @@ needs a live engine.
 **Tier 1 must have run first.** Both commands *read* a bag; neither creates one.
 
 ```bash
-./scripts/ros-bag.sh --audit bags/j1-001
-uv run python tools/ros_probe.py bags/j1-001 --workspace workspaces/junction-1
+./scripts/ros-bag.sh --audit bags/j1-lights
+uv run python tools/ros_probe.py bags/j1-lights --workspace workspaces/junction-1
 ```
 
 `ros_audit.py` is a deliberate re-implementation of the method `bag_audit.html` uses on the
@@ -158,13 +163,18 @@ junction has no people in it.
 ## 4. ROS's own reader (~10 s, no build)
 
 ```bash
-docker run --rm -v "$PWD/bags:/bags:ro" ros:jazzy-ros-base ros2 bag info /bags/j1-001
+docker run --rm -v "$PWD/bags:/bags:ro" ros:jazzy-ros-base ros2 bag info /bags/j1-lights
 ```
 
 The strongest check available, and it costs nothing: `ros:jazzy-ros-base` needs no build and
 nothing added to our own images. This is ROS's own rosbag2 reading a file written by an
 unrelated third-party library — **the only check here that depends on neither `rosbags` nor
 our code being correct.**
+
+**`jazzy` is load-bearing, not an arbitrary tag.** `rosbags` writes rosbag2 **format v9**, and
+humble's rosbag2 cannot parse a v9 `metadata.yaml` at all — it fails on the manifest before it
+reaches a single message. Swapping the tag turns this tier from the strongest check into a
+confusing failure that says nothing about our data.
 
 Two things it establishes rather than assumes: our `Writer(version=9)` metadata against what
 jazzy expects, and whether `info` lists topics whose message packages (`vision_msgs`,
@@ -213,26 +223,36 @@ takes about a minute. `./scripts/sim.sh` warns about this on every run by compar
 ## 6. Look at it (~1 min)
 
 ```bash
-./scripts/ros-view.sh bags/j1-001
+./scripts/ros-view.sh bags/j1-lights
 ```
 
 **Every other tier is numeric. This is the only one that is not**, and on its first run it found
-two faults that all ten probe checks pass straight over.
+two faults that all 13 probe checks pass straight over.
 
-> **Nobody has yet completed this tier.** The viewer is built and rviz2 demonstrably subscribes
-> to every display topic — `ros2 topic info` reports 1 subscriber each on `/tf`,
-> `/localization/odometry`, `/planning/route` and `/perception/objects` — but no person has
-> looked at the result, and there is no screenshot. Everything below is what to **check**, not
-> what has been confirmed. See
+> **Partly completed, 2026-09-02.** Keith ran the viewer and confirmed the route draws where the
+> car goes. Every display subscribes — `ros2 topic info` reports 1 subscriber each on `/tf`,
+> `/localization/odometry`, `/planning/route`, `/perception/objects`,
+> `/perception/traffic_lights` and `/perception/traffic_lights/markers` — with no QoS warnings
+> and no rviz warnings on a single pass of `bags/j1-lights`.
+>
+> **Still not done: the boxes, the lights, and a screenshot.** Nobody has watched a box track a
+> pedestrian or watched the eight signals cycle, and there is no artefact anyone who was not
+> there can check. See
 > `docs/fixes/2026-09-01-20:19:21-phase-b-was-marked-done-on-log-silence.md`.
 
-rviz2 plays the bag on a loop with `use_sim_time`. What to look for — each is a claim no number
-in tier 2 makes, and each fails with a completely clean log:
+rviz2 plays the bag **once**, 36 seconds, with `use_sim_time` and a 4-second head start; add
+`--loop` to repeat. What to look for — each is a claim no number in tier 2 makes, and each fails
+with a completely clean log:
 
 - **the car crawls along the road rather than teleporting** between frames
-- **the boxes sit *on* the road and move *with* the people**, not hovering, not a frame behind
+- **the boxes sit *on* the road and move *with* the people**, not hovering, not a frame behind —
+  up to 132 of them on `junction-1`, pedestrians, cyclists and barriers
 - **the route runs where the car actually went**
 - **`base_link` stays under `map`** and the axes point the way the car is going
+- **no two conflicting lights are green at once.** Eight spheres cycle at the junction, six
+  together and two opposite. **No numeric check anywhere can catch this**, because the bag does
+  not carry which movements conflict — this tier is the only thing between a broken signal plan
+  and a training set
 
 Set the view's **Target Frame** to `base_link` so the camera rides with the car: a constant lag
 or a z-offset is obvious from on board and invisible from a fixed viewpoint.
@@ -254,13 +274,32 @@ subscribes to `/perception/objects` and silently draws nothing.
   It is also not positive-semidefinite, which is how it surfaced: rviz2 logged
   `Negative eigenvalue found for position` once a frame and drew no ellipse. `NavSatFix` in the
   same file had it right all along, with zeros and `position_covariance_type: 0`.
-- **The route never drew.** The rviz config asked for Transient Local durability because the
-  topic is latched; `ros2 bag play` republishes volatile, and DDS answers an incompatible request
-  by delivering nothing. `No messages will be sent to it` appears once and never again.
+- **The route never drew, and it took two fixes.** `/planning/route` is one message at t=0. The
+  rviz config asked for Transient Local because the topic is latched; the bag recorded it
+  volatile, and DDS answers an incompatible request by delivering nothing —
+  `No messages will be sent to it`, once, from both ends. `ros_bag._latched_qos` fixed the
+  writer, and **that alone was not enough**: `ros2 bag play` does not serve a latched message
+  from a durability cache to a late joiner (measured, 3 trials of 3, nothing received — and now
+  with no warning either, because the QoS matches). `--delay 4` is what delivers it, by holding
+  the first message until every subscriber is up. Compatible QoS and a head start are both
+  required.
 
-**One warning is normal.** At the end of each `--loop` pass the bag's clock restarts at zero and
-rviz2 says so — `TF_OLD_DATA ignoring data from the past`, then `Detected jump back in time.
-Clearing TF buffer`. It happens once per lap and is the loop, not a fault.
+**Two warnings that are not faults:**
+
+- **`DURABILITY_QOS_POLICY ... No messages will be sent to it`, from both the player and rviz2**
+  — you are playing a bag recorded before the latched-QoS fix. The route will not draw; nothing
+  else is affected. Play `bags/j1-lights`. This warning is *new diagnostic value*: before the
+  fix, a stale bag was silently indistinguishable from a good one.
+- **`TF_OLD_DATA`, then `Detected jump back in time. Clearing TF buffer`** — only under
+  `--loop`, once per lap, when the bag's clock restarts at zero. On a single pass it should not
+  appear at all.
+
+**It does not exit when the bag ends, and that is deliberate.** `ros2 bag play` runs in the
+background and `rviz2` is `exec`'d in the foreground, so the container lives exactly as long as
+the window — otherwise the view would vanish 36 seconds in, before anyone could pause or ride
+along. Close the window, or Ctrl-C. From a terminal the player's keys are live: **SPACE**
+pause/resume, **→** step one message, **↑/↓** rate ±10%. For an unattended run, wrap it:
+`timeout 60 ./scripts/ros-view.sh bags/j1-lights`.
 
 **Writes** nothing. The bag is mounted read-only.
 
@@ -268,9 +307,16 @@ Clearing TF buffer`. It happens once per lap and is the loop, not a fault.
 
 | path | what | size |
 |---|---|---|
-| `bags/j1-001/` | the bag — a directory, not a file | ~1 MB |
-| `bags/j1-001/metadata.yaml` | rosbag2 v9 manifest: topics, types, counts, `storage_identifier: mcap` | ~4 KB |
-| `bags/j1-001/*.mcap` | every message, zstd per chunk | ~1 MB |
+| `bags/j1-lights/` | the bag — a directory, not a file | 524 KB |
+| `bags/j1-lights/metadata.yaml` | rosbag2 v9 manifest: topics, types, counts, `storage_identifier: mcap` | 4.7 KB |
+| `bags/j1-lights/*.mcap` | every message, zstd per chunk | 509 KB |
+
+Measured on `bags/j1-lights`, and **the size follows the dataset, not the recorder.**
+`/perception/objects` is 94% of the payload — 17.2 MB uncompressed across 364 frames, at a median
+of 98 detections a frame — so a re-convert that changes how many pedestrians, cyclists and
+barriers `junction-1` holds moves this figure with it. Bags recorded before the 2026-09-02
+re-convert ran to 964 KB on 200 detections a frame. Re-quote from the file rather than trusting
+the row.
 
 - **`bags/` does not exist until the first run** — the writer creates it, parents and all.
 - **`bags/` is gitignored** (`.gitignore:38`, with `*.mcap` and `*.mcap.zstd`), because a
@@ -296,7 +342,7 @@ Clearing TF buffer`. It happens once per lap and is the loop, not a fault.
   with `METADRIVE_PYTHON=.venv/bin/python`, as every command above does.
 - **`No module named 'rosbags'` on a 3.10 interpreter** — a bare `uv sync` removed the group.
   `uv sync --group sim --group ros`, naming both.
-- **`bags/j1-001 already exists`** — a bag is a recording, not an output file to overwrite.
+- **`bags/j1-lights already exists`** — a bag is a recording, not an output file to overwrite.
   Pick another name or remove it deliberately.
 - **`you asked for --lights, and this dataset has no traffic lights in it`** — correct, and
   see the next section. It is a refusal rather than an empty channel on purpose.
@@ -332,7 +378,11 @@ Clearing TF buffer`. It happens once per lap and is the loop, not a fault.
 - **15 of the rig's 55 topics stay omitted** for want of a `.msg` definition
   (`ros_schema.MISSING_DEFINITIONS`), omitted rather than published under a substitute type: a
   subscriber deserialising `wingfin_msgs/VehicleState` fails on a `geometry_msgs/TwistStamped`
-  wearing that topic name, which is worse than an absent topic.
+  wearing that topic name, which is worse than an absent topic. **They are recoverable from one
+  `.mcap` off the rig**, because rosbag2 writes each type's `.msg` text into the bag itself:
+  `uv run python tools/ros_defs.py <bag>` prints them ready to paste. Run it on `bags/j1-lights`
+  and it finds 27 definitions and nothing new, which is the right answer for a bag written from
+  our own table - and is the self-test that says the rig's will come out the same way.
 
 - **Every channel is truth, not measurement**, and the bag says so — its `wingfin` metadata
   records `source: simulated, noise_model: none`. The rig's GNSS has noise, lag, multipath and

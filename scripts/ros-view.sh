@@ -2,10 +2,21 @@
 #
 # Look at a bag this repo wrote, in rviz2.
 #
-#   ./scripts/ros-view.sh bags/j1-001
-#   ./scripts/ros-view.sh bags/j1-001 --loop          # repeat instead of playing once
-#   ./scripts/ros-view.sh bags/j1-001 --rate 0.5      # anything else after the bag goes to bag play
-#   ./scripts/ros-view.sh --build                     # rebuild the viewer image
+#   ./scripts/ros-view.sh bags/j1-lights
+#   ./scripts/ros-view.sh bags/j1-lights --loop          # repeat instead of playing once
+#   ./scripts/ros-view.sh bags/j1-lights --rate 0.5      # anything else after the bag goes to bag play
+#   ./scripts/ros-view.sh --build                        # rebuild the viewer image
+#
+# **It does not exit when the bag ends.** `bag play` is backgrounded and rviz2 is exec'd in the
+# foreground, so the run lasts as long as the window -- otherwise the view would vanish 36 s in,
+# before anyone could pause or ride along. Close the window or Ctrl-C. From a terminal the
+# player's keys are live: SPACE pause/resume, right-arrow step, up/down rate. For an unattended
+# run: `timeout 60 ./scripts/ros-view.sh bags/j1-lights`.
+#
+# **`DURABILITY_QOS_POLICY ... No messages will be sent to it`, from both ends, means the bag
+# predates the latched-route fix** -- the route will not draw and nothing else is affected.
+# Record a new one. That warning is the fix working: before it, a stale bag was silently
+# indistinguishable from a good one.
 #
 # **Every check in docs/testing-ros.md is numeric.** This is the one that is not. What it shows
 # that a number cannot: whether the car crawls along the road or teleports between frames,
@@ -65,9 +76,9 @@ if [[ "${1:-}" == "--loop" ]]; then LOOP=1; shift; fi
 
 BAG="${1:-}"
 [[ -n "$BAG" ]] || die "no bag. Give one:
-    ./scripts/ros-view.sh bags/j1-001
+    ./scripts/ros-view.sh bags/j1-lights
   Record one first if there is none:
-    METADRIVE_PYTHON=.venv/bin/python ./scripts/ros-bag.sh junction-1 -- --out bags/j1-001"
+    METADRIVE_PYTHON=.venv/bin/python ./scripts/ros-bag.sh junction-1 -- --out bags/j1-lights"
 shift
 [[ -d "$BAG" ]] || die "no bag at $BAG - nothing has written one there yet.
   A bag is a directory holding a .mcap and a metadata.yaml, not a file."

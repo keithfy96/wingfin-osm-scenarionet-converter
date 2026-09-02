@@ -82,13 +82,22 @@ EXTRA_DEFINITIONS: dict[str, str] = {
 }
 
 #: Topics in `bag_audit.html` this module cannot write, and why. Not a todo list - each one
-#: needs a `.msg` definition only Keith has, and guessing at it is worse than omitting it.
+#: needs a `.msg` definition we do not have, and guessing at it is worse than omitting it.
+#:
+#: **Where the wingfin ones come from, now that it is known.** "Type not in the audit" was true
+#: and pointed at the wrong place: `bag_audit.html` records *rates*, and the only message type
+#: named anywhere in it is `geometry_msgs/TwistStamped`. The definitions were never going to be
+#: there. They are in the **bag** - rosbag2 writes each type's full `.msg` text into the file so
+#: a reader can decode it without the package that wrote it, which is the same property that
+#: made it safe to invent `wingfin_msgs/TrafficLight` below. So the rig's own bag already
+#: carries the exact bytes for every type here, and recovering them is one command against one
+#: `.mcap`: `uv run python tools/ros_defs.py <bag>`. See stage 11, phase 5.
 MISSING_DEFINITIONS: dict[str, str] = {
-    "/vehicle/state": "wingfin message; type not in the audit",
-    "/vehicle/engagement": "wingfin message; type not in the audit",
-    "/vehicle/actuators_output": "wingfin message; type not in the audit",
-    "/control/actuators": "wingfin message; type not in the audit",
-    "/sensing/camera/*/meta": "wingfin message; type not in the audit",
+    "/vehicle/state": "wingfin message; recover with tools/ros_defs.py off a rig bag",
+    "/vehicle/engagement": "wingfin message; recover with tools/ros_defs.py off a rig bag",
+    "/vehicle/actuators_output": "wingfin message; recover with tools/ros_defs.py off a rig bag",
+    "/control/actuators": "wingfin message; recover with tools/ros_defs.py off a rig bag",
+    "/sensing/camera/*/meta": "wingfin message; recover with tools/ros_defs.py off a rig bag",
     "/sensing/gnss/ekf_nav": "sbg_driver/SbgEkfNav",
     "/sensing/gnss/ekf_quat": "sbg_driver/SbgEkfQuat",
     "/sensing/gnss/ekf_euler": "sbg_driver/SbgEkfEuler",
