@@ -2,6 +2,7 @@
 
     uv run python tools/ros_probe.py bags/junction-1-001
     uv run python tools/ros_probe.py bags/junction-1-001 --workspace workspaces/junction-1
+    uv run python tools/ros_probe.py --coverage
 
 In the spirit of `scripts/av3-probe.sh`, and for the same reason: **a drive statistic cannot
 settle a sign question.** Every fault this looks for produces a bag that opens, deserialises and
@@ -302,6 +303,67 @@ def probe(path, workspace=None, out=sys.stdout):
     return not checks.failed
 
 
+def coverage(path=None, out=sys.stdout):
+    """How much of the reference vehicle's bag this one covers, and what stands in the way.
+
+    **A topic present is not a topic correct**, and this counts names. Every other check in this
+    file is a relationship between two independently produced quantities, because that is the
+    only kind that catches the faults a bag can carry; this one is a ledger, and is useful for
+    exactly one thing - knowing whether a phase of stage 11 landed what it claimed.
+
+    With a bag it reports what actually reached the wire. Without one it reports what the code
+    declares, which is the higher number: `/tf_static` is declared always and written only when
+    a camera rig supplied mounts.
+    """
+    written = None
+    if path is not None:
+        by_topic, _ = load(path)
+        written = set(by_topic)
+        print(f"{path}", file=out)
+    ledger = ros_schema.rig_coverage(written)
+    total = ledger["producible"]
+    produced, declared = len(ledger["produced"]), len(ledger["declared"])
+
+    note = ""
+    if written is not None and produced < declared:
+        quiet = [row.topic for row in ledger["declared"] if row.topic not in written]
+        note = f"   ({declared} declared; {', '.join(quiet)} not on the wire)"
+    print(f"\n  rig topics produced      {produced} / {total}{note}", file=out)
+
+    print("\n  absent, by the phase that lands it", file=out)
+    for phase, rows in ledger["absent"].items():
+        title = ros_schema.PHASE_TITLES.get(phase, "")
+        print(f"    phase {phase}  {title:<44} {len(rows):>3}", file=out)
+    print(f"    {'':<52} {sum(len(r) for r in ledger['absent'].values()):>3}", file=out)
+
+    print(
+        f"\n  waiting on a .msg        {ledger['definitions_missing']:>3}"
+        "   or on which type the rig used; tools/ros_defs.py recovers them",
+        file=out,
+    )
+    print(
+        f"  not producible           {len(ledger['impossible']):>3}"
+        "   excluded by design, each with its reason",
+        file=out,
+    )
+    print(
+        f"  simulator extras         {len(ledger['extras']):>3}"
+        "   never counted against the 45 - the rig's bag has no ground truth",
+        file=out,
+    )
+    for topic in ledger["extras"]:
+        print(f"      {topic}", file=out)
+
+    counts = ledger["verdicts"]
+    print(
+        f"\n  the reference bag is {sum(counts.values())} topics: "
+        f"{counts[ros_schema.DIRECT]} direct, {counts[ros_schema.APPROXIMATE]} approximate, "
+        f"{counts[ros_schema.IMPOSSIBLE]} not producible.  docs/rosbag.md argues each row.",
+        file=out,
+    )
+    return True
+
+
 def _osm_bounds(workspace):
     """The bounding box of the workspace's own source OSM, for the GNSS containment check."""
     source = workspace / "source" / "map.osm"
@@ -325,16 +387,29 @@ def _osm_bounds(workspace):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("bag")
+    # Optional, because `--coverage` is a question about the code rather than about a bag: it
+    # answers "how much of the rig's bag can this repo write" with nothing recorded yet.
+    parser.add_argument("bag", nargs="?", default=None)
     parser.add_argument(
         "--workspace",
         default=None,
         help="the workspace the dataset came from, so the GNSS can be checked against its own "
         "source OSM extent rather than merely being self-consistent",
     )
+    parser.add_argument(
+        "--coverage",
+        action="store_true",
+        help="how many of the reference vehicle's 45 producible topics are written, and which "
+        "stage-11 phase lands each of the rest. Runs with or without a bag; with one it counts "
+        "what actually reached the wire rather than what the code declares.",
+    )
     arguments = parser.parse_args(argv)
+    if arguments.bag is None and not arguments.coverage:
+        parser.error("a bag to probe, or --coverage to report on the code alone")
     # A refusal, not a traceback -- see the same guard in `ros_audit.main`.
     try:
+        if arguments.coverage:
+            return 0 if coverage(arguments.bag) else 1
         return 0 if probe(arguments.bag, arguments.workspace) else 1
     except ValueError as error:
         print(f"\n  {error}\n", file=sys.stderr)

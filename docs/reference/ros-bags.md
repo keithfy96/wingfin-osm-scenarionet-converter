@@ -135,8 +135,9 @@ Convert-time arguments are deliberately not `ConverterConfig` fields, so that ru
 ## The rig's 55 topics against what MetaDrive can produce
 
 **24 direct, 21 synthesisable, 10 impossible without fabricating.** The full table is in the
-plan doc. The fifteen omitted for want of a `.msg` definition are listed in code, in
-`ros_schema.MISSING_DEFINITIONS`, with what each needs - they are omitted rather than published
+plan doc. The 24 omitted for want of a `.msg` definition are listed in code, in
+`ros_schema.MISSING_DEFINITIONS` - derived from `ros_schema.RIG_TOPICS`, and printed with the
+rest of the ledger by `uv run python tools/ros_probe.py --coverage` - with what each needs - they are omitted rather than published
 with a substitute type, because a subscriber expecting `wingfin_msgs/VehicleState` fails on a
 `geometry_msgs/TwistStamped` wearing that topic name, which is worse than an absent topic.
 

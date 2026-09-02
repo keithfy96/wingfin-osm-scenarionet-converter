@@ -203,10 +203,26 @@ Two things to hold onto when timing that against the drive:
 
 ## Related
 
-**How many of these 55 are actually written today, and the plan for the rest:**
-`docs/implementation-plan/stage-11-a-complete-ros-bag.md`. The short version is **8 of the 45
-producible**, and this file is the ledger it works from — so a row changed here must be changed
-in `ros_schema.RIG_TOPICS` too, which is what Stage 11's phase 0 exists to make impossible.
+**How many of these 55 are actually written today:** ask, rather than reading a number here.
+
+```bash
+uv run python tools/ros_probe.py --coverage            # what the code can write
+uv run python tools/ros_probe.py bags/j1-lights --coverage   # what a bag actually holds
+```
+
+The 55 rows above live in code as `ros_schema.RIG_TOPICS`, and every count — the 45, the
+24/21/10 split, how many topics each remaining phase lands — is **derived from them**, including
+`ros_schema.MISSING_DEFINITIONS`. That is deliberate: a figure written into this file goes stale
+in silence, and did. `/sensing/gnss/imu_data` was producible and missing from the code's table
+altogether, one character from the `/sensing/gnss/imu/data` we do publish; `/sensing/gnss/imu/temp`
+and `/sensing/gnss/status` sat in it as though a `.msg` were all that stood between a simulator
+and a real receiver's temperature. Neither was visible to any check, because nothing
+cross-referenced the prose against the code. Now nothing can: `tests/unit/test_ros_schema.py`'s
+`TestTheRigCoverageLedger` asserts the 55 rows partition and that our own ground-truth topics are
+never counted as coverage of a bag that has none.
+
+**The plan for the rest** is `docs/implementation-plan/stage-11-a-complete-ros-bag.md`, in five
+remaining phases.
 
 | file | covers |
 |---|---|

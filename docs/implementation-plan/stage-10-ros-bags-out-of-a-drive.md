@@ -189,9 +189,9 @@ enough to look right in a report, wrong enough to miss a filter.
   elevation over the ellipsoid.
 - **OSM's own accuracy is the floor.** The projection is exact to 0.000000 m against PROJC, and
   inherits whatever the surveyed road geometry is wrong by - typically a few metres.
-- **15 of the rig's 55 topics are omitted for want of a `.msg`** (`MISSING_DEFINITIONS`), not
-  because the data is unavailable. `/vehicle/state`, `/control/actuators` and the ten
-  `sbg_driver` GNSS messages are all computable the moment their definitions exist.
+- **24 of the rig's 55 topics are omitted for want of a `.msg`** (`MISSING_DEFINITIONS`), not
+  because the data is unavailable. `/vehicle/state`, `/control/actuators` and the
+  `sbg_driver` GNSS family are all computable the moment their definitions exist.
   **And the definitions are recoverable**: rosbag2 writes every type's `.msg` text into the bag,
   so the rig's own bag carries them - see Stage 11, which also records two errors in this very
   table (`/sensing/gnss/imu_data` is missing from it, and two of its entries are ❌ topics rather

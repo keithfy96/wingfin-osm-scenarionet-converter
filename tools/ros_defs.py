@@ -3,9 +3,10 @@
     uv run python tools/ros_defs.py bags/j1-lights
     uv run python tools/ros_defs.py /path/to/ros2_mig_phase_5_p1 --all
 
-`ros_schema.MISSING_DEFINITIONS` lists fifteen of the rig's topics we do not publish, each
-because we have no `.msg` text for its type, and it gives the reason as "type not in the audit".
-That reason is true and misleading. **`bag_audit.html` records rates, not types** - grep every
+`ros_schema.MISSING_DEFINITIONS` lists 24 of the rig's topics we do not publish, each because we
+have no `.msg` text for its type - or, for two of them, no knowledge of which standard type the
+rig put on it. The reason used to read "type not in the audit", which was true and misleading:
+**`bag_audit.html` records rates, not types** - grep every
 message type named anywhere in that file and exactly one comes back, `geometry_msgs/TwistStamped`
 - so the audit was never going to carry them. It was the wrong place to look.
 

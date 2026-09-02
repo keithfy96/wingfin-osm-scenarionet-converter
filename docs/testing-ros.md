@@ -375,8 +375,8 @@ the row.
   written — no pixel has ever reached a bag. The mount conversion and `/tf_static` are built
   and tested, so what is missing is the encoding, not the geometry.
 
-- **15 of the rig's 55 topics stay omitted** for want of a `.msg` definition
-  (`ros_schema.MISSING_DEFINITIONS`), omitted rather than published under a substitute type: a
+- **24 of the rig's 55 topics stay omitted** for want of a `.msg` definition
+  (`ros_schema.MISSING_DEFINITIONS`; `tools/ros_probe.py --coverage` counts them), omitted rather than published under a substitute type: a
   subscriber deserialising `wingfin_msgs/VehicleState` fails on a `geometry_msgs/TwistStamped`
   wearing that topic name, which is worse than an absent topic. **They are recoverable from one
   `.mcap` off the rig**, because rosbag2 writes each type's `.msg` text into the bag itself:

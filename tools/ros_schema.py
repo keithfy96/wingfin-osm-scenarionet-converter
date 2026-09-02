@@ -13,7 +13,7 @@ Topic names, message types and rates follow `bag_audit.html` - the audit of the 
 `ros2_mig_phase_5_p1` bag - so a simulated bag and a recorded one are interchangeable to
 whatever reads them. Where that bag carries a message type we do not have a definition for
 (`/vehicle/state`, `/vehicle/engagement`, `/control/actuators`, the six `.../meta` channels and
-the ten `sbg_driver` GNSS messages), the topic is **left out rather than published with a
+the `sbg_driver` GNSS family), the topic is **left out rather than published with a
 different type under the same name**: a subscriber that deserialises `wingfin_msgs/VehicleState`
 would fail on a `geometry_msgs/TwistStamped` wearing its topic name, which is worse than an
 absent topic. `MISSING_DEFINITIONS` lists them; add the `.msg` text to `EXTRA_DEFINITIONS` and
@@ -81,33 +81,224 @@ EXTRA_DEFINITIONS: dict[str, str] = {
     ),
 }
 
-#: Topics in `bag_audit.html` this module cannot write, and why. Not a todo list - each one
-#: needs a `.msg` definition we do not have, and guessing at it is worse than omitting it.
+# --- the rig's own bag, as data ------------------------------------------------------------
+#
+# `bag_audit.html`'s 55 topics, one row each, moved here out of `docs/rosbag.md` so that the
+# coverage figure is **derived rather than maintained**. A prose ledger and a code table drift
+# apart silently, and they had: `/sensing/gnss/imu_data` was producible and missing from
+# `MISSING_DEFINITIONS` entirely, while `/sensing/gnss/imu/temp` and `/sensing/gnss/status` sat
+# in it as though a `.msg` were all that stood in the way of a simulator reporting a real
+# receiver's temperature. Both were found by script against this table; neither was visible to
+# any check that existed, because nothing cross-referenced the two.
+#
+# So `MISSING_DEFINITIONS` below is now **computed from these rows**, and the same rows answer
+# "how many of the rig's topics do we write". `tools/ros_probe.py --coverage` prints it.
+
+#: The three verdicts, and the whole basis of the 45. `docs/rosbag.md` argues each one.
+DIRECT = "direct"
+"""MetaDrive holds the quantity outright: the pixels, the pose, the commanded controls."""
+
+APPROXIMATE = "approximate"
+"""Producible, but as truth rather than measurement - no noise, no lag, no dropouts."""
+
+IMPOSSIBLE = "impossible"
+"""A real physical thing the simulator does not have. Excluded from the target by design.
+
+Emitting plausible-looking frames for one of these makes the bag say something untrue about the
+vehicle, which is worse than a missing topic: a consumer can test for a topic that is not there,
+and cannot test for one that is there and invented.
+"""
+
+
+@dataclass(frozen=True)
+class RigTopic:
+    """One row of the reference vehicle's bag, and what stands between us and it."""
+
+    topic: str
+    hz: float | None
+    """The rate the rig's own bag ran it at, measured in `bag_audit.html`. None is latched.
+
+    Not a rate we necessarily reach: `env.step` **is** the world tick, so every rate here is a
+    decimation of `--step-hz`, and `/sensing/gnss/imu/velocity` at 200 Hz and
+    `/sensing/lidar/imu` at 202.9 Hz sit above any rate this repo drives at. A free-running
+    Livox clock is not the simulator's clock and never will be.
+    """
+    verdict: str
+    needs: str = ""
+    """What stands between us and this topic - or, for an `IMPOSSIBLE` one, why nothing ever
+    will. Empty exactly when we already write it."""
+    phase: int | None = None
+    """The stage-11 phase that lands it. None when it is written already, or never will be."""
+    definition: str = ""
+    """The `.msg` we do not have, if that is what is missing. Feeds `MISSING_DEFINITIONS`."""
+
+    @property
+    def produced(self) -> bool:
+        return self.verdict != IMPOSSIBLE and self.phase is None
+
+    @property
+    def producible(self) -> bool:
+        return self.verdict != IMPOSSIBLE
+
+
+_WINGFIN = "wingfin message; recover with tools/ros_defs.py off a rig bag"
+_CAMERAS = ("front_left", "front_middle", "front_right", "rear_left", "rear_middle", "rear_right")
+_CAM = "/sensing/camera/cam_sync_rig/{}/{}"
+
+
+def _camera_rows() -> tuple[RigTopic, ...]:
+    """The eighteen camera rows, which are three topics per camera and differ only by phase."""
+    rows = []
+    for name in _CAMERAS:
+        rows.append(
+            RigTopic(
+                _CAM.format(name, "image_raw/ffmpeg"),
+                20.0,
+                DIRECT,
+                needs="the H.264 encoder; FFMPEGPacket is already defined",
+                phase=4,
+            )
+        )
+        rows.append(
+            RigTopic(
+                _CAM.format(name, "meta"),
+                20.0,
+                DIRECT,
+                needs="a .msg for the rig's own type",
+                phase=5,
+                definition=_WINGFIN,
+            )
+        )
+        rows.append(
+            RigTopic(
+                _CAM.format(name, "camera_info_latched"),
+                None,
+                DIRECT,
+                needs="--camera-rig; every intrinsic is already in camera_rig.Camera",
+                phase=1,
+            )
+        )
+    return tuple(rows)
+
+
+#: All 55, in the order `docs/rosbag.md` argues them. **24 direct, 21 approximate, 10 not
+#: producible**, and 55 - 10 = 45 is the target the phases are counted against.
+RIG_TOPICS: tuple[RigTopic, ...] = _camera_rows() + (
+    # --- the three we already write outright ---
+    RigTopic("/tf", 86.6, DIRECT),
+    RigTopic("/tf_static", None, DIRECT),
+    RigTopic("/localization/odometry", 43.9, DIRECT),
+    # --- the car's own state and controls: `drive.py:2478` holds all of it already ---
+    RigTopic("/vehicle/state", 100.0, DIRECT, needs="a .msg", phase=5, definition=_WINGFIN),
+    RigTopic(
+        "/vehicle/actuators_output", 100.0, DIRECT, needs="a .msg", phase=5, definition=_WINGFIN
+    ),
+    RigTopic("/control/actuators", 100.0, DIRECT, needs="a .msg", phase=5, definition=_WINGFIN),
+    # --- GNSS/INS: eleven channels, one true pose. Every one of them noiseless ---
+    RigTopic("/sensing/gnss/pose", 50.0, APPROXIMATE),
+    RigTopic("/sensing/gnss/imu/data", 50.0, APPROXIMATE),
+    RigTopic("/sensing/gnss/imu/velocity", 200.0, APPROXIMATE),
+    RigTopic("/sensing/gnss/imu/nav_sat_fix", 5.0, APPROXIMATE),
+    RigTopic(
+        "/sensing/gnss/ekf_nav", 50.0, APPROXIMATE, needs="a .msg", phase=2,
+        definition="sbg_driver/SbgEkfNav",
+    ),
+    RigTopic(
+        "/sensing/gnss/ekf_quat", 50.0, APPROXIMATE, needs="a .msg", phase=2,
+        definition="sbg_driver/SbgEkfQuat",
+    ),
+    RigTopic(
+        "/sensing/gnss/ekf_euler", 50.0, APPROXIMATE, needs="a .msg", phase=2,
+        definition="sbg_driver/SbgEkfEuler",
+    ),
+    # Not `/sensing/gnss/imu/data`, which we publish as `sensor_msgs/Imu`. Two topics one
+    # character apart, one covered and one forgotten - which is exactly how it went missing.
+    RigTopic(
+        "/sensing/gnss/imu_data", 50.0, APPROXIMATE, needs="a .msg", phase=2,
+        definition="sbg_driver/SbgImuData",
+    ),
+    RigTopic(
+        "/sensing/gnss/gps_pos", 5.0, APPROXIMATE, needs="a .msg", phase=2,
+        definition="sbg_driver/SbgGpsPos",
+    ),
+    RigTopic(
+        "/sensing/gnss/gps_vel", 5.0, APPROXIMATE, needs="a .msg", phase=2,
+        definition="sbg_driver/SbgGpsVel",
+    ),
+    RigTopic(
+        "/sensing/gnss/imu/pos_ecef", 50.0, APPROXIMATE, needs="one more standard conversion",
+        phase=2, definition="geometry_msgs/PointStamped in most SBG drivers; unconfirmed",
+    ),
+    # --- the Livox IMU, and the cloud that was dropped ---
+    RigTopic("/sensing/lidar/imu", 202.9, APPROXIMATE),
+    RigTopic(
+        "/sensing/lidar/points", 10.0, APPROXIMATE,
+        needs="reading the point-cloud sensor in-process; PointCloud2 is core", phase=3,
+    ),
+    # --- the three that are trivial to emit, once their type is known ---
+    RigTopic(
+        "/sensing/gnss/utc_time", 1.0, APPROXIMATE, needs="a .msg", phase=2,
+        definition="sbg_driver/SbgUtcTime",
+    ),
+    RigTopic(
+        "/sensing/gnss/imu/utc_ref", 1.0, APPROXIMATE, needs="the rig's use of it", phase=2,
+        definition="sensor_msgs/TimeReference, but the rig's exact use is unknown",
+    ),
+    RigTopic("/vehicle/engagement", 100.0, APPROXIMATE, needs="a .msg", phase=5,
+             definition=_WINGFIN),
+    # --- the five that only exist when a model is driving: `--agent-policy remote` ---
+    RigTopic("/control/predicted_trajectory", 10.0, APPROXIMATE, needs="a .msg and a model",
+             phase=5, definition=_WINGFIN),
+    RigTopic("/control/lateral_plan", 10.0, APPROXIMATE, needs="a .msg and a model", phase=5,
+             definition=_WINGFIN),
+    RigTopic("/control/longitudinal_plan", 10.0, APPROXIMATE, needs="a .msg and a model",
+             phase=5, definition=_WINGFIN),
+    RigTopic("/perception/inference_control", 10.0, APPROXIMATE, needs="a .msg and a model",
+             phase=5, definition=_WINGFIN),
+    RigTopic("/perception/model_info", None, APPROXIMATE, needs="a .msg and a model", phase=5,
+             definition=_WINGFIN),
+    # --- the ten that stay absent on purpose. 45 of 45 is not parity, and must not claim to be
+    RigTopic("/vehicle/can_rx", 100.0, IMPOSSIBLE,
+             needs="no CAN bus; synthesised DBC frames would be fabrication"),
+    RigTopic("/vehicle/can_tx", None, IMPOSSIBLE,
+             needs="no CAN bus, and empty in the rig's own bag anyway"),
+    RigTopic("/sensing/cabin/image_raw/ffmpeg", 30.0, IMPOSSIBLE, needs="no cabin, no driver"),
+    RigTopic("/sensing/cabin/camera_info_latched", None, IMPOSSIBLE,
+             needs="no cabin, no driver"),
+    RigTopic("/sensing/cabin/audio_stamped", 100.0, IMPOSSIBLE, needs="no audio"),
+    RigTopic("/sensing/cabin/audio_info", 0.2, IMPOSSIBLE, needs="no audio"),
+    RigTopic("/sensing/gnss/imu/temp", 50.0, IMPOSSIBLE,
+             needs="a physical sensor temperature; nothing in a simulator produces it"),
+    RigTopic("/sensing/gnss/status", 1.0, IMPOSSIBLE,
+             needs="the receiver's own health; nothing in a simulator produces it"),
+    RigTopic("/diagnostics", 5.7, IMPOSSIBLE,
+             needs="would be the simulator's logs, not the vehicle's"),
+    RigTopic("/rosout", 4.0, IMPOSSIBLE, needs="would be the simulator's logs, not the vehicle's"),
+)
+
+#: Topics of ours that the rig's bag does not have, and **which must never be counted against
+#: the 45**. The rig recorded no ground truth - nothing in its 55 is a labelled object, and
+#: `/perception/inference_control` is the model's own configuration rather than an answer. These
+#: four are the entire point of building a bag out of a simulator, and a coverage report that
+#: took credit for them would be flattering itself.
+SIMULATOR_EXTRAS: tuple[str, ...] = (
+    "/clock",
+    "/perception/objects",
+    "/perception/traffic_lights",
+    "/planning/route",
+)
+
+#: Topics in `bag_audit.html` this module cannot write for want of a `.msg`, and what each needs.
+#: **Derived from `RIG_TOPICS`** rather than kept by hand - see the note above that block for the
+#: two defects that cost.
 #:
-#: **Where the wingfin ones come from, now that it is known.** "Type not in the audit" was true
-#: and pointed at the wrong place: `bag_audit.html` records *rates*, and the only message type
-#: named anywhere in it is `geometry_msgs/TwistStamped`. The definitions were never going to be
-#: there. They are in the **bag** - rosbag2 writes each type's full `.msg` text into the file so
-#: a reader can decode it without the package that wrote it, which is the same property that
-#: made it safe to invent `wingfin_msgs/TrafficLight` below. So the rig's own bag already
-#: carries the exact bytes for every type here, and recovering them is one command against one
-#: `.mcap`: `uv run python tools/ros_defs.py <bag>`. See stage 11, phase 5.
+#: Guessing at a definition is worse than omitting the topic: a subscriber that deserialises
+#: `wingfin_msgs/VehicleState` would fail on a `geometry_msgs/TwistStamped` wearing its topic
+#: name. Nothing here needs the rig running or the wingfin source package, though - rosbag2
+#: writes each type's full `.msg` text into the bag itself, so one `.mcap` and
+#: `uv run python tools/ros_defs.py <bag>` recovers every one of them verbatim.
 MISSING_DEFINITIONS: dict[str, str] = {
-    "/vehicle/state": "wingfin message; recover with tools/ros_defs.py off a rig bag",
-    "/vehicle/engagement": "wingfin message; recover with tools/ros_defs.py off a rig bag",
-    "/vehicle/actuators_output": "wingfin message; recover with tools/ros_defs.py off a rig bag",
-    "/control/actuators": "wingfin message; recover with tools/ros_defs.py off a rig bag",
-    "/sensing/camera/*/meta": "wingfin message; recover with tools/ros_defs.py off a rig bag",
-    "/sensing/gnss/ekf_nav": "sbg_driver/SbgEkfNav",
-    "/sensing/gnss/ekf_quat": "sbg_driver/SbgEkfQuat",
-    "/sensing/gnss/ekf_euler": "sbg_driver/SbgEkfEuler",
-    "/sensing/gnss/gps_pos": "sbg_driver/SbgGpsPos",
-    "/sensing/gnss/gps_vel": "sbg_driver/SbgGpsVel",
-    "/sensing/gnss/status": "sbg_driver/SbgStatus",
-    "/sensing/gnss/utc_time": "sbg_driver/SbgUtcTime",
-    "/sensing/gnss/imu/utc_ref": "sensor_msgs/TimeReference, but the rig's exact use is unknown",
-    "/sensing/gnss/imu/pos_ecef": "geometry_msgs/PointStamped in most SBG drivers; unconfirmed",
-    "/sensing/gnss/imu/temp": "a physical sensor temperature; nothing in a simulator produces it",
+    row.topic: row.definition for row in RIG_TOPICS if row.definition
 }
 
 # --- topic table -------------------------------------------------------------------------
@@ -146,6 +337,62 @@ TOPICS: dict[str, tuple[str, str]] = {
     GNSS_VELOCITY: ("geometry_msgs/msg/TwistStamped", "state"),
     LIDAR_IMU: ("sensor_msgs/msg/Imu", "state"),
 }
+
+#: `topic -> RigTopic`, for the two callers that need to look one up by name.
+RIG_BY_TOPIC: dict[str, RigTopic] = {row.topic: row for row in RIG_TOPICS}
+
+#: What each stage-11 phase lands, keyed by the `phase` on a row. Titles match the plan's own
+#: ladder so that "phase 2 is done" means the same thing in both places.
+PHASE_TITLES: dict[int, str] = {
+    1: "camera_info_latched x6, /tf_static exercised",
+    2: "the SBG GNSS family",
+    3: "/sensing/lidar/points",
+    4: "image_raw/ffmpeg - the encoder",
+    5: "the fifteen rig-typed topics",
+}
+
+
+def rig_coverage(written: set[str] | None = None) -> dict:
+    """How much of the rig's bag we produce, counted off `RIG_TOPICS` rather than maintained.
+
+    `written` is the set of topics actually found in a bag. Without one this reports what the
+    code *declares*; with one it reports what reached the wire, and the two differ by design -
+    `/tf_static` is declared and written only when a camera rig supplied mounts
+    (`ros_bag.py:251`), so "8 declared, 7 on the wire" is a correct pair of numbers and not a
+    discrepancy.
+
+    **`SIMULATOR_EXTRAS` are counted separately and never against the 45.** They are ground
+    truth the rig's own bag does not contain, so crediting them would be marking our own paper.
+
+    The `absent` breakdown is keyed by the phase that lands each topic, because that is the
+    acceptance criterion for everything after this one: a phase is done when this count moves by
+    the number that phase claimed.
+    """
+    producible = [row for row in RIG_TOPICS if row.producible]
+    declared = [row for row in producible if row.topic in TOPICS]
+    if written is None:
+        produced = list(declared)
+    else:
+        produced = [row for row in declared if row.topic in written]
+    absent: dict[int, list[RigTopic]] = {}
+    for row in producible:
+        if row.phase is not None:
+            absent.setdefault(row.phase, []).append(row)
+    extras = [topic for topic in SIMULATOR_EXTRAS if topic in TOPICS]
+    return {
+        "producible": len(producible),
+        "declared": declared,
+        "produced": produced,
+        "absent": dict(sorted(absent.items())),
+        "impossible": [row for row in RIG_TOPICS if not row.producible],
+        "extras": extras if written is None else [t for t in extras if t in written],
+        "definitions_missing": len(MISSING_DEFINITIONS),
+        "verdicts": {
+            verdict: sum(1 for row in RIG_TOPICS if row.verdict == verdict)
+            for verdict in (DIRECT, APPROXIMATE, IMPOSSIBLE)
+        },
+    }
+
 
 #: REP-105: `map` is the world, `base_link` is the car. Cameras hang off `base_link` in
 #: `tf_static`; `ros_encode.py` names them.

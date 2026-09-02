@@ -18,7 +18,7 @@ The reference throughout is `bag_audit.html` at the repo root, the audit of the 
 ```text
 Stage 10: the drive written out as a ROS 2 bag  (8 of the rig's 45 topics)
   -> Stage 11: the rest of the bag, in six phases, each one testable on its own
-       phase 0  the ledger and the definition extractor      8 / 45
+       phase 0  the ledger and the definition extractor      8 / 45   done
        phase 1  camera_info_latched + tf_static             14 / 45
        phase 2  the SBG GNSS family                         23 / 45
        phase 3  /sensing/lidar/points                       24 / 45
@@ -69,8 +69,10 @@ credit would be flattering itself.
 
 ### Two defects, found by script, invisible to every existing check
 
-Both exist because nothing cross-references the ledger in `docs/rosbag.md` against the code.
-Phase 0 is what makes them impossible.
+Both existed because nothing cross-referenced the ledger in `docs/rosbag.md` against the code.
+**Both were fixed in phase 0b, and are now unrepresentable** - `MISSING_DEFINITIONS` is computed
+from `RIG_TOPICS`, and no `IMPOSSIBLE` row may carry a definition. Kept here because they are
+what the phase was for.
 
 - **`/sensing/gnss/imu_data` is missing from `MISSING_DEFINITIONS`.** It is producible, it needs
   an `sbg_driver/SbgImuData` definition, and the table whose entire job is to list exactly that
@@ -170,25 +172,59 @@ exists to have avoided.
   `MessageDefinition.format` is then `NONE` and the tool lists those topics under **"no
   definition recorded"** rather than inventing anything.
 
-- [ ] **Phase 0b - the coverage ledger.**
-  The 55 move out of `docs/rosbag.md` and into `ros_schema.RIG_TOPICS` as data: topic, the rate
-  the real bag ran it at, the verdict, and for an absent one the reason it is absent.
-  `tools/ros_probe.py` grows `--coverage`:
+- [x] **Phase 0b - the coverage ledger.** Done 2026-09-02.
+  The 55 moved out of `docs/rosbag.md` and into `ros_schema.RIG_TOPICS` as data - topic, the
+  rate the real bag ran it at, the verdict, what stands in the way, and the phase that lands it.
+  `MISSING_DEFINITIONS` is now **computed from those rows** rather than kept beside them, which
+  is what makes both defects unrepresentable rather than merely fixed.
 
-  ```
-  rig topics produced      7 / 45          (8 declared; /tf_static needs --camera-rig)
-    blocked on a .msg     13
-    blocked on ros_encode 12
-    blocked on a model     5
-    dropped by choice      1   /sensing/lidar/points
-    not producible        10   excluded by design, each with its reason
-  simulator extras         4   objects · traffic_lights · route · clock
+  ```bash
+  uv run python tools/ros_probe.py --coverage                    # the code alone, no bag needed
+  uv run python tools/ros_probe.py bags/j1-lights --coverage     # what reached the wire
   ```
 
-  *Verify:* a unit test asserts 55 rows splitting 24 / 21 / 10, and that every `TOPICS` key is
-  either a rig topic or a declared extra. **That test is what would have caught both defects
-  above**, and it is the reason this phase is first. `docs/rosbag.md` then cites the command
-  instead of carrying figures that drift out of date silently.
+  ```text
+    rig topics produced      8 / 45
+
+    absent, by the phase that lands it
+      phase 1  camera_info_latched x6, /tf_static exercised   6
+      phase 2  the SBG GNSS family                            9
+      phase 3  /sensing/lidar/points                          1
+      phase 4  image_raw/ffmpeg - the encoder                 6
+      phase 5  the fifteen rig-typed topics                  15
+                                                            37
+
+    waiting on a .msg         24   or on which type the rig used; tools/ros_defs.py recovers them
+    not producible            10   excluded by design, each with its reason
+    simulator extras           4   never counted against the 45 - the rig's bag has no ground truth
+  ```
+
+  **The numbers moved from the sketch in this plan, and the sketch was wrong.** It read
+  13 / 12 / 5 / 1, which sums to 31 against 37 absent, because it was counting `MISSING_DEFINITIONS`
+  *rows* (15, with the six `.../meta` channels behind one wildcard) rather than topics. The
+  ledger partitions by phase instead, and that partition reproduces this plan's own ladder
+  exactly - 8 -> 14 -> 23 -> 24 -> 30 -> 45 - so "phase 2 is done" now means the same thing in
+  the code and in the prose. `waiting on a .msg` is 24 rather than 15 for the same reason: the
+  wildcard became six real rows and the five model topics, listed nowhere before, are wingfin
+  types too.
+
+  **Both defects fixed, and both now impossible.** `/sensing/gnss/imu_data` is a row carrying
+  `sbg_driver/SbgImuData`; `/sensing/gnss/imu/temp` and `/sensing/gnss/status` are `IMPOSSIBLE`
+  rows whose reason is the physical one, and a test asserts no `IMPOSSIBLE` row may carry a
+  definition or a phase at all.
+
+  *Verified,* in `tests/unit/test_ros_schema.py::TestTheRigCoverageLedger`, 16 tests: the 55 rows
+  are distinct and split 24 / 21 / 10; producible is 45; every `TOPICS` key is a rig topic or a
+  declared extra; the producible rows partition into written-plus-one-phase with nothing owned
+  twice; the phase counts are the ladder above; `SIMULATOR_EXTRAS` never appears in `produced`;
+  `MISSING_DEFINITIONS` names only producible rig topics; a row says what it needs exactly when
+  we do not write it; a bag missing `/tf_static` reports 7 against 8 declared; and the two rates
+  above the simulator tick are recorded as such. `uv run pytest`: **862 passed, 2 skipped**.
+  `uv run ruff check .` clean.
+
+  `docs/rosbag.md` now cites the command instead of carrying the figures, and
+  `docs/reference/ros-bags.md`, `docs/testing-ros.md` and stage 10's own limits list were
+  corrected from "15" to 24.
 
   *Acceptance criterion for everything after:* a phase is done when this count moves by the
   number it claimed, and `uv run pytest` still passes.

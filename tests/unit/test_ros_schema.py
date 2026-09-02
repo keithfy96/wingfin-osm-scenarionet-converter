@@ -332,6 +332,169 @@ class TestTheTopicTable:
                 assert len(line.split()) == 2, (name, line)
 
 
+class TestTheRigCoverageLedger:
+    """`RIG_TOPICS` - the reference vehicle's 55 topics as data, and the count derived off them.
+
+    This exists because a prose ledger and a code table drift apart in silence, and they had.
+    `docs/rosbag.md` verdicted the 55 and `ros_schema.MISSING_DEFINITIONS` listed what we lacked
+    a `.msg` for, and **nothing cross-referenced the two**, so both of the following were true
+    at once and neither was visible to any check:
+
+    * `/sensing/gnss/imu_data` was producible and absent from `MISSING_DEFINITIONS` altogether -
+      one character away from `/sensing/gnss/imu/data`, which we do publish.
+    * `/sensing/gnss/imu/temp` and `/sensing/gnss/status` sat *in* it, as though a `.msg` were
+      all that stood between a simulator and a real receiver's temperature.
+
+    Both are now structurally impossible rather than merely fixed: `MISSING_DEFINITIONS` is
+    computed from these rows, so a topic can no longer be in one and not the other. The tests
+    below are the rest of that guarantee - that the rows partition, that the phases add to the
+    ladder they are judged against, and that our own ground-truth topics never earn credit
+    against a bag that has none.
+    """
+
+    def test_the_ledger_is_the_reference_bags_own_55(self):
+        assert len(ros_schema.RIG_TOPICS) == 55
+        assert len({row.topic for row in ros_schema.RIG_TOPICS}) == 55
+
+    def test_the_verdicts_split_the_way_the_doc_argues_them(self):
+        counts = ros_schema.rig_coverage()["verdicts"]
+        assert counts == {
+            ros_schema.DIRECT: 24,
+            ros_schema.APPROXIMATE: 21,
+            ros_schema.IMPOSSIBLE: 10,
+        }
+
+    def test_45_is_55_less_the_ten_that_a_simulator_cannot_honestly_produce(self):
+        """The target, and the reason it is not 55.
+
+        A bag claiming all 55 would be claiming a CAN bus, a cabin camera, a microphone and a
+        GNSS receiver's own temperature. Each of those absences is a fact about the vehicle,
+        and a consumer can test for a topic that is not there - it cannot test for one that is
+        there and invented.
+        """
+        assert ros_schema.rig_coverage()["producible"] == 45
+
+    def test_every_declared_topic_is_a_rig_topic_or_a_declared_extra(self):
+        """The check that would have caught both defects, and the reason phase 0 came first."""
+        known = {row.topic for row in ros_schema.RIG_TOPICS} | set(ros_schema.SIMULATOR_EXTRAS)
+        assert set(TOPICS) <= known, sorted(set(TOPICS) - known)
+
+    def test_our_own_ground_truth_is_counted_apart_from_the_rigs_45(self):
+        """The rig recorded no labels at all, so these four cannot be coverage of it.
+
+        `/perception/inference_control` in its bag is the model's own configuration, not an
+        answer. Counting our boxes and light colours towards the 45 would be marking our own
+        paper with a mark the rig never offered.
+        """
+        rig = {row.topic for row in ros_schema.RIG_TOPICS}
+        assert set(ros_schema.SIMULATOR_EXTRAS) & rig == set()
+        ledger = ros_schema.rig_coverage()
+        assert not set(ros_schema.SIMULATOR_EXTRAS) & {row.topic for row in ledger["produced"]}
+
+    def test_every_producible_topic_is_either_written_or_owned_by_one_phase(self):
+        """The partition. Without it a topic can fall out of the ledger and the total still
+        looks plausible, which is how a coverage figure stops meaning anything."""
+        ledger = ros_schema.rig_coverage()
+        absent = [row for rows in ledger["absent"].values() for row in rows]
+        assert len(ledger["produced"]) + len(absent) == ledger["producible"]
+        assert len({row.topic for row in absent}) == len(absent), "a row owned by two phases"
+
+    def test_the_phase_counts_are_the_ladder_every_later_phase_is_judged_against(self):
+        """Stage 11's own summary: 8 -> 14 -> 23 -> 24 -> 30 -> 45.
+
+        This is the acceptance criterion for phases 1-5 - each is done when the count moves by
+        the number it claimed - so the claims live here rather than only in the plan's prose.
+        """
+        ledger = ros_schema.rig_coverage()
+        per_phase = {phase: len(rows) for phase, rows in ledger["absent"].items()}
+        assert per_phase == {1: 6, 2: 9, 3: 1, 4: 6, 5: 15}
+        running, ladder = len(ledger["produced"]), []
+        for phase in sorted(per_phase):
+            running += per_phase[phase]
+            ladder.append(running)
+        assert ladder == [14, 23, 24, 30, 45]
+
+    def test_nothing_impossible_is_waiting_on_a_message_definition(self):
+        """Defect two, made unrepresentable.
+
+        `imu/temp` and `status` are physical sensor health. Listing them as definition-blocked
+        said a `.msg` would unblock them, which invites somebody to go and find one.
+        """
+        for row in ros_schema.RIG_TOPICS:
+            if row.verdict == ros_schema.IMPOSSIBLE:
+                assert row.definition == "", row.topic
+                assert row.phase is None, row.topic
+                assert row.needs, f"{row.topic} must say why nothing will ever produce it"
+
+    def test_the_two_gnss_imu_topics_one_character_apart_are_both_accounted_for(self):
+        """Defect one. `/sensing/gnss/imu_data` is the SBG type; `/sensing/gnss/imu/data` is
+        the `sensor_msgs/Imu` we publish. Confusing them is how one of them vanished."""
+        assert "/sensing/gnss/imu/data" in TOPICS
+        assert "/sensing/gnss/imu_data" not in TOPICS
+        assert ros_schema.MISSING_DEFINITIONS["/sensing/gnss/imu_data"] == "sbg_driver/SbgImuData"
+
+    def test_missing_definitions_is_derived_and_never_names_a_topic_off_the_ledger(self):
+        rig = {row.topic for row in ros_schema.RIG_TOPICS}
+        for topic, reason in ros_schema.MISSING_DEFINITIONS.items():
+            assert topic in rig, topic
+            assert ros_schema.RIG_BY_TOPIC[topic].producible, topic
+            assert reason, topic
+
+    def test_a_row_says_what_it_needs_exactly_when_we_do_not_write_it(self):
+        for row in ros_schema.RIG_TOPICS:
+            if row.producible:
+                assert bool(row.needs) == (not row.produced), row.topic
+                assert (row.phase is None) == row.produced, row.topic
+
+    def test_the_declared_eight_are_the_rig_topics_this_module_actually_builds(self):
+        ledger = ros_schema.rig_coverage()
+        assert {row.topic for row in ledger["declared"]} == {
+            "/tf",
+            "/tf_static",
+            "/localization/odometry",
+            "/sensing/gnss/pose",
+            "/sensing/gnss/imu/data",
+            "/sensing/gnss/imu/velocity",
+            "/sensing/gnss/imu/nav_sat_fix",
+            "/sensing/lidar/imu",
+        }
+
+    def test_a_bag_is_counted_by_what_reached_the_wire_not_by_what_was_declared(self):
+        """8 declared, 7 written: `/tf_static` is guarded by `if mounts:` in `ros_bag.py`, so a
+        drive with no `--camera-rig` declares a transform tree and writes none. Reporting the
+        declared figure against a bag would hide exactly that."""
+        written = {row.topic for row in ros_schema.rig_coverage()["declared"]} - {"/tf_static"}
+        ledger = ros_schema.rig_coverage(written)
+        assert len(ledger["declared"]) == 8
+        assert len(ledger["produced"]) == 7
+
+    def test_the_two_rates_above_the_simulator_tick_are_recorded_as_such(self):
+        """`env.step` is the world tick, so every rate here is a decimation of `--step-hz`.
+        These two are not, and a bag that claims them is claiming a clock it does not have."""
+        fast = {row.topic: row.hz for row in ros_schema.RIG_TOPICS if (row.hz or 0) > 100.0}
+        assert fast == {"/sensing/gnss/imu/velocity": 200.0, "/sensing/lidar/imu": 202.9}
+
+    def test_the_coverage_report_runs_with_no_bag_at_all(self):
+        """It is a question about the code, not about a recording, and answers before one
+        exists. `ros_probe.py` otherwise requires a bag and refuses without one."""
+        import io
+
+        import ros_probe
+
+        rendered = io.StringIO()
+        assert ros_probe.coverage(None, out=rendered)
+        text = rendered.getvalue()
+        assert "8 / 45" in text
+        assert "phase 5" in text
+        assert "24 direct, 21 approximate, 10 not producible" in text
+
+    def test_the_probe_still_refuses_a_run_with_neither_a_bag_nor_coverage(self):
+        import ros_probe
+
+        with pytest.raises(SystemExit):
+            ros_probe.main([])
+
+
 class TestTheCameraMountConversion:
     """`ros_frame.mounts_from_rig` - two frames that differ in every axis, silently.
 
