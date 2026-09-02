@@ -172,6 +172,36 @@ def read(path):
     }
 
 
+def notes(path):
+    """What `BagWriter.summary()` wrote into the bag, back out of it. `{}` if there is none.
+
+    rosbag2 keeps `set_custom_data` in `metadata.yaml` rather than in the MCAP, and
+    `rosbags`' own `Reader` exposes no accessor for it - so a bag that carefully records what
+    it is could not, until this, be asked. Everything here is provenance a reader cannot
+    recover from the messages: which `sbg_driver` release the GNSS channels were serialised
+    against, and what the lidar's cone and range actually were, neither of which leaves a
+    trace in a well-formed message.
+
+    Read here rather than in `ros_probe` because this module owns reading a bag off disk, and
+    a second parser for the same file is a second thing to fall behind the writer.
+    """
+    import json
+
+    import yaml
+
+    path = refuse_if_missing(path)
+    metadata = (path if path.is_dir() else path.parent) / "metadata.yaml"
+    if not metadata.exists():
+        return {}
+    try:
+        loaded = yaml.safe_load(metadata.read_text())
+        return json.loads(loaded["rosbag2_bagfile_information"]["custom_data"]["wingfin"])
+    except (KeyError, TypeError, ValueError, yaml.YAMLError):
+        # A bag written by anything but this repo has no `wingfin` key, and that is not a
+        # fault - it is simply a bag we did not write. Every caller treats {} as "not stated".
+        return {}
+
+
 def rates(timestamps):
     """Message count, span and mean rate. Empty and single-message channels are latched."""
     if len(timestamps) < 2:

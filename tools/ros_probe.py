@@ -28,6 +28,7 @@ from collections import defaultdict
 from itertools import groupby
 from pathlib import Path
 
+import geodesy
 import ros_audit
 import ros_schema
 
@@ -79,6 +80,18 @@ def _yaw(orientation):
 
 def _wrap(angle):
     return (angle + math.pi) % (2 * math.pi) - math.pi
+
+
+def _metres(lat_a, lon_a, lat_b, lon_b):
+    """Roughly how far apart two fixes are, for reporting a difference that ought to be zero.
+
+    Deliberately crude - a degree of latitude as a flat 111.32 km, longitude scaled by the
+    cosine. Every caller is comparing two channels derived from one `_latlon` call and so
+    expects bit-identical floats; this exists to turn "not equal" into a number a person can
+    read, not to measure a distance. Anything that needs real metres uses `geodesy`.
+    """
+    scale = math.cos(math.radians(lat_a))
+    return math.hypot(lat_a - lat_b, (lon_a - lon_b) * scale) * 111_320.0
 
 
 class Checks:
@@ -382,6 +395,526 @@ def probe(path, workspace=None, out=sys.stdout):
             )
     else:
         print("        no cameras in this bag (the drive mounted no --camera-rig)", file=out)
+
+    # --- 9. the SBG family: nine channels, one true pose --------------------------------
+    #
+    # Every one of these is derived from the position and velocity two other topics already
+    # carry, so the only way they can be wrong is a conversion - a swapped north and east, a
+    # bearing measured from the wrong axis, a second path to latitude that drifted from the
+    # first. Not one of those raises anything, and each produces a bag that plots a car on a
+    # road. So every check here is one channel against another rather than against a constant.
+    navs = by_topic.get(ros_schema.SBG_EKF_NAV, [])
+    if navs:
+        print(f"        sbg_driver {ros_schema.SBG_DRIVER_VERSION} definitions, "
+              f"from tools/sbg_msgs/", file=out)
+        fixes_by_stamp = {
+            (m.header.stamp.sec, m.header.stamp.nanosec): m
+            for _, m in by_topic.get(ros_schema.GNSS_FIX, [])
+        }
+        # One position, reached twice. `ekf_nav` is the filter's answer and `nav_sat_fix` the
+        # receiver's, and on the rig they differ by a lever arm; here there is neither a filter
+        # nor an antenna, so they must be the same float. Anything else means a second
+        # conversion path appeared, and a second path is how 93.8 m of origin shift goes missing.
+        worst_fix = 0.0
+        paired = 0
+        for _, nav in navs:
+            fix = fixes_by_stamp.get((nav.header.stamp.sec, nav.header.stamp.nanosec))
+            if fix is None:
+                continue
+            paired += 1
+            worst_fix = max(worst_fix, _metres(nav.latitude, nav.longitude, fix.latitude,
+                                               fix.longitude))
+        checks.check(
+            "ekf_nav and nav_sat_fix are the same position on every frame",
+            paired == len(navs) and worst_fix == 0.0,
+            f"{paired} of {len(navs)} paired by stamp, worst {worst_fix:.3e} m",
+        )
+        # The raw solution against the fused one. Same argument, third channel.
+        poss = {(m.header.stamp.sec, m.header.stamp.nanosec): m
+                for _, m in by_topic.get(ros_schema.SBG_GPS_POS, [])}
+        worst_pos = max(
+            (_metres(nav.latitude, nav.longitude, poss[key].latitude, poss[key].longitude)
+             for _, nav in navs
+             if (key := (nav.header.stamp.sec, nav.header.stamp.nanosec)) in poss),
+            default=None,
+        )
+        checks.check(
+            "gps_pos carries the same position as ekf_nav",
+            worst_pos == 0.0,
+            f"{len(poss)} raw fixes, worst {worst_pos:.3e} m" if worst_pos is not None
+            else "no gps_pos messages to compare",
+        )
+        # ECEF, converted back. This is the one channel that leaves our own frame entirely, so
+        # it is checked by round trip rather than by equality: the metres it holds must be the
+        # metres the fix's own latitude and longitude produce.
+        ecefs = {(m.header.stamp.sec, m.header.stamp.nanosec): m
+                 for _, m in by_topic.get(ros_schema.GNSS_POS_ECEF, [])}
+        worst_ecef = 0.0
+        for _, nav in navs:
+            found = ecefs.get((nav.header.stamp.sec, nav.header.stamp.nanosec))
+            if found is None:
+                continue
+            x, y, z = geodesy.geodetic_to_ecef(nav.latitude, nav.longitude, nav.altitude)
+            worst_ecef = max(worst_ecef, math.dist((x, y, z),
+                                                   (found.point.x, found.point.y, found.point.z)))
+        checks.check(
+            "pos_ecef is where ekf_nav's own latitude and longitude put it",
+            len(ecefs) == len(navs) and worst_ecef < 1e-3,
+            f"{len(ecefs)} of {len(navs)}, worst {worst_ecef:.3e} m, frame "
+            + (next(iter(ecefs.values())).header.frame_id if ecefs else "-"),
+        )
+        # Orientation, told three ways. `ekf_quat` and `/sensing/gnss/imu/data` come from one
+        # call so they must be bit-identical; `ekf_euler` is the same rotation as three angles,
+        # and reading its yaw as a bearing from north rather than from east is a 90 degree error
+        # that leaves the car pointing plausibly down a different road.
+        quats = {(m.header.stamp.sec, m.header.stamp.nanosec): m
+                 for _, m in by_topic.get(ros_schema.SBG_EKF_QUAT, [])}
+        eulers = {(m.header.stamp.sec, m.header.stamp.nanosec): m
+                  for _, m in by_topic.get(ros_schema.SBG_EKF_EULER, [])}
+        imus = {(m.header.stamp.sec, m.header.stamp.nanosec): m
+                for _, m in by_topic.get(ros_schema.GNSS_IMU, [])}
+        worst_yaw, worst_orientation = 0.0, 0.0
+        for key, quat in quats.items():
+            if key in eulers:
+                worst_yaw = max(worst_yaw, abs(_wrap(_yaw(quat.quaternion) - eulers[key].angle.z)))
+            if key in imus:
+                worst_orientation = max(worst_orientation, max(
+                    abs(getattr(quat.quaternion, axis) - getattr(imus[key].orientation, axis))
+                    for axis in ("x", "y", "z", "w")
+                ))
+        checks.check(
+            "ekf_quat, ekf_euler and imu/data all describe one rotation",
+            len(quats) == len(navs) and worst_yaw < 1e-9 and worst_orientation == 0.0,
+            f"worst yaw {math.degrees(worst_yaw):.2e} deg, "
+            f"worst quaternion component {worst_orientation:.2e}",
+        )
+        # Course against the velocity in the same message. ENU: zero pointing east and counting
+        # counter-clockwise, the opposite sign to the NED bearing the same field carries under
+        # the driver's other setting. `course` is a float32, hence the tolerance.
+        vels = by_topic.get(ros_schema.SBG_GPS_VEL, [])
+        worst_course = 0.0
+        moving = 0
+        for _, vel in vels:
+            if math.hypot(vel.velocity.x, vel.velocity.y) < FORWARD_MIN_M:
+                continue
+            moving += 1
+            expected = math.degrees(math.atan2(vel.velocity.y, vel.velocity.x)) % 360.0
+            worst_course = max(worst_course, abs(_wrap(math.radians(vel.course - expected))))
+        checks.check(
+            "gps_vel's course is the direction its own velocity points, measured from east",
+            moving and worst_course < 1e-3,
+            f"{moving} of {len(vels)} moving, worst {math.degrees(worst_course):.2e} deg",
+        )
+        # The absences, pinned so that a later hand cannot quietly replace them with a plausible
+        # zero. A temperature of 0.0 reads as a sensor at freezing; an acceleration of 0.0 reads
+        # as a car in free fall with no gravity. `/sensing/gnss/imu/temp` is excluded from the
+        # 45 for exactly the reason `SbgImuData.temp` is NaN, and the two have to keep agreeing.
+        raws = [m for _, m in by_topic.get(ros_schema.SBG_IMU_DATA, [])]
+        absent = [
+            (name, value)
+            for m in raws[:1]
+            for name, value in (("temp", m.temp), ("accel.x", m.accel.x),
+                                ("delta_vel.x", m.delta_vel.x),
+                                ("delta_angle.x", m.delta_angle.x))
+        ] + [("ekf_nav.undulation", navs[0][1].undulation)]
+        checks.check(
+            "what a simulator does not have is NaN, never a plausible zero",
+            all(math.isnan(value) for _, value in absent),
+            ", ".join(f"{name}={'nan' if math.isnan(v) else v}" for name, v in absent),
+        )
+        # The gyro is the one quantity `SbgImuData` does produce, and it is the same number
+        # `/sensing/gnss/imu/data` publishes as its angular velocity.
+        raw_by_stamp = {(m.header.stamp.sec, m.header.stamp.nanosec): m for m in raws}
+        worst_gyro = max(
+            (abs(raw.gyro.z - imus[key].angular_velocity.z)
+             for key, raw in raw_by_stamp.items() if key in imus),
+            default=None,
+        )
+        checks.check(
+            "imu_data's gyro is imu/data's angular velocity - one character apart, one number",
+            worst_gyro == 0.0,
+            f"{len(raws)} raw messages, worst {worst_gyro:.2e} rad/s"
+            if worst_gyro is not None else "nothing to compare",
+        )
+        # The two clocks. `utc_ref` exists to relate the simulator's clock to a UTC, and the
+        # offset between them must be the epoch the drive declares rather than zero - zero says
+        # "our clock is UTC", which is the one thing a simulated drive cannot claim.
+        refs = [m for _, m in by_topic.get(ros_schema.GNSS_UTC_REF, [])]
+        offsets = {m.time_ref.sec - m.header.stamp.sec for m in refs}
+        utcs = [m for _, m in by_topic.get(ros_schema.SBG_UTC_TIME, [])]
+        declared = {(m.year, m.month, m.day) for m in utcs}
+        checks.check(
+            "utc_ref offsets the sim clock by the declared epoch, and utc_time agrees with it",
+            offsets == {ros_schema.GPS_EPOCH_UNIX_S}
+            and declared == {(1980, 1, 6)}
+            and all(m.clock_status.clock_utc_status == 0 for m in utcs),
+            f"offset {sorted(offsets)} s, date {sorted(declared)}, "
+            "clock_utc_status 0 (the UTC time is not known)",
+        )
+    else:
+        print("        no SBG channels in this bag (the dataset carried no projection)", file=out)
+
+    # --- 10. the point cloud: the one payload here that is a shape rather than a number ----
+    clouds = [m for _, m in by_topic.get(ros_schema.LIDAR_POINTS, [])]
+    if clouds:
+        import numpy
+
+        stated = ros_audit.notes(path).get("lidar") or {}
+        half_fov = math.radians(float(stated.get("fov_deg", 65.0))) / 2.0
+        max_range = float(stated.get("max_range_m", 200.0))
+        print(
+            f"        lidar: {len(clouds)} sweeps, {clouds[0].height} beams x "
+            f"{clouds[0].width} rays, {math.degrees(half_fov) * 2:g} deg cone, "
+            f"{max_range:g} m range, frame {clouds[0].header.frame_id}",
+            file=out,
+        )
+
+        def _xyz(message):
+            """One sweep as `(height, width, 3)` metres, straight off the wire."""
+            return numpy.frombuffer(message.data.tobytes(), dtype="<f4").reshape(
+                message.height, message.width, 3
+            )
+
+        # The cloud is *organised*, and that is a claim about the bytes: height rows of width
+        # points, three float32 each. A reader that trusts `height`/`width` and finds a payload
+        # that is not exactly that reads garbage without an error anywhere.
+        shapes = {
+            (
+                m.height * m.width * m.point_step == len(m.data),
+                m.point_step,
+                m.row_step == m.point_step * m.width,
+                tuple((f.name, f.offset, f.datatype, f.count) for f in m.fields),
+                m.is_bigendian,
+            )
+            for m in clouds
+        }
+        checks.check(
+            "the cloud is organised, and the payload is the size the header claims",
+            shapes
+            == {
+                (
+                    True,
+                    ros_schema.POINT_STEP,
+                    True,
+                    (("x", 0, 7, 1), ("y", 4, 7, 1), ("z", 8, 7, 1)),
+                    False,
+                )
+            },
+            f"{clouds[0].height}x{clouds[0].width} points, {clouds[0].point_step} bytes each, "
+            f"x/y/z float32 little-endian, {len(clouds[0].data)} bytes a sweep",
+        )
+
+        # **The check the frame choice exists for.** A forward-facing sensor cannot return a
+        # point behind itself, so in its own frame every point sits within half the FOV of +x.
+        # De-rotating by the wrong sign leaves a cloud that is still a plausible road seen from
+        # a plausible car - same points, rigidly rotated - and this is the only thing in the bag
+        # that says so: measured 100.00% inside at 32.41 deg against a 32.5 deg half-angle with
+        # the sign right, and 0.00% with it flipped.
+        worst_bearing, ahead, counted = 0.0, 0, 0
+        for message in clouds:
+            points = _xyz(message)
+            finite = numpy.isfinite(points).all(axis=-1)
+            x, y = points[..., 0][finite], points[..., 1][finite]
+            counted += int(x.size)
+            ahead += int((x > 0).sum())
+            if x.size:
+                worst_bearing = max(worst_bearing, float(numpy.abs(numpy.arctan2(y, x)).max()))
+        checks.check(
+            "every point the lidar returns is in front of it, inside its own field of view",
+            counted > 0
+            and ahead == counted
+            and worst_bearing <= half_fov + math.radians(0.5),
+            f"{ahead} of {counted} points ahead, worst bearing "
+            f"{math.degrees(worst_bearing):.2f} deg against a "
+            f"{math.degrees(half_fov):.2f} deg half-angle",
+        )
+
+        # A miss keeps its slot and is NaN - that is what `is_dense: false` means, and it is
+        # why the sweep stays organised. Two ways to get this wrong and neither raises: writing
+        # the far-plane point as if it were a return (a wall of scenery 18 km away), or writing
+        # zeros (a dense ball of points at the sensor's own origin).
+        worst_reach, missed, half_nan = 0.0, 0, 0
+        for message in clouds:
+            points = _xyz(message)
+            nans = numpy.isnan(points).sum(axis=-1)
+            missed += int((nans == 3).sum())
+            half_nan += int(((nans > 0) & (nans < 3)).sum())
+            finite = numpy.isfinite(points).all(axis=-1)
+            if finite.any():
+                reach = numpy.sqrt((points[finite].astype(numpy.float64) ** 2).sum(axis=-1))
+                worst_reach = max(worst_reach, float(reach.max()))
+        checks.check(
+            "a ray that hit nothing keeps its slot and is NaN, and no return is beyond range",
+            missed > 0
+            and half_nan == 0
+            and worst_reach <= max_range
+            and all(m.is_dense is False for m in clouds),
+            f"{missed} misses of {counted + missed}, {half_nan} part-NaN points, "
+            f"furthest return {worst_reach:.1f} m of {max_range:g} m allowed",
+        )
+
+        # **A blind cloud is well-formed.** Past the image-buffer ceiling
+        # (`camera_rig.MAX_BUFFERS_WITH_POINT_CLOUD`) the depth buffer comes back at its far
+        # plane, so every ray is a point 18 km out, the range gate turns all of them into NaN,
+        # and what reaches the bag is 364 correctly-shaped sweeps of nothing. Every other check
+        # here passes on that bag - the shape is right, the misses are NaN, the sweeps all
+        # differ. Only the share of rays that hit says which run it was: measured on junction-1,
+        # 48.5-57.7% with the cloud inside the ceiling and 0.10-0.27% past it. The floor is set
+        # between the two rather than near either, because it is separating a working sensor
+        # from a dead one, not measuring how much scenery a junction has.
+        share = 100.0 * counted / max(1, counted + missed)
+        checks.check(
+            "the sweep has returns in it rather than being a buffer of sky",
+            share >= 5.0,
+            f"{share:.2f}% of rays hit something within {max_range:g} m "
+            f"(a working sensor measures 48.5-57.7% here, a blind one 0.1-0.3%)",
+        )
+
+        # A mounted camera is read out of the buffer the frame pass already filled. Read it the
+        # wrong way - or never re-read it - and every sweep in the bag is the same sweep, which
+        # is a perfectly well-formed cloud that says the world stood still.
+        digests = {message.data.tobytes() for message in clouds}
+        checks.check(
+            "each sweep is read afresh rather than one buffer republished",
+            len(digests) == len(clouds),
+            f"{len(digests)} distinct sweeps in {len(clouds)} messages",
+        )
+
+        # And the cloud belongs to the same drive the GNSS does. Put each sweep back into the
+        # world with the pose the bag itself carries for that frame, and it has to land on the
+        # map the drive was generated from - the containment check the fixes already get,
+        # applied to the one channel that reaches 200 m off the car.
+        mount = next(
+            (
+                t.transform.translation
+                for _, msg in by_topic.get(ros_schema.TF_STATIC, [])
+                for t in msg.transforms
+                if t.child_frame_id == ros_schema.LIDAR_FRAME
+            ),
+            None,
+        )
+        box = _osm_bounds(Path(workspace)) if workspace else None
+        if box and mount is not None and fixes:
+            south, west, north, east = box
+            # The sensor's own range is part of the pad, and has to be: a car driving legally
+            # near the edge of the extract sees 200 m past it, so those returns are outside the
+            # OSM bounding box and are not wrong. What is left for this to catch is a cloud that
+            # is not where the car is at all - which is the whole of what it is for, the ego's
+            # own containment being checked against a tighter bound a few checks above.
+            pad = (EXTENT_PAD_M + max_range) / 111_320.0
+            poses = {(o.header.stamp.sec, o.header.stamp.nanosec): o for _, o in odom}
+            located = {(f.header.stamp.sec, f.header.stamp.nanosec): f for _, f in fixes}
+            outside, total = 0, 0
+            for message in clouds:
+                key = (message.header.stamp.sec, message.header.stamp.nanosec)
+                if key not in poses or key not in located:
+                    continue
+                pose, fix = poses[key].pose.pose, located[key]
+                yaw = _yaw(pose.orientation)
+                points = _xyz(message).reshape(-1, 3).astype(numpy.float64)
+                points = points[numpy.isfinite(points).all(axis=-1)]
+                # Sensor frame -> base_link (the mount) -> map (the ego's own pose).
+                east_m = points[:, 0] + mount.x
+                north_m = points[:, 1] + mount.y
+                turned_e = east_m * math.cos(yaw) - north_m * math.sin(yaw)
+                turned_n = east_m * math.sin(yaw) + north_m * math.cos(yaw)
+                # Metres to degrees about the ego's own fix. Flat-earth over 200 m at this
+                # latitude is sub-metre, and the extent is padded by far more than that.
+                scale = math.cos(math.radians(fix.latitude))
+                latitudes = fix.latitude + turned_n / 111_320.0
+                longitudes = fix.longitude + turned_e / (111_320.0 * scale)
+                total += int(latitudes.size)
+                outside += int(
+                    (
+                        (latitudes < south - pad)
+                        | (latitudes > north + pad)
+                        | (longitudes < west - pad)
+                        | (longitudes > east + pad)
+                    ).sum()
+                )
+            checks.check(
+                "the cloud lands on the map (within its own range of the OSM extent, "
+                f"{EXTENT_PAD_M + max_range:.0f} m)",
+                total > 0 and outside == 0,
+                f"{total - outside} of {total} returns inside {south:.4f}..{north:.4f} N, "
+                f"{west:.4f}..{east:.4f} E",
+            )
+    else:
+        print("        no lidar in this bag (--ros-lidar was not asked for)", file=out)
+
+    # --- 11. the camera packets: the only payload here that has to be decoded to be read ----
+    #
+    # Every other check in this file reads a number off the wire and compares it with another
+    # number. These cannot: an H.264 packet is opaque, and a bag full of well-formed packets
+    # carrying the wrong pixels opens, plays and renders. So this section actually runs the
+    # decoder, which is the only thing that can tell the difference.
+    streams = {
+        topic: [m for _, m in by_topic.get(topic, [])]
+        for topic in ros_schema.CAMERA_PACKET_TOPICS
+        if by_topic.get(topic)
+    }
+    if streams:
+        import numpy
+
+        stated = ros_audit.notes(path).get("cameras") or {}
+        first = next(iter(streams.values()))
+        print(
+            f"        cameras: {len(streams)} streams, {len(first)} packets each, "
+            f"{first[0].width}x{first[0].height}, {first[0].encoding}"
+            + (f" crf {stated['crf']}" if "crf" in stated else ""),
+            file=out,
+        )
+
+        # Every stream is the same length, and it is the length of the cloud's - the other
+        # `sensor`-family channel. A camera that stopped being read half way through leaves a
+        # bag that plays perfectly and is missing the second half of one view.
+        lengths = {topic: len(messages) for topic, messages in streams.items()}
+        checks.check(
+            "every camera stream holds the same number of packets",
+            len(set(lengths.values())) == 1,
+            ", ".join(f"{t.split('/')[-3]}={n}" for t, n in sorted(lengths.items())),
+        )
+
+        # The packet's own header against the lens on the latched topic beside it. Two topics
+        # produced from the same `CameraSpec` by two different code paths - one at
+        # `start_episode`, one per frame through the encoder - so a mismatch means one of them
+        # is describing a camera that is not the one being drawn.
+        mismatched = []
+        for topic, messages in streams.items():
+            info_topic = topic.replace("image_raw/ffmpeg", "camera_info_latched")
+            info = [m for _, m in by_topic.get(info_topic, [])]
+            if not info:
+                mismatched.append(f"{topic.split('/')[-3]}: no camera_info")
+                continue
+            wrong = [
+                m
+                for m in messages
+                if (m.width, m.height) != (info[0].width, info[0].height)
+                or m.header.frame_id != info[0].header.frame_id
+            ]
+            if wrong:
+                mismatched.append(
+                    f"{topic.split('/')[-3]}: {len(wrong)} packets disagree with camera_info"
+                )
+        checks.check(
+            "each packet says the same size and frame as its own camera_info",
+            not mismatched,
+            "; ".join(mismatched) or f"{len(streams)} streams agree",
+        )
+
+        # A reader joining mid-bag decodes nothing until the next keyframe, so where they are is
+        # a property of the bag rather than of the encoder's mood. The first packet has to be
+        # one, or the stream cannot be decoded from its own beginning.
+        gop = round(
+            float(stated.get("keyframe_seconds", 1.0)) * float(stated.get("rate_hz", 10.0))
+        )
+        bad_keys = []
+        for topic, messages in streams.items():
+            name = topic.split("/")[-3]
+            keys = [i for i, m in enumerate(messages) if m.flags & ros_schema.PACKET_FLAG_KEY]
+            widest = max(
+                (b - a for a, b in zip(keys, keys[1:], strict=False)), default=len(messages)
+            )
+            if not keys or keys[0] != 0:
+                bad_keys.append(f"{name}: first keyframe at {keys[:1] or 'never'}")
+            elif gop > 0 and len(messages) > gop and widest > gop:
+                bad_keys.append(f"{name}: {widest} frames between keyframes")
+        checks.check(
+            f"every stream opens on a keyframe and keeps one at least every {gop} frames",
+            not bad_keys,
+            "; ".join(bad_keys) or f"{len(streams)} streams, keyframe every {gop} frames",
+        )
+
+        # **The rate, against the rate the bag says it wrote at.** This is the structural half
+        # of the held-frame question: `frame_gate` re-uses the last drawn picture on a step
+        # between two decisions, so a stream written every step carries one re-encode of a held
+        # buffer in every gap. Those re-encodes are not detectable in the bytes - inter-frame
+        # coding makes each one tiny and perfectly valid - but they are impossible to hide from
+        # a clock, because there are `stride` times too many of them.
+        declared_hz = float(stated.get("rate_hz", 0.0) or 0.0)
+        gaps = sorted(
+            b - a
+            for topic in streams
+            for a, b in zip(
+                [t for t, _ in by_topic[topic]], [t for t, _ in by_topic[topic]][1:], strict=False
+            )
+        )
+        measured_hz = 1e9 / gaps[len(gaps) // 2] if gaps else 0.0
+        checks.check(
+            "the packets arrive at the decision rate the bag declares, not the step rate",
+            declared_hz > 0 and abs(measured_hz - declared_hz) <= 0.01 * declared_hz,
+            f"{measured_hz:.2f} Hz measured against {declared_hz:.2f} Hz declared",
+        )
+
+        # And then the one that needs the decoder. Everything above is a header check, and a
+        # header check cannot see a picture that is blank, stale, or the wrong camera's.
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import ros_encode
+        except ImportError:  # pragma: no cover - `av` is in the same group as `rosbags`
+            ros_encode = None
+        if ros_encode is None:
+            print(
+                "        (no `av` here, so the pictures were not decoded - "
+                "uv sync --group sim --group ros)",
+                file=out,
+            )
+        else:
+            undecodable, stuck, blank = [], [], []
+            for topic, messages in streams.items():
+                name = topic.split("/")[-3]
+                frames = ros_encode.decode(
+                    [m.data.tobytes() for m in messages], messages[0].width, messages[0].height
+                )
+                if len(frames) != len(messages) or any(
+                    f.shape != (messages[0].height, messages[0].width, 3) for f in frames
+                ):
+                    undecodable.append(
+                        f"{name}: {len(frames)} pictures out of {len(messages)} packets"
+                    )
+                    continue
+                # The same question again, this time from the pictures. **Equality is the
+                # wrong test and was measured to be**: re-encoding one identical source frame
+                # ten times does *not* produce ten identical decoded frames, because a keyframe
+                # and the P-frames after it quantise differently - measured 0 exact repeats and
+                # 47.2 to 61.4 dB between consecutive pictures, against 24.8 dB for a stream
+                # that was actually moving. So the test is the *median* gap, and it is the
+                # median rather than the worst because a car stopped at a red really does draw
+                # the same picture twice and that is not a fault.
+                gaps = sorted(
+                    ros_encode.psnr(a, b)
+                    for a, b in zip(frames, frames[1:], strict=False)
+                )
+                middle = gaps[len(gaps) // 2] if gaps else 0.0
+                if middle > 40.0:
+                    stuck.append(f"{name}: median {middle:.1f} dB between consecutive pictures")
+                # And a camera that rendered nothing encodes to a flat grey that is perfectly
+                # well-formed. Standard deviation over the whole stream, not per frame: a real
+                # drive past a wall is legitimately flat for a while.
+                spread = float(numpy.std(numpy.asarray(frames[:: max(1, len(frames) // 20)])))
+                if spread < 1.0:
+                    blank.append(f"{name}: whole stream is flat, std {spread:.2f}")
+            checks.check(
+                "every packet decodes back to a picture of the declared size",
+                not undecodable,
+                "; ".join(undecodable)
+                or f"{sum(len(m) for m in streams.values())} packets decoded across "
+                f"{len(streams)} streams",
+            )
+            checks.check(
+                "the pictures move - no stream is one held buffer re-encoded",
+                not stuck,
+                "; ".join(stuck)
+                or f"{len(streams)} streams under the 40 dB ceiling (a held buffer "
+                "measures 47-61 dB between consecutive pictures, a moving one 25)",
+            )
+            checks.check(
+                "the cameras drew a scene rather than an empty buffer",
+                not blank,
+                "; ".join(blank) or f"{len(streams)} streams carry image content",
+            )
+    else:
+        print("        no camera packets in this bag (--ros-camera was not asked for)", file=out)
 
     print(file=out)
     if checks.failed:

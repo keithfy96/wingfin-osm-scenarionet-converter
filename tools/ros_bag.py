@@ -304,6 +304,11 @@ class BagWriter:
             "source": "simulated",
             "generator": "wingfin-osm-scenarionet-converter stage 10",
             "noise_model": "none",
+            # Which `sbg_driver` release the nine SBG channels were serialised against. CDR
+            # carries no field names, so a consumer decoding them with its **own** installed
+            # package rather than with the definitions in this bag needs to be told - and the
+            # field lists did change between releases. `tools/sbg_msgs/README.md` measures it.
+            "sbg_driver_version": ros_schema.SBG_DRIVER_VERSION,
             "frames": self.frames,
             "messages_per_topic": dict(sorted(self.counts.items())),
             "reference_bag": REFERENCE_BAG,

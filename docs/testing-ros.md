@@ -129,6 +129,21 @@ those can be wrong in isolation and look fine; they cannot all agree while any i
 `10.00 Hz / 100.00 ms` median. From the probe: `all 13 checks passed`, with GNSS spanning lat
 `3.1842..3.1864`, lon `101.6110..101.6124` — Kuala Lumpur, on the junction.
 
+**The check count is the ladder, and it rises with each stage-11 phase.** A bag carries only the
+checks its own channels earn: 13 on a plain drive, **16** with `--camera-rig`, **24** once
+phase 2's GNSS family is on the wire, **30** with `--ros-lidar` beside a six-camera rig, and
+**37** with `--ros-camera` as well. A number *lower* than the bag's channels deserve means a
+section printed its "not asked for" line instead of running.
+
+```bash
+# the widest one: six cameras, the cloud and the packets - 30 / 45 on the wire, 37 checks
+METADRIVE_PYTHON=.venv/bin/python ./scripts/ros-bag.sh junction-1 -- \
+    --out bags/phase4-full --camera-rig <a six-camera spec> --render offscreen \
+    --ros-camera --ros-lidar
+uv run python tools/ros_probe.py bags/phase4-full --workspace workspaces/junction-1
+uv run python tools/ros_probe.py bags/phase4-full --coverage
+```
+
 **Writes** nothing; both print to the terminal.
 
 **Check those figures against `docs/reference/ros-bags.md`.** That file records what was
@@ -371,11 +386,41 @@ the row.
   move `generation_fingerprint` and the Stage 3 lane review keeps applying. It does rewrite the
   workspace's dataset, which is tracked in git.
 
-- **No pixels.** `image_raw/ffmpeg` is 6 of the rig's 55 topics and the encoder is not written —
-  no picture has ever reached a bag. Everything *around* the pictures now has: as of stage 11
-  phase 1 a `--camera-rig` drive writes the six `camera_info_latched` topics and the `/tf_static`
-  transform tree, so a consumer has each camera's intrinsics and its mount before a single frame
-  exists. What is missing is the encoding, not the geometry.
+- **The GNSS is noiseless truth, told nine more ways.** Stage 11 phase 2 added the SBG family,
+  so a bag now carries `ekf_nav`, `ekf_quat`, `ekf_euler`, `imu_data`, `gps_pos`, `gps_vel`,
+  `utc_time`, `imu/pos_ecef` and `imu/utc_ref` - all derived from one true pose, with no
+  multipath, no dropout and no filter lag. The probe cross-checks them against each other rather
+  than against constants, because a swapped north and east still plots a car on a road.
+- **A 1980 date in `utc_time` is the sentinel, not a bug.** The drive declares the GPS epoch as
+  its `t = 0` so that elapsed time is exact and no reader mistakes the date for a real recording
+  session; `clock_utc_status` is `0`, the message's own "the UTC time is not known".
+- **NaN in `imu_data`'s `accel` and `temp` is deliberate.** Those types have no `-1` and no status
+  flag, and every float a temperature field can hold is a temperature - `0.0` included. An
+  *accuracy* of zero next to them is a different statement and is true.
+- **The point cloud is opt-in, and off it costs nothing.** `--ros-lidar` adds
+  `/sensing/lidar/points` (stage 11 phase 3) and takes the bag from 672 KB to 24 MB, so it is a
+  flag rather than a default. It is a 65 deg forward cone off a rendered depth buffer, not a
+  Livox sweep, and it says so in the bag's own metadata.
+- **A cloud can be blind and still look perfect.** Above 7 image buffers - a 7-camera rig plus
+  the cloud is 8 - MetaDrive's depth buffer comes back at its far plane, so every sweep is 99.8%
+  NaN while the shapes, the stamps and the headers are all correct. `drive.py` refuses the
+  pairing and `ros_probe` checks the share of rays that hit; if you ever see that check fail,
+  count the buffers before doubting the map.
+- **A miss is NaN in place, not a dropped point.** The sweep stays organised, which is the one
+  piece of structure a lidar payload carries. Anything that reads the cloud has to test for NaN
+  - `is_dense` is false and says so.
+- **Pixels are opt-in, and unchecked unless they are decoded.** `--ros-camera` on a
+  `--camera-rig` drive writes the six `image_raw/ffmpeg` streams (stage 11 phase 4) and takes the
+  bag from 672 KB to 14 MB. Every other check in `ros_probe.py` reads a number; these decode the
+  packets and look at the pictures, because **a bag full of well-formed packets carrying the
+  wrong pixels opens, plays and renders.** Three things behind them are silent when wrong -
+  BGR-vs-RGB, a vertical flip, and a delayed packet under a codec lookahead - and
+  `tests/unit/test_ros_encode.py` pins each.
+- **A held camera frame is not detectable with `==`.** Re-encoding one identical picture ten
+  times gives zero bit-identical decoded frames, because a keyframe and the P-frames after it
+  quantise differently. The probe uses a 40 dB median-PSNR ceiling (a held stream measures
+  47-61 dB, a moving one 25) plus the structural check that settles it - the packets arrive at
+  the decision rate the bag's own metadata declares.
 
 - **`rigs/cams.txt` disagrees with itself about which way two cameras face**, and the bag reports
   that rather than picking a side. Its front pair reads `+yaw` as right and its back pair reads it
@@ -384,7 +429,7 @@ the row.
   the bag; `/tf_static` carries the geometry, so follow `frame_id` rather than the topic name.
   `rigs/av3.txt` has no such rows.
 
-- **24 of the rig's 55 topics stay omitted** for want of a `.msg` definition
+- **15 of the rig's 55 topics stay omitted** for want of a `.msg` definition
   (`ros_schema.MISSING_DEFINITIONS`; `tools/ros_probe.py --coverage` counts them), omitted rather than published under a substitute type: a
   subscriber deserialising `wingfin_msgs/VehicleState` fails on a `geometry_msgs/TwistStamped`
   wearing that topic name, which is worse than an absent topic. **They are recoverable from one

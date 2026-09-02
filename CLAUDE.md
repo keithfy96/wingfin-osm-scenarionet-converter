@@ -450,6 +450,13 @@ These describe *what runs*, and are deliberately distinct from `docs/implementat
   `metadata.get(...) or (0.0, 0.0)` raises on the numpy array. Run `tools/ros_probe.py`.
 - **`--ros-bag` is drive-time and must never become a `ConverterConfig` field**, and it needs
   Python 3.10 — the host's `METADRIVE_PYTHON` is 3.8, so it is the container or nothing.
+- **Above 7 image buffers the point cloud goes blind without raising** — 99.8% NaN, every shape,
+  stamp and header still correct. A 7-camera rig plus `--ros-lidar` is 8; `drive.py` refuses it.
+- **A `.msg` in `EXTRA_DEFINITIONS` no topic writes is unchecked** — `FFMPEGPacket` sat there
+  wrong in four ways until phase 4 wrote it. Copy upstream verbatim, pin it in a test.
+- **`CameraRig.read()` is BGR**, whatever `get_rgb_array_cpu` is called; and two decoded H.264
+  frames are never bit-identical even from one identical source, so a held-frame check written
+  with `==` passes on a bag that is entirely held frames.
 
 ### The Stage 2 lane model
 → `docs/reference/lane-model-algorithm.md`

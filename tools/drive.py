@@ -1203,6 +1203,25 @@ def _ground_around(engine, path, radius_m=25):
     return highest, above / total
 
 
+def _lidar_size(text):
+    """`"200x64"` to `(200, 64)`, refusing anything else by name.
+
+    Rays across a beam by beam count, in that order, matching `sensor_survey.py`'s
+    `--point-cloud-size` exactly - the two flags describe the same sensor and a reader who
+    learns one should not have to check whether the other is transposed.
+    """
+    width, _, height = str(text).lower().partition("x")
+    try:
+        width, height = int(width), int(height)
+    except ValueError:
+        raise ValueError(
+            f"--ros-lidar takes WIDTHxHEIGHT, e.g. 200x64, not {text!r}"
+        ) from None
+    if width < 1 or height < 1:
+        raise ValueError(f"--ros-lidar needs a positive width and height, not {text!r}")
+    return width, height
+
+
 def _report_camera_topics(cameras, mounts, unmapped):
     """Which rig topic each mounted camera went out on, and every place the two disagree.
 
@@ -1423,6 +1442,55 @@ def main() -> int:
         "/localization/odometry,/perception/objects.",
     )
     parser.add_argument(
+        "--ros-lidar",
+        nargs="?",
+        const="200x64",
+        default=None,
+        metavar="WIDTHxHEIGHT",
+        help="Also write /sensing/lidar/points, a real 3-D cloud off MetaDrive's "
+        "PointCloudLidar. WIDTHxHEIGHT is rays across a beam by beam count; bare, it is "
+        "200x64, which is what tools/sensor_survey.py surveys. Needs --ros-bag and a render "
+        "context, and costs one more image buffer every step. **It is a 65-degree forward "
+        "cone, not the rig's Livox sweep** - the honest limit of a cloud recovered from a "
+        "depth buffer, and no resolution here changes it. Written at the decision rate, so a "
+        "default drive gives the rig's 10 Hz; the points are in the `lidar` frame, whose "
+        "mount is on /tf_static beside the cameras'.",
+    )
+    parser.add_argument(
+        "--ros-lidar-range",
+        type=float,
+        default=None,
+        metavar="METRES",
+        help="How far --ros-lidar calls a return a hit; beyond it, the point is written NaN "
+        "in place, the way sensor_msgs/PointCloud2 says an invalid point is written. Default "
+        "200 m. This is a range we declare, not one MetaDrive enforces: the depth buffer's "
+        "far plane is 100 km, so an unhit ray comes back as a point up to 18 km away rather "
+        "than as nothing, and without a gate the cloud describes the sky. Measured on "
+        "junction-1, roughly half of every sweep is sky.",
+    )
+    parser.add_argument(
+        "--ros-camera",
+        action="store_true",
+        help="Also write the six image_raw/ffmpeg camera topics, H.264 out of the rig's own "
+        "buffers. Needs --ros-bag and --camera-rig. Opt-in because it is the one thing in the "
+        "bag that costs real time per frame - about a millisecond a camera - and because it is "
+        "most of the file: raw sensor_msgs/Image at 512x288 is 62x the size, which is 41 GB "
+        "against the rig's 0.67 for a six-camera 780 s drive. Written at the decision rate, "
+        "not the step rate, because frame_gate re-uses the last drawn frame on a held step and "
+        "encoding it again would tell a reader the world stood still. A spec camera the "
+        "vehicle has no counterpart for is not written - it has no cam_sync_rig channel.",
+    )
+    parser.add_argument(
+        "--ros-camera-crf",
+        type=int,
+        default=None,
+        metavar="CRF",
+        help="Constant-rate-factor for --ros-camera, x264's own quality dial: lower is better "
+        "and bigger, 0 is lossless, 51 is unwatchable. Default 23, x264's default, measured at "
+        "42 dB PSNR against the source frames. A bag is training data rather than a preview, "
+        "which is the argument against turning this up to save space.",
+    )
+    parser.add_argument(
         "--ros-bag-past-tape",
         action="store_true",
         help="Keep recording after the drive outlives the recording. Off by default, and the "
@@ -1624,6 +1692,44 @@ def main() -> int:
             f"result       FAILED: --camera-rig needs --render offscreen or 3D, not "
             f"--render {arguments.render}. base_env.py:343 drops every camera when nothing "
             "is rendering, so the rig would be mounted on nothing."
+        )
+        return 1
+    # The cloud is a rendered depth buffer, so it is under the same rule as the rig - and under
+    # one more, because unlike every other sensor flag it has nowhere to go without a bag.
+    if arguments.ros_lidar and not arguments.ros_bag:
+        print(
+            "result       FAILED: --ros-lidar has nothing to write to without --ros-bag. The "
+            "cloud is a bag topic (/sensing/lidar/points) and this drive is not recording one."
+        )
+        return 1
+    if arguments.ros_lidar and arguments.render not in ("offscreen", "3D"):
+        print(
+            f"result       FAILED: --ros-lidar needs --render offscreen or 3D, not --render "
+            f"{arguments.render}. PointCloudLidar is a depth camera behind the scenes, and "
+            "base_env.py:343 drops every camera when nothing is rendering."
+        )
+        return 1
+    # The camera packets are the rig's own buffers re-encoded, so they need the rig as well as
+    # the bag. Neither is inferable: without a rig there is no picture, and without a bag there
+    # is nowhere to put one.
+    if arguments.ros_camera and not arguments.ros_bag:
+        print(
+            "result       FAILED: --ros-camera has nothing to write to without --ros-bag. The "
+            "packets are six bag topics (.../image_raw/ffmpeg) and this drive is not "
+            "recording one."
+        )
+        return 1
+    if arguments.ros_camera and not arguments.camera_rig:
+        print(
+            "result       FAILED: --ros-camera needs --camera-rig. The packets are the rig's "
+            "own buffers encoded; with no rig there are no cameras to encode, and MetaDrive's "
+            "lone offscreen rgb_camera is not one of the vehicle's six."
+        )
+        return 1
+    if arguments.ros_camera_crf is not None and not 0 <= arguments.ros_camera_crf <= 51:
+        print(
+            f"result       FAILED: --ros-camera-crf takes 0 to 51, not "
+            f"{arguments.ros_camera_crf}. 0 is lossless, 23 is the default, 51 is unwatchable."
         )
         return 1
     # A camera has to be rendered before it can be read: `base_env.py:343` drops every camera
@@ -2062,6 +2168,54 @@ def main() -> int:
         for line in rig.describe():
             print("rig          " + line if line[:1].isdigit() else "             " + line)
 
+    # After the rig, and merged rather than assigned for the same reason the rig merges: this
+    # adds a sensor beside whatever is already registered instead of replacing it. A 7-camera
+    # rig plus this is 8 buffers against `camera_rig.MAX_IMAGE_BUFFERS` of 9, which is the
+    # pairing that constant was measured at.
+    ros_lidar_size = None
+    ros_lidar_range = None
+    if arguments.ros_lidar:
+        import ros_frame
+        import ros_schema
+
+        try:
+            ros_lidar_size = _lidar_size(arguments.ros_lidar)
+        except ValueError as error:
+            print(f"result       FAILED: {error}")
+            return 1
+        ros_lidar_range = (
+            ros_frame.LIDAR_MAX_RANGE_M
+            if arguments.ros_lidar_range is None
+            else arguments.ros_lidar_range
+        )
+        # The buffer ceiling, and it is a lower one than `MAX_IMAGE_BUFFERS` because the fault
+        # is different: past it the env still runs and the cloud comes back empty. Counted the
+        # way the engine counts - the rig's cameras, or the lone `rgb_camera` offscreen
+        # registers when there is no rig, plus this.
+        from camera_rig import MAX_BUFFERS_WITH_POINT_CLOUD
+
+        buffers = (len(rig.cameras) if rig is not None else 1) + 1
+        if buffers > MAX_BUFFERS_WITH_POINT_CLOUD:
+            print(
+                f"result       FAILED: --ros-lidar alongside {len(rig.cameras)} rig cameras is "
+                f"{buffers} image buffers, and the cloud goes blind above "
+                f"{MAX_BUFFERS_WITH_POINT_CLOUD}. Measured on junction-1: 6 cameras and the "
+                "cloud return 48.5-57.7% of rays within range, 7 cameras and the cloud return "
+                "0.1-0.3% - the depth buffer comes back at its far plane and every sweep is "
+                "NaN, with nothing raising. Drop a camera from the rig (cam_front_wide has no "
+                "rig topic and is the spare) or record the cloud on a drive of its own."
+            )
+            return 1
+        merged = dict(offscreen.get("sensors", {}))
+        merged.update(ros_frame.sensor_config(ros_lidar_size))
+        offscreen["sensors"] = merged
+        width, height = ros_lidar_size
+        print(
+            f"ros lidar    {width}x{height} = {width * height} rays over {height} beams, "
+            f"{ros_frame.LIDAR_FOV_DEG:g} deg forward cone, "
+            f"{ros_lidar_range:g} m declared range"
+        )
+
     env = environment_class(
         {
             "data_directory": dataset,
@@ -2101,6 +2255,9 @@ def main() -> int:
     reported_settle = False
     ros_bag = None
     ros_projection = None
+    ros_lidar_sensor = None
+    ros_camera_encoder = None
+    ros_camera_crf = arguments.ros_camera_crf
     ros_tape_steps = 0
     ros_stopped_at = None
     ros_topics = (
@@ -2124,6 +2281,19 @@ def main() -> int:
         except ros_frame.RosFrameError as error:
             print(f"result       FAILED: {error}")
             return 1
+        if arguments.ros_camera:
+            # Same rule, one library further on: `av` is in the same dependency group and the
+            # same image, so it is missing in exactly the situations `rosbags` is - and a
+            # missing encoder found at the first decision frame is a recording thrown away.
+            import ros_encode
+
+            try:
+                ros_encode.refuse_if_unsupported()
+            except ros_encode.RosEncodeError as error:
+                print(f"result       FAILED: {error}")
+                return 1
+            if ros_camera_crf is None:
+                ros_camera_crf = ros_encode.DEFAULT_CRF
 
     recorder = None
     if arguments.record:
@@ -2261,6 +2431,44 @@ def main() -> int:
                 "agent_policy": arguments.agent_policy,
                 "traffic": arguments.traffic,
                 "lights": arguments.lights,
+                # What the cloud on /sensing/lidar/points *is*, written into the bag, because
+                # none of it can be recovered from the messages: a 65-degree forward cone is
+                # not distinguishable from a Livox sweep that happened to see nothing to the
+                # side, and a NaN cannot say which range gate produced it.
+                **(
+                    {}
+                    if ros_lidar_size is None
+                    else {
+                        "lidar": {
+                            "sensor": "MetaDrive PointCloudLidar, a rendered depth buffer",
+                            "width": ros_lidar_size[0],
+                            "height": ros_lidar_size[1],
+                            "fov_deg": ros_frame.LIDAR_FOV_DEG,
+                            "max_range_m": ros_lidar_range,
+                            "frame": ros_schema.LIDAR_FRAME,
+                            "sweep": "65 deg forward cone, NOT the rig's Livox coverage",
+                        }
+                    }
+                ),
+                # And what the pictures are, for the same reason: an H.264 packet says nothing
+                # about the colour order it was fed, the quality it was coded at, or the rate
+                # it was sampled at, and all three change what a model learns from it.
+                **(
+                    {}
+                    if not arguments.ros_camera
+                    else {
+                        "cameras": {
+                            "codec": ros_encode.CODEC,
+                            "pixel_format": ros_encode.PIXEL_FORMAT,
+                            "source_format": ros_encode.SOURCE_FORMAT,
+                            "preset": ros_encode.PRESET,
+                            "crf": ros_camera_crf,
+                            "rate_hz": effective_hz / stride,
+                            "keyframe_seconds": ros_encode.KEYFRAME_SECONDS,
+                            "spec": arguments.camera_rig,
+                        }
+                    }
+                ),
             },
         ).__enter__()
 
@@ -2355,8 +2563,17 @@ def main() -> int:
                 # bolted on (`/tf_static`) and what its lens does (`camera_info_latched`). Neither
                 # is written on a drive with no rig, which is why the coverage report says
                 # "declared" and "on the wire" as two numbers.
-                ros_mounts = ros_frame.mounts_from_rig(rig) if rig is not None else None
+                ros_mounts = dict(ros_frame.mounts_from_rig(rig)) if rig is not None else {}
                 ros_cameras = ros_frame.cameras_from_rig(rig) if rig is not None else ()
+                # Per reset, like the rig's cameras: the mount is cheap and does not rest on
+                # the ego's NodePath surviving a reset, which is measured to be true today and
+                # is not a property of a scenario whose ego is a different vehicle class.
+                if ros_lidar_size is not None:
+                    ros_lidar_sensor = ros_frame.mount_lidar(env)
+                    # The sensor's own frame joins the six camera frames under `base_link`, so
+                    # a consumer can put the cloud and an image in one place without being told
+                    # anything that is not in the bag.
+                    ros_mounts.update(ros_frame.lidar_mount())
                 ros_bag.start_episode(
                     ros_frame.read(env, 0, 0.0, ros_projection),
                     route=ros_frame.route_of(env),
@@ -2365,6 +2582,26 @@ def main() -> int:
                 )
                 if rig is not None:
                     _report_camera_topics(ros_cameras, ros_mounts, ros_frame.unmapped_cameras(rig))
+                # Per episode, not per drive. A reset is a new scene, and a new stream is what
+                # makes its first frame a keyframe; one encoder carried across would code that
+                # frame as a difference against the last frame of the previous scenario.
+                if arguments.ros_camera:
+                    if ros_camera_encoder is not None:
+                        ros_camera_encoder.close()
+                    try:
+                        ros_camera_encoder = ros_encode.RigEncoder(
+                            ros_cameras, effective_hz / stride, crf=ros_camera_crf
+                        )
+                    except ros_encode.RosEncodeError as error:
+                        print(f"result       FAILED: {error}")
+                        return 1
+                    print(
+                        f"ros camera   {len(ros_camera_encoder.encoders)} x "
+                        f"{ros_encode.CODEC} crf {ros_camera_crf} preset "
+                        f"{ros_encode.PRESET}, keyframe every "
+                        f"{ros_camera_encoder.gop_size} frames at "
+                        f"{effective_hz / stride:g} Hz"
+                    )
             if recorder is not None:
                 recorder.start_episode(scenario_id)
             if remote is not None:
@@ -2520,8 +2757,40 @@ def main() -> int:
                     # `recorder.record` - the slot this file already reserves for one consumer
                     # per frame. `steps` is the loop's own counter, so the sim time is the
                     # frame's own and not `engine.episode_step`, which is one ahead.
+                    # On decision steps only. At the default 10 Hz that is every step and
+                    # the rig's own 10 Hz cloud rate; at `--step-hz 100 --decision-hz 20` it is
+                    # one sweep in five. Reading it every step instead would cost a buffer copy
+                    # per step for sweeps a strided drive never acts on.
+                    ros_cloud = (
+                        ros_frame.lidar_cloud(ros_lidar_sensor, max_range_m=ros_lidar_range)
+                        if ros_lidar_sensor is not None and deciding
+                        else None
+                    )
+                    # **Read here and not beside `model.observe` above, deliberately.** That
+                    # read happens *before* `env.step`, so the buffers it pulls were drawn on
+                    # the previous decision - av3_base's own ordering, and correct for a model
+                    # that has to act on what it has already seen. A bag frame is a statement
+                    # that these pixels and this pose are the same instant, so its picture is
+                    # the one drawn by the step whose pose it carries. Sharing one read between
+                    # the two would make one of them wrong by a decision, silently, and the
+                    # cost of not sharing is a second read-back on the rare drive that does
+                    # both.
+                    ros_packets = ()
+                    if ros_camera_encoder is not None and deciding:
+                        try:
+                            ros_packets = ros_camera_encoder.encode(rig.read())
+                        except ros_encode.RosEncodeError as error:
+                            print(f"result       FAILED: {error}")
+                            return 1
                     ros_bag.write(
-                        ros_frame.read(env, steps, steps * sim_dt, ros_projection)
+                        ros_frame.read(
+                            env,
+                            steps,
+                            steps * sim_dt,
+                            ros_projection,
+                            lidar=ros_cloud,
+                            camera_packets=ros_packets,
+                        )
                     )
                     ros_stopped_at = None
                 elif ros_bag is not None and ros_stopped_at is None:
@@ -2838,6 +3107,19 @@ def main() -> int:
         # left the driver freeing the VA space of a process that had died mid-ioctl.
         closing.arm_exit()
         try:
+            if ros_camera_encoder is not None:
+                # Before the bag closes, because a flush could still produce packets. Measured
+                # empty for this preset and tune - which is why anything that does come out is
+                # reported rather than dropped in silence: it would mean the encoder started
+                # holding frames back, and every packet in the bag would be a decision late.
+                left = ros_camera_encoder.close()
+                if left:
+                    print(
+                        f"ros camera   WARNING: {len(left)} packet(s) left in the encoder at "
+                        "close and were not written. That should be zero with "
+                        f"tune=zerolatency; if it is not, the packets already in the bag are "
+                        "delayed and their stamps are wrong."
+                    )
             if ros_bag is not None:
                 # Before `env.close()`, deliberately. Closing a bag writes its index and its
                 # metadata; doing that after the GL teardown would put it downstream of the one
@@ -2890,6 +3172,19 @@ def main() -> int:
             f"ros bag      {ros_bag.frames} frames, {total} messages across "
             f"{len(counts)} topics -> {arguments.ros_bag}"
         )
+        if ros_camera_encoder is not None and ros_camera_encoder.packets:
+            per = ros_camera_encoder.bytes / ros_camera_encoder.packets
+            raw = ros_cameras[0].width * ros_cameras[0].height * 3 if ros_cameras else 0
+            print(
+                f"ros camera   {ros_camera_encoder.packets} packets, "
+                f"{ros_camera_encoder.bytes / 1e6:.2f} MB, {per:.0f} bytes a frame"
+                + (
+                    f" - {raw / per:.0f}x smaller than the {raw / 1e3:.0f} KB an uncompressed "
+                    "sensor_msgs/Image would be"
+                    if raw
+                    else ""
+                )
+            )
         if ros_stopped_at is not None:
             print(
                 f"             stopped at step {ros_stopped_at} of {steps}: the recording ends "

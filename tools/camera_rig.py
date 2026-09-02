@@ -117,6 +117,26 @@ STEP_S = 0.1
 # line looks like it works, and then fails on a run somebody is relying on.
 MAX_IMAGE_BUFFERS = 9
 
+# The same ceiling, for a rig standing beside a `PointCloudLidar` - and it is **lower**, for a
+# different fault that the counts above cannot see. Everything above measures whether the run
+# *survives*; this measures whether the cloud has anything in it. Measured on `junction-1`,
+# 12 sweeps at each size, counting returns within 200 m as a share of the buffer:
+#
+#     1 buffer  (cloud alone)   48.52..57.70%      7 buffers (6 RGB + cloud)  48.52..57.70%
+#     4 buffers (3 RGB + cloud) 48.52..57.70%      8 buffers (7 RGB + cloud)   0.10.. 0.27%
+#
+# At eight the env does not crash, the buffer is created, `perceive` returns an array of the
+# right shape, and every sweep in a drive differs from the last - so nothing anywhere raises or
+# repeats. The depth buffer simply comes back at its far plane, and a far-plane ray is a point
+# 18 km away, which the range gate turns into NaN. The result is a bag full of well-formed
+# clouds that are 99.8% empty, and no header in it says so.
+#
+# So this is a **refusal in `drive.py`**, not a warning, for the reason `MAX_IMAGE_BUFFERS` is:
+# a run that looks like it worked is worse than one that stopped. `rigs/cams.txt` is seven
+# cameras, one of which - `cam_front_wide` - has no rig topic at all, so dropping that spare is
+# what makes the pairing fit.
+MAX_BUFFERS_WITH_POINT_CLOUD = 7
+
 
 class RigError(Exception):
     """The spec could not be turned into a rig. Always names the camera and the reason."""

@@ -26,10 +26,10 @@ answers attached.**
 | rig cameras — 6× `image_raw` + 6× `meta` + 6× `camera_info_latched` | 18 | ✅ direct, and closer than you would expect — `rigs/cams.txt` already defines `cam_left` / `cam_front` / `cam_right` + `cam_back_left` / `cam_back` / `cam_back_right` + a forward wide. That is the six `front_*` / `rear_*` views, plus a spare. |
 | `/tf`, `/tf_static`, `/localization/odometry` | 3 | ✅ direct |
 | `/vehicle/state`, `/vehicle/actuators_output`, `/control/actuators` | 3 | ✅ direct — speed, heading, and the commanded `[steering, throttle_brake]` |
-| GNSS/INS — `pose`, `ekf_nav` / `quat` / `euler`, `imu_data`, `imu/data`, `pos_ecef`, `imu/velocity`, `nav_sat_fix`, `gps_pos`, `gps_vel` | 11 | ⚠ synthesisable — `tools/geodesy.py` already does metres → lat/lon and `tools/policy_client.py` already emits a GNSS block. But **noiseless**: no multipath, no dropouts, no EKF lag. |
+| GNSS/INS — `pose`, `ekf_nav` / `quat` / `euler`, `imu_data`, `imu/data`, `pos_ecef`, `imu/velocity`, `nav_sat_fix`, `gps_pos`, `gps_vel` | 11 | ⚠ **all 11 written** (stage 11 phase 2). `tools/geodesy.py` does metres → lat/lon and now → ECEF; the `sbg_driver` definitions are in `tools/sbg_msgs/`. Still **noiseless**: no multipath, no dropouts, no EKF lag. |
 | `/sensing/lidar/imu` | 1 | ⚠ an IMU, yes; a Livox free-running at 202.9 Hz, no |
-| `/sensing/gnss/utc_time`, `imu/utc_ref`, `/vehicle/engagement` | 3 | ⚠ trivial to emit |
-| `/sensing/lidar/points` | 1 | ⚠ possible — you dropped it |
+| `/sensing/gnss/utc_time`, `imu/utc_ref`, `/vehicle/engagement` | 3 | ⚠ the first two **written** (phase 2); `/vehicle/engagement` still needs a `.msg` |
+| `/sensing/lidar/points` | 1 | ⚠ **written** (stage 11 phase 3) on a `--ros-lidar` drive. A 65° forward cone off a rendered depth buffer, not a Livox sweep |
 | `/control/predicted_trajectory`, `lateral_plan`, `longitudinal_plan`, `/perception/inference_control`, `model_info` | 5 | ⚠ only when a model drives — that is Stage 9, already built |
 | `/vehicle/can_rx`, `can_tx` | 2 | ❌ no CAN bus. Synthesising DBC frames would be fabrication (`can_tx` was empty in the bag anyway). |
 | `/sensing/cabin/image_raw`, `camera_info_latched` | 2 | ❌ no cabin, no driver |
@@ -45,12 +45,7 @@ Measured rates are from `bag_audit.html`; `latched` means a single message at th
 
 | topic | Hz | verdict |
 |---|---|---|
-| `/sensing/camera/cam_sync_rig/front_left/image_raw/ffmpeg` | 20 | ✅ |
-| `/sensing/camera/cam_sync_rig/front_middle/image_raw/ffmpeg` | 20 | ✅ |
-| `/sensing/camera/cam_sync_rig/front_right/image_raw/ffmpeg` | 20 | ✅ |
-| `/sensing/camera/cam_sync_rig/rear_left/image_raw/ffmpeg` | 20 | ✅ |
-| `/sensing/camera/cam_sync_rig/rear_middle/image_raw/ffmpeg` | 20 | ✅ |
-| `/sensing/camera/cam_sync_rig/rear_right/image_raw/ffmpeg` | 20 | ✅ |
+| `…/front_left/image_raw/ffmpeg` … `…/rear_right/image_raw/ffmpeg` (6) | 20 | ✅ **written** (stage 11 phase 4). H.264 out of the rig's own buffers; needs `--camera-rig` **and** `--ros-camera`, and is written at the decision rate |
 | `…/front_left/meta` … `…/rear_right/meta` (6) | 20 | ✅ |
 | `…/front_left/camera_info_latched` … `…/rear_right/camera_info_latched` (6) | latched | ✅ **written** (stage 11 phase 1). Intrinsics come off the rig spec's `width` / `height` / `fov`; needs a `--camera-rig` drive |
 | `/tf` | 86.6 | ✅ |
@@ -60,21 +55,21 @@ Measured rates are from `bag_audit.html`; `latched` means a single message at th
 | `/vehicle/actuators_output` | 100 | ✅ |
 | `/control/actuators` | 100 | ✅ |
 | `/sensing/gnss/pose` | 50 | ⚠ noiseless |
-| `/sensing/gnss/ekf_nav` | 50 | ⚠ noiseless |
-| `/sensing/gnss/ekf_quat` | 50 | ⚠ noiseless |
-| `/sensing/gnss/ekf_euler` | 50 | ⚠ noiseless |
-| `/sensing/gnss/imu_data` | 50 | ⚠ noiseless |
+| `/sensing/gnss/ekf_nav` | 50 | ⚠ **written** (stage 11 phase 2), noiseless. `sbg_driver/SbgEkfNav`; the same fix `nav_sat_fix` carries |
+| `/sensing/gnss/ekf_quat` | 50 | ⚠ **written** (phase 2), noiseless. The orientation `imu/data` publishes |
+| `/sensing/gnss/ekf_euler` | 50 | ⚠ **written** (phase 2), noiseless. ENU, so yaw is zero pointing **east** |
+| `/sensing/gnss/imu_data` | 50 | ⚠ **written** (phase 2). `sbg_driver/SbgImuData` — **not** `imu/data` below. Only `gyro` is produced; `accel`, `temp` and the two strapdown integrals are NaN |
 | `/sensing/gnss/imu/data` | 50 | ⚠ noiseless |
-| `/sensing/gnss/imu/pos_ecef` | 50 | ⚠ noiseless |
+| `/sensing/gnss/imu/pos_ecef` | 50 | ⚠ **written** (phase 2), noiseless. `geometry_msgs/PointStamped` in the `earth` frame — the only frame here that is not ours |
 | `/sensing/gnss/imu/velocity` | **200** | ⚠ noiseless, **and above the tick** — see *Rates* |
 | `/sensing/gnss/imu/nav_sat_fix` | 5 | ⚠ noiseless |
-| `/sensing/gnss/gps_pos` | 5 | ⚠ noiseless |
-| `/sensing/gnss/gps_vel` | 5 | ⚠ noiseless |
+| `/sensing/gnss/gps_pos` | 5 | ⚠ **written** (phase 2), noiseless. Satellite counts are `0xFF`, the message's own N/A |
+| `/sensing/gnss/gps_vel` | 5 | ⚠ **written** (phase 2), noiseless. `course` is ENU: degrees CCW from east |
 | `/sensing/lidar/imu` | **202.9** | ⚠ an IMU yes, a free-running Livox no |
-| `/sensing/gnss/utc_time` | 1 | ⚠ trivial |
-| `/sensing/gnss/imu/utc_ref` | 1 | ⚠ trivial |
+| `/sensing/gnss/utc_time` | 1 | ⚠ **written** (phase 2). The drive declares the GPS epoch as its `t=0`; `clock_utc_status` is 0, "the UTC time is not known" |
+| `/sensing/gnss/imu/utc_ref` | 1 | ⚠ **written** (phase 2). `sensor_msgs/TimeReference` — core all along, never definition-blocked |
 | `/vehicle/engagement` | 100 | ⚠ trivial |
-| `/sensing/lidar/points` | 10 | ⚠ possible — dropped |
+| `/sensing/lidar/points` | 10 | ⚠ **written** (phase 3), at the decision rate, so 10.00 Hz on a default drive. Organised 64×200, xyz float32, misses NaN in place |
 | `/control/predicted_trajectory` | 10 | ⚠ model only |
 | `/control/lateral_plan` | 10 | ⚠ model only |
 | `/control/longitudinal_plan` | 10 | ⚠ model only |
@@ -121,7 +116,18 @@ not free choices; they are decimations of `--step-hz`.
 
 ## What sits behind each verdict
 
-### The cameras (✅, with four things to get right)
+### The cameras (✅ written, stage 11 phases 1 and 4)
+
+`--camera-rig <spec>` writes the six `camera_info_latched` topics and `/tf_static`; adding
+`--ros-camera` writes the six `image_raw/ffmpeg` streams beside them. Measured on junction-1
+with six 512×288 cameras: **6,075 bytes a frame**, against the rig's own 7,159, and 73× smaller
+than the 442 KB an uncompressed `sensor_msgs/Image` would be. That is the whole argument for the
+codec — raw would be ~41 GB for a six-camera 780 s drive against the rig's 0.67.
+
+Off by default, like the cloud, because it is the one thing in the bag that costs real time per
+frame. It takes the bag from 672 KB to 14 MB.
+
+Four things to get right:
 
 - **`rigs/cams.txt` is already the right rig** — six 512×288 views plus a 1280×720 forward wide,
   which maps onto the bag's six `image_raw` topics with one spare. `rigs/README.md` is the
@@ -139,6 +145,19 @@ not free choices; they are decimations of `--step-hz`.
   sensor classes, reachable from `tools/sensor_survey.py` and `tools/policy_client.py` but not from
   a rig spec.
 
+And three the encoder itself has to get right, all silent when wrong — `tools/ros_encode.py`
+carries the measurements and `tests/unit/test_ros_encode.py` pins each:
+
+- **The pictures are BGR**, whatever `get_rgb_array_cpu` is called. Declaring the source `rgb24`
+  mirrors red and blue in every frame of every bag.
+- **`tune=zerolatency` is load-bearing.** It is what makes libx264 one-in-one-out, which is what
+  lets a packet carry the stamp of the `env.step` that drew it. With a lookahead the packet
+  coming out belongs to an earlier step, and a delayed packet is a perfectly valid packet.
+- **The `FFMPEGPacket` definition vendored in `ros_schema.py` was wrong** until phase 4 — wrong
+  field order, wrong widths, one invented field, one missing. It could not raise while no camera
+  topic was written. It is now verbatim from `ffmpeg_image_transport_msgs` 1.1.2 (humble), pinned
+  by a test.
+
 ### GNSS and INS (⚠ noiseless)
 
 The conversion exists and is tested. `tools/geodesy.py` takes the azimuthal-equidistant origin out
@@ -152,16 +171,34 @@ filter catching up. A synthesised one is the true pose with a different name on 
 that learns or is evaluated on the difference between GNSS and ground truth will find no
 difference at all.
 
-### `/sensing/lidar/points` (⚠ possible, and dropped)
+### `/sensing/lidar/points` (⚠ written, stage 11 phase 3)
 
-MetaDrive has a `PointCloudLidar` and this repo already drives it — `tools/sensor_survey.py`
-records a `point-cloud.npy` and `tools/view_point_cloud.py` displays it. Two constraints:
+`--ros-lidar` on a drive. MetaDrive's `PointCloudLidar` behind it — the same sensor
+`tools/sensor_survey.py` writes a `point-cloud.npy` from and `tools/view_point_cloud.py`
+displays. Off by default: it costs an image buffer every step and takes the bag from 672 KB
+to 24 MB.
 
 - **A point cloud must not cross the policy socket as uint8.** `depth` and `point-cloud` inherit a
   `_format` that *converts* rather than reformats, and a measured cloud runs −18476.9 to
-  +11030.2 m. Neither raises. See `docs/reference/sensors-and-observations.md`.
+  +11030.2 m. Neither raises. See `docs/reference/sensors-and-observations.md`. Read in-process
+  it survives — but only through `perceive(to_float=True)`, which for this sensor returns the
+  array untouched. `to_float=False` is the branch that converts.
 - It is a **rendered** cloud, not a Livox scan pattern — no dual returns, no intensity off a real
-  material, no motion distortion across the sweep.
+  material, no motion distortion across the sweep. `intensity` is left out of the fields rather
+  than filled with a constant, and it is a **65° forward cone**, which is the honest limit of a
+  cloud recovered from a depth buffer.
+- Published in the **`lidar` frame**, whose mount is on `/tf_static` beside the cameras'. Not in
+  `map`, although MetaDrive hands the sweep over in world coordinates: a cloud that took no
+  transform makes no claim about where the sensor points, and so nothing about it can be
+  checked. In the sensor frame every point must lie inside the sensor's own FOV, which is what
+  `ros_probe` tests — 100.00% with the rotation right, 0.00% with the sign flipped.
+- **A miss keeps its slot and is NaN**, so the sweep stays organised at 64 beams × 200 rays and
+  `is_dense` is false. The range that calls a return a miss is declared by us
+  (`--ros-lidar-range`, 200 m): the depth buffer's far plane is 100 km, so an unhit ray comes
+  back as a point up to 18 km out rather than as nothing.
+- **Eight image buffers blind it silently.** A 7-camera rig plus the cloud records sweeps that
+  are 99.8% NaN with nothing raising, so `drive.py` refuses that pairing —
+  `docs/reference/ros-bags.md` has the measurement.
 
 ### The planning and model topics (⚠ Stage 9)
 

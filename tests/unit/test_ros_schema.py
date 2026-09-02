@@ -28,6 +28,7 @@ from ros_schema import (  # noqa: E402
     BUILDERS,
     EXTRA_DEFINITIONS,
     MAP_FRAME,
+    SECONDS_PER_WEEK,
     TOPICS,
     Box,
     Ego,
@@ -82,7 +83,18 @@ class TestTheStamp:
             lights=(Light("light-a", "TRAFFIC_LIGHT_RED", 5.0, 6.0),),
         )
         seen = set()
-        for _topic, _msgtype, content in messages(frame):
+        for topic, _msgtype, content in messages(frame):
+            # `/sensing/gnss/imu/utc_ref` is the one exception, and it is the exception on
+            # purpose: a `TimeReference` exists to express one clock in terms of another, so its
+            # `time_ref` is the declared UTC and differs from `header.stamp` by exactly the
+            # epoch. Publishing them equal would say "our clock is UTC". Its header is still
+            # swept below with everything else.
+            if topic == ros_schema.GNSS_UTC_REF:
+                assert content["time_ref"] == stamp(
+                    ros_schema.GPS_EPOCH_UNIX_S + frame.sim_time_s
+                )
+                seen.update(_stamps(content["header"]))
+                continue
             seen.update(_stamps(content))
         assert len(seen) == 1, seen
         assert seen == {(1, 250_000_000)}
@@ -329,11 +341,21 @@ class TestTheTopicTable:
         assert {topic for topic, _, _ in messages(_frame(), topics=picked)} == picked
 
     def test_the_vendored_definitions_are_parseable_message_text(self):
+        """Run through the real parser rather than a shape heuristic.
+
+        This used to assert two whitespace-separated tokens per line, which held while every
+        definition here was a compact string written by hand. The `sbg_driver` ones are upstream
+        files carrying comments and blank lines, and a rule that would have rejected them was
+        never testing the thing that matters: `rosbags` has to be able to parse the text, and
+        a definition that cannot be parsed cannot be registered or written.
+        """
+        from rosbags.typesys import get_types_from_msg
+
         for name, text in EXTRA_DEFINITIONS.items():
             assert name.count("/") == 2 and "/msg/" in name, name
-            assert text.endswith("\n")
-            for line in text.strip().splitlines():
-                assert len(line.split()) == 2, (name, line)
+            parsed = get_types_from_msg(text, name)
+            assert name in parsed, name
+            assert parsed[name][1], f"{name} declares no fields"
 
 
 class TestTheRigCoverageLedger:
@@ -409,19 +431,19 @@ class TestTheRigCoverageLedger:
         This is the acceptance criterion for phases 1-5 - each is done when the count moves by
         the number it claimed - so the claims live here rather than only in the plan's prose.
 
-        **Phase 1 landed, so 14 is now the floor and 1 is gone from the ladder.** A phase that
-        is done leaves the `absent` table entirely rather than lingering with a count of zero;
-        the running total starting at 14 is what says so.
+        **Phases 1 to 4 landed, so 30 is now the floor and all four are gone from the
+        ladder.** A phase that is done leaves the `absent` table entirely rather than lingering
+        with a count of zero; the running total starting at 30 is what says so.
         """
         ledger = ros_schema.rig_coverage()
         per_phase = {phase: len(rows) for phase, rows in ledger["absent"].items()}
-        assert per_phase == {2: 9, 3: 1, 4: 6, 5: 15}
+        assert per_phase == {5: 15}
         running, ladder = len(ledger["produced"]), []
-        assert running == 14
+        assert running == 30
         for phase in sorted(per_phase):
             running += per_phase[phase]
             ladder.append(running)
-        assert ladder == [23, 24, 30, 45]
+        assert ladder == [45]
 
     def test_nothing_impossible_is_waiting_on_a_message_definition(self):
         """Defect two, made unrepresentable.
@@ -437,10 +459,17 @@ class TestTheRigCoverageLedger:
 
     def test_the_two_gnss_imu_topics_one_character_apart_are_both_accounted_for(self):
         """Defect one. `/sensing/gnss/imu_data` is the SBG type; `/sensing/gnss/imu/data` is
-        the `sensor_msgs/Imu` we publish. Confusing them is how one of them vanished."""
+        the `sensor_msgs/Imu` we publish. Confusing them is how one of them vanished.
+
+        **Phase 2 published both**, which removes the asymmetry that made the defect possible
+        and replaces it with a sharper requirement: two topics one character apart must carry
+        two different types on two different builders, or one of them is quietly the other.
+        """
         assert "/sensing/gnss/imu/data" in TOPICS
-        assert "/sensing/gnss/imu_data" not in TOPICS
-        assert ros_schema.MISSING_DEFINITIONS["/sensing/gnss/imu_data"] == "sbg_driver/SbgImuData"
+        assert "/sensing/gnss/imu_data" in TOPICS
+        assert TOPICS["/sensing/gnss/imu/data"][0] != TOPICS["/sensing/gnss/imu_data"][0]
+        assert BUILDERS["/sensing/gnss/imu/data"] is not BUILDERS["/sensing/gnss/imu_data"]
+        assert "/sensing/gnss/imu_data" not in ros_schema.MISSING_DEFINITIONS
 
     def test_missing_definitions_is_derived_and_never_names_a_topic_off_the_ledger(self):
         rig = {row.topic for row in ros_schema.RIG_TOPICS}
@@ -455,7 +484,7 @@ class TestTheRigCoverageLedger:
                 assert bool(row.needs) == (not row.produced), row.topic
                 assert (row.phase is None) == row.produced, row.topic
 
-    def test_the_declared_fourteen_are_the_rig_topics_this_module_actually_builds(self):
+    def test_the_declared_thirty_are_the_rig_topics_this_module_actually_builds(self):
         ledger = ros_schema.rig_coverage()
         assert {row.topic for row in ledger["declared"]} == {
             "/tf",
@@ -467,21 +496,54 @@ class TestTheRigCoverageLedger:
             "/sensing/gnss/imu/nav_sat_fix",
             "/sensing/lidar/imu",
             *ros_schema.CAMERA_INFO_TOPICS,
+            # Phase 2: seven `sbg_driver` types and two that were core all along.
+            "/sensing/gnss/ekf_nav",
+            "/sensing/gnss/ekf_quat",
+            "/sensing/gnss/ekf_euler",
+            "/sensing/gnss/imu_data",
+            "/sensing/gnss/gps_pos",
+            "/sensing/gnss/gps_vel",
+            "/sensing/gnss/utc_time",
+            "/sensing/gnss/imu/pos_ecef",
+            "/sensing/gnss/imu/utc_ref",
+            # Phase 3, and the only one of the 45 whose payload is a shape.
+            "/sensing/lidar/points",
+            # Phase 4, and the only six whose payload has to be decoded before it can be read.
+            *ros_schema.CAMERA_PACKET_TOPICS,
         }
 
     def test_a_bag_is_counted_by_what_reached_the_wire_not_by_what_was_declared(self):
-        """14 declared, 7 written on a drive with no rig.
+        """30 declared, 12 written on a plain drive with no rig, no lidar and no projection.
 
-        `/tf_static` is guarded by `if mounts:` in `ros_bag.py` and the six `camera_info_latched`
-        topics are written per camera, so a drive that mounts no `--camera-rig` declares a
-        transform tree and six lenses and writes none of them. Reporting the declared figure
-        against such a bag would hide exactly that, and phase 1 doubled how much it would hide.
+        **Three** independent reasons a declared topic misses the wire now, and this pins each.
+        `/tf_static` is guarded by `if mounts:` in `ros_bag.py`, and the six `camera_info_latched`
+        topics and the six `image_raw/ffmpeg` ones all need a rig, so a drive that mounts no
+        `--camera-rig` writes none of the thirteen. `/sensing/lidar/points` needs `--ros-lidar`
+        and its builder returns None without a sweep in the frame. The four `GEODETIC_TOPICS`
+        need a real position. Reporting the declared figure against such a bag would hide all
+        eighteen, and every phase widens the gap rather than narrowing it.
         """
-        rig_only = {"/tf_static", *ros_schema.CAMERA_INFO_TOPICS}
-        written = {row.topic for row in ros_schema.rig_coverage()["declared"]} - rig_only
-        ledger = ros_schema.rig_coverage(written)
-        assert len(ledger["declared"]) == 14
-        assert len(ledger["produced"]) == 7
+        declared = {row.topic for row in ros_schema.rig_coverage()["declared"]}
+        assert len(declared) == 30
+
+        # Neither `--camera-rig` nor `--ros-lidar`: the transform tree, the six lenses, the six
+        # camera streams and the cloud are all declared and absent.
+        asked_for = {
+            "/tf_static",
+            ros_schema.LIDAR_POINTS,
+            *ros_schema.CAMERA_INFO_TOPICS,
+            *ros_schema.CAMERA_PACKET_TOPICS,
+        }
+        no_rig = ros_schema.rig_coverage(declared - asked_for)
+        assert len(no_rig["declared"]) == 30
+        assert len(no_rig["produced"]) == 16
+
+        # No projection either: the four topics that need a real position drop as well. Three
+        # of those four are phase 2's, so this gap grew with the phase rather than shrinking.
+        neither = ros_schema.rig_coverage(
+            declared - asked_for - set(ros_schema.GEODETIC_TOPICS)
+        )
+        assert len(neither["produced"]) == 12
 
     def test_the_two_rates_above_the_simulator_tick_are_recorded_as_such(self):
         """`env.step` is the world tick, so every rate here is a decimation of `--step-hz`.
@@ -499,7 +561,7 @@ class TestTheRigCoverageLedger:
         rendered = io.StringIO()
         assert ros_probe.coverage(None, out=rendered)
         text = rendered.getvalue()
-        assert "14 / 45" in text
+        assert "30 / 45" in text
         assert "phase 5" in text
         assert "24 direct, 21 approximate, 10 not producible" in text
 
@@ -1228,3 +1290,711 @@ class TestTheCameraTopicsInAWrittenBag:
             )
             bag.write(frame)
         assert set(self._read(path)) == picked
+
+
+class TestTheSbgFamily:
+    """The nine channels stage 11 phase 2 landed, and the two things they can get wrong.
+
+    Seven of them are `sbg_driver` types, which `Stores.ROS2_HUMBLE` has never heard of, so the
+    first risk is the one `EXTRA_DEFINITIONS` has always carried: **a field out of order
+    serialises silently and deserialises into nonsense.** That is why the definitions are files
+    copied verbatim from a named upstream commit rather than text retyped here, and why the
+    round trip below goes through real CDR rather than comparing dicts.
+
+    The second is arithmetic. Every value in all nine is a re-shaping of one position and one
+    velocity, so a swapped north and east, a bearing measured from north instead of east, or a
+    second path to latitude that drifted from the first all produce a bag that opens, decodes
+    and plots a car on a road. The tests are therefore mostly one channel against another.
+    """
+
+    _PROJECTION = Projection(origin_lat=3.15, origin_lon=101.6, offset_x=0.0, offset_y=0.0)
+
+    def _frame(self, **over):
+        base = dict(
+            index=3,
+            sim_time_s=1.25,
+            ego=_ego(heading=0.3, velocity_east=8.0, velocity_north=3.0, yaw_rate=0.11,
+                     roll=0.01, pitch=-0.02),
+            projection=self._PROJECTION,
+        )
+        base.update(over)
+        return Frame(**base)
+
+    # -- the definitions ------------------------------------------------------------------
+    def test_the_definitions_are_files_on_disk_not_text_retyped_into_this_repo(self):
+        """"Copied verbatim" is a claim somebody has to be able to check against upstream, and
+        a `.msg` rewrapped into a Python string literal cannot be diffed against anything."""
+        names = sorted(path.stem for path in ros_schema.SBG_MSG_DIR.glob("*.msg"))
+        assert names == [
+            "SbgEkfEuler", "SbgEkfNav", "SbgEkfQuat", "SbgEkfStatus",
+            "SbgGpsPos", "SbgGpsPosStatus", "SbgGpsVel", "SbgGpsVelStatus",
+            "SbgImuData", "SbgImuStatus", "SbgUtcTime", "SbgUtcTimeStatus",
+        ]
+        for name in names:
+            assert f"sbg_driver/msg/{name}" in EXTRA_DEFINITIONS
+
+    def test_the_five_nested_status_types_are_carried_as_well_as_the_seven_published_ones(self):
+        """A message type is useless without the submessages it names, and only seven of the
+        twelve are ever a topic. Registering `SbgEkfNav` without `SbgEkfStatus` fails loudly at
+        parse time, which is the good case - but it fails at the first bag, not in a test."""
+        published = {
+            TOPICS[topic][0]
+            for topic in (
+                ros_schema.SBG_EKF_NAV, ros_schema.SBG_EKF_QUAT, ros_schema.SBG_EKF_EULER,
+                ros_schema.SBG_IMU_DATA, ros_schema.SBG_GPS_POS, ros_schema.SBG_GPS_VEL,
+                ros_schema.SBG_UTC_TIME,
+            )
+        }
+        loaded = {key for key in EXTRA_DEFINITIONS if key.startswith("sbg_driver/")}
+        assert published < loaded
+        assert len(loaded - published) == 5
+
+    def test_the_driver_version_is_pinned_and_travels_with_every_bag(self):
+        """CDR carries no field names, so a consumer decoding these with its own installed
+        `sbg_driver` needs to know which one they were written against - and the field lists
+        did change between releases (`SbgEkfStatus` went 16 fields to 23, two of them removed).
+        """
+        import ros_bag
+
+        assert ros_schema.SBG_DRIVER_VERSION == "3.4.0"
+        assert len(ros_schema.SBG_DRIVER_COMMIT) == 40
+        writer = ros_bag.BagWriter("unused", topics=None, notes={})
+        assert writer.summary()["sbg_driver_version"] == "3.4.0"
+
+    def test_every_sbg_type_round_trips_through_real_cdr(self):
+        """The check the whole copy-rather-than-invent rule exists for. A field in the wrong
+        order does not raise here either - but a value that comes back changed does, and every
+        field this module writes is read back below."""
+        import ros_bag
+
+        store = ros_bag._typestore()
+        frame = self._frame()
+        for topic, msgtype, content in messages(frame):
+            if not msgtype.startswith(("sbg_driver/", "sensor_msgs/msg/TimeReference")):
+                continue
+            message = ros_bag._message(store, msgtype, content)
+            back = store.deserialize_cdr(store.serialize_cdr(message, msgtype), msgtype)
+            assert back.header.frame_id == BASE_FRAME, topic
+            assert back.header.stamp.sec == 1 and back.header.stamp.nanosec == 250_000_000
+
+    # -- one position, several channels ---------------------------------------------------
+    def test_the_geodetic_topics_vanish_together_when_the_dataset_has_no_projection(self):
+        """A bag holding `ekf_nav` on a dataset that cannot say where it is would be holding a
+        latitude of zero, off the coast of Ghana. `gnss_fix_message` already refused; the three
+        new ones that need a real position have to refuse in exactly the same breath."""
+        written = {topic for topic, _, _ in messages(_frame())}
+        assert written & set(ros_schema.GEODETIC_TOPICS) == set()
+        with_projection = {topic for topic, _, _ in messages(self._frame())}
+        assert set(ros_schema.GEODETIC_TOPICS) <= with_projection
+
+    def test_ekf_nav_gps_pos_and_nav_sat_fix_are_the_same_position(self):
+        """There is no lever arm and no Kalman filter in a simulator, so the fused solution, the
+        raw one and the driver's `NavSatFix` are one position reached three ways. A difference
+        could only be a second conversion path - which is how 93.8 m of origin shift goes
+        missing without anything looking wrong."""
+        frame = self._frame()
+        fix = ros_schema.gnss_fix_message(frame)
+        nav = ros_schema.ekf_nav_message(frame)
+        raw = ros_schema.gps_pos_message(frame)
+        assert nav["latitude"] == fix["latitude"] == raw["latitude"]
+        assert nav["longitude"] == fix["longitude"] == raw["longitude"]
+        assert nav["altitude"] == fix["altitude"] == raw["altitude"]
+
+    def test_pos_ecef_is_where_the_fix_puts_it_and_hangs_off_the_earth_frame(self):
+        """REP-105's `earth` is the only frame in this bag that is not ours, and it is what
+        joins a drive on junction-1 to anything else on the planet. Under `map` it would be
+        93.8 m of local metres wearing global units."""
+        import geodesy
+
+        frame = self._frame()
+        fix = ros_schema.gnss_fix_message(frame)
+        point = ros_schema.pos_ecef_message(frame)
+        assert point["header"]["frame_id"] == ros_schema.EARTH_FRAME
+        expected = geodesy.geodetic_to_ecef(fix["latitude"], fix["longitude"], fix["altitude"])
+        assert (point["point"]["x"], point["point"]["y"], point["point"]["z"]) == expected
+        # Kuala Lumpur, not the centre of the earth and not the other hemisphere.
+        assert math.dist(expected, (0.0, 0.0, 0.0)) == pytest.approx(6_378_000, abs=30_000)
+
+    # -- the conventions that are silent when wrong ---------------------------------------
+    def test_velocity_is_enu_so_x_is_east_and_y_is_north(self):
+        """The driver publishes NED under its other setting, where the same two floats mean
+        north and east. Reading one as the other is a 90 degree error that still plots a car
+        driving along a road."""
+        nav = ros_schema.ekf_nav_message(self._frame())
+        vel = ros_schema.gps_vel_message(self._frame())
+        assert (nav["velocity"]["x"], nav["velocity"]["y"]) == (8.0, 3.0)
+        assert vel["velocity"] == nav["velocity"]
+
+    def test_the_course_is_measured_from_east_counter_clockwise_not_from_north(self):
+        """ENU course is zero pointing east; NED course is zero pointing north and counts the
+        other way. Driving due north is 90 degrees under one and 0 under the other."""
+        north = ros_schema.gps_vel_message(
+            self._frame(ego=_ego(velocity_east=0.0, velocity_north=5.0))
+        )
+        assert north["course"] == pytest.approx(90.0)
+        east = ros_schema.gps_vel_message(
+            self._frame(ego=_ego(velocity_east=5.0, velocity_north=0.0))
+        )
+        assert east["course"] == pytest.approx(0.0)
+        assert 0.0 <= ros_schema.gps_vel_message(
+            self._frame(ego=_ego(velocity_east=-5.0, velocity_north=-5.0))
+        )["course"] < 360.0
+
+    def test_the_course_comes_from_the_velocity_rather_than_from_the_heading(self):
+        """They are not the same thing - a car sliding has a course that differs from where it
+        is pointing - and taking the easy one would make the probe's cross-check tautological."""
+        turned = ros_schema.gps_vel_message(self._frame(ego=_ego(
+            heading=2.0, velocity_east=5.0, velocity_north=0.0
+        )))
+        assert turned["course"] == pytest.approx(0.0)
+
+    def test_ekf_euler_and_ekf_quat_and_the_imu_describe_one_rotation(self):
+        frame = self._frame()
+        quat = ros_schema.ekf_quat_message(frame)
+        euler = ros_schema.ekf_euler_message(frame)
+        assert quat["quaternion"] == ros_schema.imu_message(frame)["orientation"]
+        assert (euler["angle"]["x"], euler["angle"]["y"], euler["angle"]["z"]) == (
+            0.01, -0.02, 0.3
+        )
+        assert quat["quaternion"] == quaternion(0.3, -0.02, 0.01)
+
+    def test_the_raw_gyro_is_the_number_the_other_imu_topic_publishes(self):
+        """`/sensing/gnss/imu_data` and `/sensing/gnss/imu/data` are one character apart and
+        two different types. Confusing them is how one of them fell out of the ledger."""
+        frame = self._frame()
+        raw = ros_schema.sbg_imu_message(frame)
+        assert raw["gyro"] == ros_schema.imu_message(frame)["angular_velocity"]
+        assert TOPICS[ros_schema.SBG_IMU_DATA][0] == "sbg_driver/msg/SbgImuData"
+        assert TOPICS[ros_schema.GNSS_IMU][0] == "sensor_msgs/msg/Imu"
+
+    # -- absence, in a message type with no way to state it -------------------------------
+    def test_what_the_simulator_does_not_have_is_nan_and_never_a_plausible_zero(self):
+        """`sensor_msgs/Imu` has a -1 for this and `NavSatFix` a covariance type; `SbgImuData`
+        has neither, and every float32 a temperature field can hold is a temperature - 0.0 reads
+        as a sensor sitting at freezing. NaN is the only value a consumer cannot quietly
+        believe, and `/sensing/gnss/imu/temp` is excluded from the 45 for the same reason this
+        is absent."""
+        frame = self._frame()
+        raw = ros_schema.sbg_imu_message(frame)
+        assert math.isnan(raw["temp"])
+        for field in ("accel", "delta_vel", "delta_angle"):
+            assert all(math.isnan(value) for value in raw[field].values()), field
+        assert math.isnan(ros_schema.ekf_nav_message(frame)["undulation"])
+        assert math.isnan(ros_schema.gps_pos_message(frame)["undulation"])
+
+    def test_an_accuracy_of_zero_is_a_true_statement_and_stays_a_number(self):
+        """The distinction NaN would destroy. A 1-sigma accuracy of zero says the position is
+        exact, and for ground truth that is *correct* - unlike a temperature, which does not
+        exist at all. Turning these into NaN would throw away a real fact about the data."""
+        frame = self._frame()
+        assert ros_schema.ekf_nav_message(frame)["position_accuracy"] == {
+            "x": 0.0, "y": 0.0, "z": 0.0
+        }
+        assert ros_schema.gps_vel_message(frame)["course_acc"] == 0.0
+        assert ros_schema.ekf_quat_message(frame)["accuracy"]["x"] == 0.0
+        assert ros_schema.utc_time_message(frame)["clk_bias_std"] == 0.0
+
+    def test_the_satellite_counts_use_the_messages_own_not_available_rather_than_ours(self):
+        """0xFF is what `SbgGpsPos.msg` itself documents as N/A, so nothing has to learn one of
+        our conventions to read it. A type that provides an absence value gets used."""
+        raw = ros_schema.gps_pos_message(self._frame())
+        assert raw["num_sv_tracked"] == raw["num_sv_used"] == 0xFF
+        assert raw["base_station_id"] == 0 and raw["diff_age"] == 0
+
+    def test_the_filter_claims_a_full_solution_aided_by_nothing(self):
+        """`solution_mode` 4 is NAV_POSITION and ground truth meets every `*_valid` bound. But
+        there is no receiver, no magnetometer and no odometer, so every `*_used` flag is False -
+        a True on `gps1_pos_used` would describe a fusion that never happened."""
+        status = ros_schema.ekf_nav_message(self._frame())["status"]
+        assert status["solution_mode"] == 4
+        assert all(status[name] for name in
+                   ("attitude_valid", "heading_valid", "velocity_valid", "position_valid"))
+        used = {name: value for name, value in status.items() if name.endswith("_used")}
+        assert used and not any(used.values()), sorted(k for k, v in used.items() if v)
+
+    # -- the clock, which the simulator does not have ------------------------------------
+    def test_the_drive_declares_the_gps_epoch_rather_than_stamping_a_believable_date(self):
+        """A wall clock taken at conversion time would make the bag claim the drive happened
+        then, and make two runs of one drive differ. 1980-01-06 is a sentinel nobody mistakes
+        for a recording session, and `clock_utc_status` 0 says the same thing in-band."""
+        utc = ros_schema.utc_time_message(self._frame())
+        assert (utc["year"], utc["month"], utc["day"]) == (1980, 1, 6)
+        assert utc["clock_status"]["clock_utc_status"] == 0
+        assert not utc["clock_status"]["clock_utc_sync"]
+
+    def test_elapsed_time_inside_the_drive_is_exact_even_though_the_date_is_a_sentinel(self):
+        utc = ros_schema.utc_time_message(self._frame(sim_time_s=3661.25))
+        assert (utc["hour"], utc["min"], utc["sec"]) == (1, 1, 1)
+        assert utc["nanosec"] == pytest.approx(250_000_000, abs=1)
+        assert utc["gps_tow"] == 3_661_250
+
+    def test_utc_ref_offsets_the_two_clocks_rather_than_claiming_they_are_the_same(self):
+        """Publishing `time_ref` equal to `header.stamp` says "our clock is UTC", which is the
+        one thing a simulated drive cannot claim - and `TimeReference` exists precisely to
+        express one clock in terms of another."""
+        ref = ros_schema.utc_ref_message(self._frame())
+        assert ref["header"]["stamp"] == stamp(1.25)
+        assert ref["time_ref"]["sec"] - ref["header"]["stamp"]["sec"] == (
+            ros_schema.GPS_EPOCH_UNIX_S
+        )
+        assert "simulated" in ref["source"]
+
+    def test_the_device_clock_wraps_instead_of_overflowing_its_field_mid_drive(self):
+        """uint32 microseconds is 71.6 minutes. Left to overflow it would raise inside CDR on
+        one frame somewhere in the middle of a long drive - the wrap is what the device does."""
+        long_run = ros_schema.ekf_nav_message(self._frame(sim_time_s=7200.0))
+        assert 0 <= long_run["time_stamp"] < 2**32
+        assert ros_schema.utc_time_message(self._frame(sim_time_s=SECONDS_PER_WEEK + 5.0))[
+            "gps_tow"
+        ] == 5000
+
+
+class TestTheLidarSweep:
+    """`lidar_points_message` - phase 3, and the only payload in this bag that is a shape.
+
+    Everything else here is a handful of numbers whose meaning is carried by a field name. A
+    `PointCloud2` is a wall of bytes plus a header describing how to read it, so a mistake in
+    either does not produce a wrong number - it produces a different cloud, or garbage, with
+    every field of the message still perfectly well-formed.
+
+    The rotation is the part that had to be got right. MetaDrive hands the sweep over on world
+    axes with its origin at the sensor, and turning that into the sensor's own frame is one
+    rotation by minus the car's heading. Backwards, it is the same points rigidly rotated: a
+    plausible road, a plausible density, a plausible extent, and every point behind the car.
+    """
+
+    HEADING = math.radians(101.2)
+    """junction-1's own first heading, so these cases sit where the measured ones do rather than
+    at zero - where a rotation and its inverse are the same thing and nothing is tested."""
+
+    def _cloud(self, world_points, max_range_m=200.0, heading=None):
+        """A frame carrying one sweep. `world_points` is `(height, width, 3)`, world axes."""
+        import numpy
+
+        ego = Ego(
+            x=0.0, y=0.0, z=0.0,
+            heading=self.HEADING if heading is None else heading,
+            velocity_east=0.0, velocity_north=0.0, speed=0.0, yaw_rate=0.0,
+            roll=0.0, pitch=0.0,
+        )
+        cloud = ros_schema.LidarCloud(
+            points=numpy.asarray(world_points, dtype=float),
+            fov_deg=65.0,
+            max_range_m=max_range_m,
+        )
+        return Frame(index=3, sim_time_s=0.4, ego=ego, extra={"lidar": cloud})
+
+    def _read(self, message):
+        import numpy
+
+        return numpy.frombuffer(bytes(message["data"]), dtype="<f4").reshape(
+            message["height"], message["width"], 3
+        )
+
+    def _bearing(self, heading, distance):
+        """A point `distance` ahead of a car on `heading`, on world axes."""
+        return (distance * math.cos(heading), distance * math.sin(heading), 0.0)
+
+    def test_a_drive_with_no_lidar_drops_the_topic_whole(self):
+        """The shape `gnss_fix_message` already uses: None, not an empty cloud.
+
+        A zero-point `PointCloud2` every frame would be a channel a consumer subscribes to, gets
+        messages on, and never sees a return in - which reads as a sensor that saw nothing
+        rather than as a drive that never had one.
+        """
+        assert ros_schema.lidar_points_message(_frame()) is None
+
+    def test_a_point_ahead_of_the_car_is_ahead_of_the_sensor(self):
+        """+x is forward. This is the check the whole frame choice exists to make possible."""
+        message = ros_schema.lidar_points_message(
+            self._cloud([[self._bearing(self.HEADING, 10.0)]])
+        )
+        x, y, z = self._read(message)[0, 0]
+        assert x == pytest.approx(10.0, abs=1e-4)
+        assert y == pytest.approx(0.0, abs=1e-4)
+        assert z == pytest.approx(0.0, abs=1e-4)
+        assert message["header"]["frame_id"] == ros_schema.LIDAR_FRAME
+
+    def test_a_point_to_the_cars_left_gets_a_positive_y(self):
+        """REP-103: +y is LEFT. The sign that mirrors a whole cloud without changing its shape."""
+        left = self._bearing(self.HEADING + math.pi / 2, 7.0)
+        x, y, _ = self._read(ros_schema.lidar_points_message(self._cloud([[left]])))[0, 0]
+        assert x == pytest.approx(0.0, abs=1e-4)
+        assert y == pytest.approx(7.0, abs=1e-4)
+
+    def test_rotating_the_wrong_way_puts_the_road_behind_the_car(self):
+        """Why `ros_probe` can catch the sign at all, stated as an arithmetic fact.
+
+        A forward cone de-rotated by *plus* the heading lands at twice the heading from +x -
+        202.4 deg here, which is behind. Nothing about the cloud's shape says so, which is why
+        the probe tests the bearing of every point rather than looking at the cloud.
+        """
+        ahead = self._bearing(self.HEADING, 10.0)
+        turned = math.atan2(ahead[1], ahead[0]) + self.HEADING
+        assert abs(math.degrees(((turned + math.pi) % (2 * math.pi)) - math.pi)) > 90.0
+
+    def test_a_ray_that_hit_nothing_keeps_its_slot_and_is_nan(self):
+        """The type's own convention for an absent point, and the reason the cloud stays organised.
+
+        Dropping the misses would compact the sweep and destroy the one structure a lidar has -
+        which beam a return came from. Filling them with zeros would put a dense ball of points
+        at the sensor's own origin, which is a reading, not an absence.
+        """
+        import numpy
+
+        near = self._bearing(self.HEADING, 10.0)
+        far = self._bearing(self.HEADING, 9000.0)
+        message = ros_schema.lidar_points_message(self._cloud([[near, far]]))
+        points = self._read(message)
+        assert message["height"] == 1 and message["width"] == 2
+        assert numpy.isfinite(points[0, 0]).all()
+        # All three components, never one or two: a half-NaN point is a point.
+        assert numpy.isnan(points[0, 1]).all()
+        assert message["is_dense"] is False
+
+    def test_is_dense_is_a_claim_about_this_sweep_rather_than_a_constant(self):
+        """True when every ray hit, so a reader can trust the flag instead of always testing."""
+        near = self._bearing(self.HEADING, 10.0)
+        assert ros_schema.lidar_points_message(self._cloud([[near, near]]))["is_dense"] is True
+
+    def test_the_range_gate_is_measured_before_the_rotation_not_after(self):
+        """So a wrong rotation cannot also decide which returns survive.
+
+        A rotation preserves length, so the two orders agree today - and they would stop
+        agreeing the moment anything translated as well, at which point the gate would be
+        keeping a different set of points than the one it was measured on.
+        """
+        message = ros_schema.lidar_points_message(
+            self._cloud([[self._bearing(self.HEADING, 150.0)]], max_range_m=100.0)
+        )
+        import numpy
+
+        assert numpy.isnan(self._read(message)[0, 0]).all()
+
+    def test_the_header_describes_the_bytes_that_are_actually_there(self):
+        """Three float32 at 0, 4, 8, `point_step` 12, `row_step` a whole row, and that many bytes.
+
+        A reader trusts these five numbers over the payload. Disagree by one and it reads the
+        next point's x as this point's z, all the way down, with nothing raising.
+        """
+        near = self._bearing(self.HEADING, 10.0)
+        message = ros_schema.lidar_points_message(self._cloud([[near, near], [near, near]]))
+        assert [(f["name"], f["offset"], f["datatype"], f["count"]) for f in message["fields"]] == [
+            ("x", 0, ros_schema.POINTFIELD_FLOAT32, 1),
+            ("y", 4, ros_schema.POINTFIELD_FLOAT32, 1),
+            ("z", 8, ros_schema.POINTFIELD_FLOAT32, 1),
+        ]
+        assert message["point_step"] == ros_schema.POINT_STEP == 12
+        assert message["row_step"] == 12 * message["width"]
+        assert len(bytes(message["data"])) == message["height"] * message["row_step"]
+
+    def test_the_payload_is_little_endian_by_dtype_rather_than_by_luck(self):
+        """`is_bigendian: false` is a claim about the bytes in the bag, not about this machine.
+
+        Every machine this runs on is little-endian, so a native-order array would be right by
+        accident here and wrong on the first big-endian host that ever writes one.
+        """
+        message = ros_schema.lidar_points_message(
+            self._cloud([[self._bearing(self.HEADING, 10.0)]])
+        )
+        import struct
+
+        assert message["is_bigendian"] is False
+        assert bytes(message["data"])[:4] == struct.pack("<f", 10.0)
+
+    def test_the_cloud_carries_the_frames_own_stamp(self):
+        """One instant, one stamp - a sweep stamped anything else is a sweep of another moment."""
+        message = ros_schema.lidar_points_message(
+            self._cloud([[self._bearing(self.HEADING, 10.0)]])
+        )
+        assert message["header"]["stamp"] == stamp(0.4)
+
+
+class TestTheLidarMountAndItsCeiling:
+    """Where the sensor is bolted on, and how many buffers may stand beside it."""
+
+    def test_the_lidar_goes_through_the_same_frame_swap_the_cameras_do(self):
+        """0.8 m forward and 1.5 m up in MetaDrive's frame is x=+0.8, y=0, z=+1.5 in ROS.
+
+        Through `_ros_mount`, the single place that swaps the two frames. Two copies of that
+        conversion is two chances to negate the wrong one, and a `/tf_static` where the cameras
+        are right and the lidar is mirrored is not something a reader would ever look for.
+        """
+        import ros_frame
+
+        mount = ros_frame.lidar_mount()
+        assert set(mount) == {ros_schema.LIDAR_FRAME}
+        x, y, z, yaw = mount[ros_schema.LIDAR_FRAME]
+        right, forward, up = ros_frame.LIDAR_MOUNT
+        assert (x, y, z) == (forward, -right, up) == (0.8, 0.0, 1.5)
+        assert yaw == 0.0
+
+    def test_the_cloud_ceiling_is_below_the_all_rgb_one(self):
+        """Two different faults at two different sizes, and the lower one is silent.
+
+        Past `MAX_IMAGE_BUFFERS` the run crashes, which is loud. Past
+        `MAX_BUFFERS_WITH_POINT_CLOUD` the run succeeds and the cloud comes back empty, so the
+        smaller number is the one a drive has to be refused against.
+        """
+        import camera_rig
+
+        assert camera_rig.MAX_BUFFERS_WITH_POINT_CLOUD < camera_rig.MAX_IMAGE_BUFFERS
+
+    def test_a_lidar_size_is_rays_by_beams_and_anything_else_is_named(self):
+        import drive
+
+        assert drive._lidar_size("200x64") == (200, 64)
+        for bad in ("200", "200x", "axb", "0x64", "200x-1", ""):
+            with pytest.raises(ValueError, match="--ros-lidar"):
+                drive._lidar_size(bad)
+
+
+class TestTheSbgDefinitionsInAWrittenBag:
+    """What actually reaches the file, which is not quite what `tools/sbg_msgs/` holds.
+
+    A bag is self-describing: rosbag2 writes each type's `.msg` text into it so a reader decodes
+    it without the package that wrote it. That is the whole protection against the version
+    mismatch `tools/sbg_msgs/README.md` measures - a subscriber built against `sbg_driver` 3.1.0
+    reading a 3.4.0 `SbgEkfStatus` does not fail, it reads `dvl_bt_used` as `gps1_course_used`
+    and carries on, because CDR carries no field names.
+
+    **`rosbags` regenerates that text from its parsed typestore rather than copying ours**, so
+    the comments do not survive and the field list is what a consumer gets. This pins the half
+    that matters: every field, in order, in the seven published types and the five nested ones.
+    """
+
+    @staticmethod
+    def _fields(text):
+        stripped = (line.split("#")[0].strip() for line in text.splitlines())
+        return [line.replace("sbg_driver/", "") for line in stripped if line]
+
+    @pytest.fixture(scope="class")
+    def written(self, tmp_path_factory):
+        import ros_bag
+
+        path = tmp_path_factory.mktemp("sbg") / "bag"
+        frame = Frame(
+            index=0, sim_time_s=0.0, ego=_ego(),
+            projection=Projection(3.15, 101.6, 0.0, 0.0),
+        )
+        with ros_bag.BagWriter(path, topics=None, notes={}) as bag:
+            bag.write(frame)
+        from rosbags.rosbag2 import Reader
+
+        with Reader(path) as reader:
+            return {c.msgtype: c.msgdef.data for c in reader.connections}
+
+    def test_every_sbg_type_reached_the_bag_as_a_connection_of_its_own(self, written):
+        published = {
+            TOPICS[topic][0]
+            for topic in TOPICS
+            if TOPICS[topic][0].startswith("sbg_driver/")
+        }
+        assert len(published) == 7
+        assert published <= set(written)
+
+    def test_the_field_list_in_the_bag_is_the_field_list_upstream_wrote(self, written):
+        """A field out of order serialises silently and deserialises into nonsense. This is the
+        only place that is checked against the upstream text rather than against our own code."""
+        import re
+
+        checked = set()
+        for msgtype, blob in written.items():
+            if not msgtype.startswith("sbg_driver/"):
+                continue
+            blocks = re.split(r"^=+$", blob, flags=re.M)
+            stem = msgtype.rsplit("/", 1)[-1]
+            source = ros_schema.SBG_MSG_DIR / f"{stem}.msg"
+            assert self._fields(blocks[0]) == self._fields(source.read_text()), msgtype
+            checked.add(stem)
+            # The nested status submessages ride along in the same blob, and are as easy to get
+            # wrong - `SbgGpsPosStatus` went from 7 fields to 22 between two releases. Counted
+            # by name rather than by visit: `SbgEkfStatus` is nested in three of the seven.
+            for block in blocks[1:]:
+                head, _, body = block.strip().partition("\n")
+                if not head.startswith("MSG: sbg_driver/"):
+                    continue
+                stem = head.rsplit("/", 1)[-1]
+                nested = ros_schema.SBG_MSG_DIR / f"{stem}.msg"
+                assert self._fields(body) == self._fields(nested.read_text()), head
+                checked.add(stem)
+        assert len(checked) == 12, f"expected all twelve types, saw {sorted(checked)}"
+
+    def test_the_comments_do_not_travel_and_the_readme_says_where_they_went(self, written):
+        """Measured, not assumed - and the reason `tools/sbg_msgs/README.md` had to be corrected.
+        If a later `rosbags` starts carrying them this test is the notification."""
+        assert "#" not in written["sbg_driver/msg/SbgEkfNav"]
+        assert "Kalman" not in written["sbg_driver/msg/SbgEkfNav"]
+        assert "0xFF if N/A" in (ros_schema.SBG_MSG_DIR / "SbgGpsPos.msg").read_text()
+
+
+class TestTheCameraPacketDefinition:
+    """Phase 4's first finding, and it was sitting in the file from stage 10.
+
+    The `FFMPEGPacket` definition vendored here was **wrong in four ways**, and could not have
+    raised while no camera topic was written: the fields were in a different order, two were the
+    wrong size, one that upstream does not have was invented, and one upstream does have was
+    missing. A bag written against it would open perfectly - rosbag2 stores the definition beside
+    the data, so our own reader would agree with itself - and any consumer with the real package
+    installed would read the encoding string out of the width field.
+    """
+
+    def test_the_definition_is_the_upstream_one_character_for_character(self):
+        """Pinned rather than described. `get_types_from_msg` ignores comments, alignment and
+        the tab, so nothing in the parse would notice this drifting; the point of pinning the
+        text is that "verbatim from 1.1.2" stays a claim a reader can check against the commit."""
+        assert ros_schema.FFMPEG_PACKET_MSG == (
+            "std_msgs/Header header\n"
+            "int32 width       # original image width\n"
+            "int32 height      # original image height\n"
+            "string encoding\t  # encoding used\n"
+            "uint64 pts        # packet pts\n"
+            "uint8  flags      # packet flags\n"
+            "bool is_bigendian # true if machine stores in big endian format\n"
+            "uint8[] data      # ffmpeg compressed payload\n"
+        )
+        assert (
+            EXTRA_DEFINITIONS["ffmpeg_image_transport_msgs/msg/FFMPEGPacket"]
+            == ros_schema.FFMPEG_PACKET_MSG
+        )
+        assert ros_schema.FFMPEG_MSGS_VERSION == "1.1.2"
+        assert len(ros_schema.FFMPEG_MSGS_COMMIT) == 40
+
+    def test_the_fields_parse_in_the_order_and_the_widths_upstream_declares(self):
+        """CDR carries no field names, so **order is the wire format**. A consumer using its own
+        installed `ffmpeg_image_transport_msgs` decodes by position and nothing else."""
+        from rosbags.typesys import get_types_from_msg
+
+        parsed = get_types_from_msg(
+            ros_schema.FFMPEG_PACKET_MSG, "ffmpeg_image_transport_msgs/msg/FFMPEGPacket"
+        )
+        _constants, fields = parsed["ffmpeg_image_transport_msgs/msg/FFMPEGPacket"]
+        assert [name for name, _ in fields] == [
+            "header",
+            "width",
+            "height",
+            "encoding",
+            "pts",
+            "flags",
+            "is_bigendian",
+            "data",
+        ]
+        widths = {name: spec[1][0] for name, spec in fields if spec[0].name == "BASE"}
+        assert widths == {
+            "width": "int32",
+            "height": "int32",
+            "encoding": "string",
+            "pts": "uint64",
+            "flags": "uint8",
+            "is_bigendian": "bool",
+        }
+
+    def test_the_definition_this_replaced_is_not_still_reachable(self):
+        """`frame_id` was the invented field, and it is the one a reader would look for."""
+        text = ros_schema.FFMPEG_PACKET_MSG
+        assert "frame_id" not in text
+        assert "uint32 pts" not in text
+
+
+class TestTheCameraPackets:
+    """The six `image_raw/ffmpeg` topics.
+
+    `ros_encode.py` makes the bytes; this makes the message around them.
+    """
+
+    def packet(self, name="front_left", frame_id="cam_left", keyframe=True):
+        return ros_schema.CameraPacket(
+            name=name,
+            frame_id=frame_id,
+            width=512,
+            height=288,
+            encoding="libx264",
+            pts=7,
+            keyframe=keyframe,
+            data=b"\x00\x00\x00\x01\x67payload",
+        )
+
+    def frame(self, packets):
+        return Frame(
+            index=3,
+            sim_time_s=0.3,
+            ego=Ego(x=0.0, y=0.0, z=0.0, heading=0.0, velocity_east=0.0,
+                    velocity_north=0.0, speed=0.0),
+            extra={"camera_packets": tuple(packets)},
+        )
+
+    def test_six_topics_under_the_rigs_own_names(self):
+        assert len(ros_schema.CAMERA_PACKET_TOPICS) == 6
+        assert ros_schema.CAMERA_PACKET_TOPICS[0] == (
+            "/sensing/camera/cam_sync_rig/front_left/image_raw/ffmpeg"
+        )
+        for topic in ros_schema.CAMERA_PACKET_TOPICS:
+            assert TOPICS[topic] == ("ffmpeg_image_transport_msgs/msg/FFMPEGPacket", "sensor")
+            assert topic in BUILDERS
+
+    def test_the_rate_family_is_sensor_and_that_is_what_says_it_is_not_every_step(self):
+        """`frame_gate` re-uses the last drawn picture on a held step. A `state` family here
+        would put `stride` re-encodes of that held buffer in the bag for every real frame - each
+        one tiny, valid, and a statement that the world stood still."""
+        families = {TOPICS[t][1] for t in ros_schema.CAMERA_PACKET_TOPICS}
+        assert families == {"sensor"}
+        assert TOPICS[ros_schema.LIDAR_POINTS][1] == "sensor"
+
+    def test_the_message_carries_the_frame_id_rather_than_the_topics_own_name(self):
+        """The two names a camera has, and the join between the picture and the mount.
+
+        The topic is the rig's (`front_left`) and the `frame_id` is the spec's (`cam_left`),
+        which is what `/tf_static` calls it. On `rigs/cams.txt` the labels and the geometry
+        already disagree, so a consumer that wants to know where a picture was taken from has to
+        follow `frame_id` into the transform rather than read the topic name.
+        """
+        built = ros_schema.camera_packet_message(self.frame([self.packet()]), "front_left")
+        assert built["header"]["frame_id"] == "cam_left"
+        assert built["width"] == 512 and built["height"] == 288
+        assert built["encoding"] == "libx264"
+        assert built["pts"] == 7
+        assert built["is_bigendian"] is False
+        assert bytes(built["data"]) == b"\x00\x00\x00\x01\x67payload"
+
+    def test_a_keyframe_is_flagged_with_libavs_own_value(self):
+        """`AV_PKT_FLAG_KEY` is 1, and a decoder joining mid-bag looks for it and nothing else."""
+        assert ros_schema.PACKET_FLAG_KEY == 1
+        key = ros_schema.camera_packet_message(self.frame([self.packet()]), "front_left")
+        inter = ros_schema.camera_packet_message(
+            self.frame([self.packet(keyframe=False)]), "front_left"
+        )
+        assert key["flags"] == 1
+        assert inter["flags"] == 0
+
+    def test_a_camera_with_no_packet_this_frame_drops_its_topic_rather_than_repeating(self):
+        """None is the ordinary case, not an error: most frames of a strided drive are not
+        decision frames, and a drive with no `--ros-camera` never has one."""
+        frame = self.frame([self.packet()])
+        assert ros_schema.camera_packet_message(frame, "rear_middle") is None
+        empty = Frame(index=0, sim_time_s=0.0, ego=frame.ego)
+        assert ros_schema.camera_packet_message(empty, "front_left") is None
+
+    def test_the_six_topics_are_absent_from_a_frame_that_carries_no_pictures(self):
+        """`messages` drops a topic whose builder returns None, so the camera channels are
+        simply not in a bag rather than being in it with holes."""
+        ego = Ego(x=0.0, y=0.0, z=0.0, heading=0.0, velocity_east=0.0,
+                  velocity_north=0.0, speed=0.0)
+        written = {topic for topic, _, _ in messages(Frame(index=0, sim_time_s=0.0, ego=ego))}
+        assert not (written & set(ros_schema.CAMERA_PACKET_TOPICS))
+        with_pictures = {
+            topic for topic, _, _ in messages(self.frame([self.packet(), self.packet(
+                "rear_middle", "cam_back")]))
+        }
+        assert with_pictures & set(ros_schema.CAMERA_PACKET_TOPICS) == {
+            "/sensing/camera/cam_sync_rig/front_left/image_raw/ffmpeg",
+            "/sensing/camera/cam_sync_rig/rear_middle/image_raw/ffmpeg",
+        }
+
+    def test_each_topic_gets_its_own_builder_rather_than_one_shared_closure(self):
+        """Six topics reading one loop variable is the classic late-binding bug, and it would
+        put `rear_right`'s picture on all six channels with nothing raising."""
+        builders = [BUILDERS[t] for t in ros_schema.CAMERA_PACKET_TOPICS]
+        assert len(set(map(id, builders))) == 6
+        frame = self.frame([self.packet("rear_right", "cam_back_right")])
+        built = [builder(frame) for builder in builders]
+        assert [b is not None for b in built] == [False, False, False, False, False, True]

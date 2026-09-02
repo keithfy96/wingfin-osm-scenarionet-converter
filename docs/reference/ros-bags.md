@@ -395,8 +395,412 @@ Nothing here argues for downgrading the writer. A v9 bag is what current rosbag2
 what the rig's own tooling will move to; it means a consumer on humble needs `rosbags` (which
 reads the file directly, distro-free) rather than `ros2 bag`.
 
-## Traps
+## The SBG GNSS family, measured 2026-09-02 (stage 11 phase 2)
 
+Nine topics, `7 / 45 -> 23 / 45`, and no artefact from anyone needed. Seven are `sbg_driver`
+types, which the humble typestore has never heard of; two - `imu/pos_ecef` as a
+`geometry_msgs/PointStamped` and `imu/utc_ref` as a `sensor_msgs/TimeReference` - **were core all
+along** and had sat in `MISSING_DEFINITIONS` only because nobody had decided what the rig meant
+by them.
+
+| | before | after |
+|---|---|---|
+| messages in a 364-frame `junction-1` drive | 3,648 | **6,924** |
+| channels | 18 | **27** |
+| `rig topics produced` | 14 / 45 | **23 / 45** |
+| entries in `MISSING_DEFINITIONS` | 24 | **15** |
+| probe checks | 16 | **24** |
+
+Reproduce:
+
+```bash
+rm -rf bags/phase2-sbg
+METADRIVE_PYTHON=.venv/bin/python ./scripts/ros-bag.sh junction-1 -- \
+    --out bags/phase2-sbg --camera-rig rigs/cams.txt --render offscreen
+uv run python tools/ros_probe.py bags/phase2-sbg --workspace workspaces/junction-1
+uv run python tools/ros_probe.py bags/phase2-sbg --coverage      # 23 / 45
+```
+
+### The definitions are files, and they are version-dependent
+
+`tools/sbg_msgs/` holds twelve `.msg` files copied byte for byte from `SBG-Systems/sbg_ros2_driver`
+at tag **3.4.0**, commit `3efaf29`. Seven message types and the five nested status submessages
+they name; `ros_schema._sbg_definitions` loads them at import.
+
+They are files rather than strings because "copied verbatim" has to be checkable, and because
+rewrapping a `.msg` into a 99-column Python literal is exactly where a field changes order.
+
+**The field lists changed between releases and CDR does not carry field names.** Measured against
+3.1.0: `SbgGpsPosStatus` went 7 fields to 22, `SbgEkfStatus` 16 to 23 with two *removed*,
+`SbgUtcTime` 11 to 14, `SbgGpsPos` 12 to 13, `SbgImuStatus` 10 to 11. A subscriber built against
+3.1.0 reading our 3.4.0 `SbgEkfStatus` does not fail - it reads `dvl_bt_used` as
+`gps1_course_used` and carries on. What protects a reader is that rosbag2 writes the definitions
+into the bag; what protects a reader using its *own* installed package is knowing the version, so
+it is written into every bag as `sbg_driver_version` in the `wingfin` metadata.
+
+**Which version the rig recorded is unknown**, because `bag_audit.html` carries rates and no bag
+off the rig has been read. The day one arrives, `tools/ros_defs.py` prints its definitions and
+the two are compared rather than assumed.
+
+### What reaches the bag is the field list, not the comments
+
+Measured on `bags/phase2-sbg`, and it corrected a claim written earlier the same day: `rosbags`
+**regenerates** the definition from its parsed typestore when it writes a connection, so the
+comments are stripped and the bag carries field lines only. The field lists round-trip exactly -
+all seven published types and all five nested ones, checked against the upstream files in
+`TestTheSbgDefinitionsInAWrittenBag`. The comments stay in `tools/sbg_msgs/` because they are the
+only record of what each field means, which is what every value below had to be decided against.
+
+### Absence, in a message type with no way to state it
+
+`sensor_msgs/Imu` has a `-1` for "I do not produce this" and `NavSatFix` a covariance type, so
+the two GNSS topics written before this phase could both disclaim in-band. **The `sbg_driver`
+types cannot.** `SbgImuData.temp` is a float32 and nothing else, and every value a float32 can
+hold is a temperature - `0.0` reads as a sensor sitting at freezing, which a consumer can and
+would believe.
+
+So four quantities are written **NaN** (`ros_schema.ABSENT_SCALAR`), verified round-tripping
+through CDR intact:
+
+| field | why nothing can fill it |
+|---|---|
+| `SbgImuData.accel` | the same refusal `imu_message` makes with its `-1`; zeros would claim a car in free fall with none of the gravity a real FLU accelerometer always reads |
+| `SbgImuData.temp` | a physical sensor temperature. `/sensing/gnss/imu/temp` is one of the ten excluded from the 45 for exactly this reason, and a number here would contradict that inside one bag |
+| `SbgImuData.delta_vel` / `delta_angle` | sculling and coning, a strapdown integrator's own intermediates. There is no strapdown integrator |
+| `SbgEkfNav.undulation` / `SbgGpsPos.undulation` | geoid-to-ellipsoid separation. A zero would make `altitude + undulation` look like a real height above the ellipsoid |
+
+**An accuracy of zero is not the same thing and stays a number.** `position_accuracy`,
+`velocity_accuracy`, `course_acc` and the three `clk_*` fields are 1-sigma uncertainties, and for
+ground truth zero is *true* - the simulator's position is exact. Only a quantity that does not
+exist at all gets NaN. And where a type provides its own absence value it is used instead:
+`num_sv_tracked` and `num_sv_used` are `0xFF`, which `SbgGpsPos.msg` documents as N/A, so nothing
+has to learn one of our conventions to read it.
+
+Every `SbgEkfStatus.*_used` flag is False. They say which aiding sources the Kalman filter fused,
+and there is no filter, no receiver, no magnetometer and no odometer - there is one true pose.
+
+### The drive declares the GPS epoch as its `t = 0`
+
+`SbgUtcTime` wants a calendar date and `SbgGpsPos` a GPS time of week; the simulator has neither,
+only seconds since the drive began. A wall clock taken at conversion time would make the bag claim
+the drive happened then **and make two runs of one drive differ**; a recent-looking date would be
+worse, because it would be believed.
+
+So `t = 0` is declared to be 1980-01-06T00:00:00Z, the start of GPS week 0
+(`ros_schema.GPS_EPOCH_UNIX_S`). Then `gps_tow` is literally the elapsed time, the calendar fields
+advance correctly *within* the drive, and the absolute date is a sentinel. `clock_utc_status` is
+`0` - the message's own "the UTC time is not known, we are just propagating internally" - so the
+caveat is in-band and not only in a doc.
+
+`imu/utc_ref` is where the two clocks meet: `header.stamp` is the sim clock, `time_ref` the
+declared UTC, and they differ by exactly `315964800 s`. **Publishing them equal would have been
+the quiet lie** - it says "our clock is UTC", the one thing a simulated drive cannot claim.
+
+### The eight new probe checks, and why each is a relationship
+
+Every value in the nine channels is a re-shaping of one position and one velocity, so a swapped
+north and east, or a bearing measured from north instead of east, produces a bag that opens,
+decodes and plots a car on a road. Measured on `bags/phase2-sbg`, 364 frames:
+
+```
+ekf_nav and nav_sat_fix are the same position on every frame   364 of 364, worst 0.000e+00 m
+gps_pos carries the same position as ekf_nav                   worst 0.000e+00 m
+pos_ecef is where ekf_nav's own lat/lon put it                 worst 0.000e+00 m, frame earth
+ekf_quat, ekf_euler and imu/data all describe one rotation     worst yaw 5.09e-14 deg
+gps_vel's course is its own velocity, measured from east       worst 7.52e-06 deg
+what a simulator does not have is NaN, never a plausible zero  temp, accel, delta_*, undulation
+imu_data's gyro is imu/data's angular velocity                 worst 0.00e+00 rad/s
+utc_ref offsets the sim clock by the declared epoch            315964800 s, 1980-01-06
+```
+
+The course tolerance is `1e-3` deg because `course` is a float32; everything else is exact
+because both sides come from one call. `ekf_nav` and `gps_pos` differ on the rig - one is the
+filter's answer at the INS reference point, the other the receiver's at the antenna - and
+coincide here because there is neither a lever arm nor a filter.
+
+### ENU, and the 90 degrees that does not raise
+
+The driver publishes NED under `use_enu: false`, where the same two floats in `velocity` mean
+north and east rather than east and north, and `course` and `ekf_euler.angle.z` are bearings from
+north rather than from east. MetaDrive's world frame is already ENU and REP-103 agrees, so ENU is
+what is written throughout - but read one convention as the other and every heading is 90 degrees
+out with a car still driving plausibly along a road. `ekf_euler`'s yaw is zero pointing **east**.
+
+## The point cloud, measured 2026-09-02 (stage 11 phase 3)
+
+`/sensing/lidar/points`, the one topic of the 45 whose payload is a shape rather than a
+handful of numbers. `--ros-lidar` on a drive, off by default: it costs an image buffer every
+step and takes the bag from 672 KB to 24 MB.
+
+| | before | after |
+|---|---|---|
+| rig topics produced | 23 / 45 | **24 / 45** |
+| messages / channels (six-camera rig) | 6,924 / 27 | **7,288 / 28** |
+| `ros_probe` checks | 24 | **30** |
+| bag on disk | 672 KB | **24 MB** (74.83 MB payload, 3.14x) |
+
+### `perceive(to_float=True)` is exact, and `to_float=False` is the one that destroys it
+
+`docs/reference/sensors-and-observations.md` records that `depth` and `point-cloud` inherit a
+`_format` that *converts* rather than reformats. That is true, and the direction matters:
+`DepthCamera._format` (`depth_camera.py:184-191`) overrides the base class and returns the array
+**untouched** when `to_float=True`, converting only on the `False` branch - `(ret *
+255).astype(uint8)`, which a cloud running thousands of metres does not survive.
+
+Measured on junction-1: `perceive(to_float=True)` is bit-identical to `get_rgb_array_cpu()`,
+ratio exactly 1.0 on every element; `perceive(to_float=False)` comes back uint8 clipped to
+0..255. So reading the sensor in-process does avoid the socket's fault, **provided that flag
+stays as it is**. `ros_frame.lidar_cloud` is the line that has to keep it, and the flag's name
+argues for the wrong one.
+
+Other measurements from the same run, none of which is guessable:
+
+* the lens is **near 1.0, far 100000.0**, FOV `(65, 23.045131)` - the vertical follows the
+  aspect ratio, so it is the 200x64 shape that sets it
+* the array is **`(height, width, 3)` float64** - beams by rays by xyz
+* one read costs **0.3-0.4 ms**, the buffer having already been filled by the frame pass
+* `ego_centric=True` zeroes the *translation* only; the rotation is still built from the
+  camera's world hpr, so the sweep arrives on world axes with its origin at the sensor
+
+### Why the cloud is published in `lidar` and not in `map`
+
+`ego_centric=False` hands back true world coordinates. Publishing those in `map` would need no
+arithmetic from us at all - and that is the argument against it, not for it: a cloud that took
+no transform makes no claim about which way the sensor is pointing, so nothing about it could
+ever be checked, and `/sensing/lidar/points` on the rig is not a world-frame topic anyway.
+
+The sensor frame costs one rotation, by minus the car's heading, and the wrong sign is the
+quietest possible failure: the same points, rigidly rotated, still a plausible road at a
+plausible density over a plausible extent, every one of them behind the car, nothing raising.
+What settles it is that **a forward-facing sensor cannot return a point behind itself**.
+Measured over a full drive, de-rotating by `-heading`:
+
+```text
+  correct sign     100.00% inside the FOV, worst bearing 32.49 deg (half-angle 32.50)
+  flipped sign       0.00% inside, 0.00% with x > 0, mean bearing -95.49 deg
+```
+
+The rotation therefore lives in `ros_schema.lidar_points_message`, where it is unit-testable
+with no simulator, and not in `ros_frame.py`.
+
+### A miss keeps its slot, and the range that decides one is ours
+
+The depth buffer's far plane is 100 km, so an unhit ray does not come back as nothing - it comes
+back as a point up to **18 km** away, at a distance that varies because the buffer is non-linear
+out there. There is no sentinel to test for, so the range is **declared**: 200 m by default
+(`--ros-lidar-range`), matching `sensor_survey.POINT_CLOUD_MAX_RANGE_M`.
+
+Beyond it the point is written **NaN in place** rather than dropped, which is what
+`is_dense: false` exists to say, and it keeps the sweep organised - 64 rows of 200 - so a reader
+still knows which beam a return came from. Roughly **half of every sweep on junction-1 is sky**
+(49.80% of rays hit within 200 m). `is_dense` is computed per sweep rather than hard-coded, so
+the flag is a claim about that cloud.
+
+### The buffer ceiling that does not crash: 8 buffers blind the cloud
+
+`camera_rig.MAX_IMAGE_BUFFERS` is 9, measured by counting runs that *survive*; past it the env
+asserts inside `renderFrame()` and aborts. There is a **second, lower ceiling** for the point
+cloud, and it is silent. Measured on junction-1, 12 sweeps at each size, returns within 200 m as
+a share of the buffer:
+
+```text
+  1 buffer  (cloud alone)   48.52..57.70%      7 buffers (6 RGB + cloud)  48.52..57.70%
+  4 buffers (3 RGB + cloud) 48.52..57.70%      8 buffers (7 RGB + cloud)   0.10.. 0.27%
+```
+
+At eight the env does not crash, the buffer is created, `perceive` returns the right shape, and
+every sweep in a drive differs from the last - so nothing raises and nothing repeats. The depth
+buffer simply comes back at its far plane, every ray becomes a point 18 km out, the range gate
+turns all of them into NaN, and the bag holds 364 correctly-shaped sweeps of nothing. Every
+other check in `ros_probe` passes on that bag.
+
+So `camera_rig.MAX_BUFFERS_WITH_POINT_CLOUD = 7`, `drive.py` refuses the pairing by name, and
+`ros_probe` checks the share of rays that hit against a 5% floor - set between the two measured
+regimes rather than near either, because it is separating a working sensor from a dead one.
+`rigs/cams.txt` is seven cameras and so is exactly one over; the one over is `cam_front_wide`,
+the spare with no rig topic, and a six-camera rig plus the cloud records and passes all 30
+checks.
+
+### What this cloud is not
+
+A **65 deg forward cone**, not a sweep. The rig carries a Livox, which sees far more of the world
+than any one rendered buffer can, and no amount of resolution here changes that - it is the
+honest limit of recovering a cloud from a depth camera, not a setting. It is rendered geometry,
+so there are no dual returns, no intensity off a real material and no motion distortion across
+the sweep; `intensity` is **omitted from the fields** rather than filled with a plausible
+constant. `bag_audit.html` records the rig's rate and not its fields, so what the rig actually
+publishes on this topic is still unknown - the bag records the cone, the range and the frame in
+its `wingfin` metadata so a reader can compare rather than assume.
+
+`ros_audit.notes(path)` is what reads that metadata back. rosbag2 keeps `set_custom_data` in
+`metadata.yaml` rather than in the MCAP and `rosbags`' `Reader` exposes no accessor for it, so
+until phase 3 a bag that carefully recorded what it was could not be asked.
+
+## The camera packets, measured 2026-09-03 (stage 11 phase 4)
+
+The six `image_raw/ffmpeg` topics, and **the only payload in this bag that has to be decoded
+before anything about it can be checked.** `--ros-camera` on a drive that already has
+`--camera-rig`; off by default, because it is the one channel here that costs real time per
+frame.
+
+Two bags below, both 364 frames on junction-1: `phase4-cams` is the seven-camera
+`rigs/cams.txt` with no cloud, and `phase4-full` is six cameras plus `--ros-lidar`, which is the
+widest bag this repo can currently write.
+
+| | before (`phase2-sbg`) | `phase4-cams` | `phase4-full` |
+|---|---|---|---|
+| rig topics on the wire | 23 / 45 | **29 / 45** | **30 / 45** |
+| channels in the bag | 27 | **33** | **34** |
+| messages | 6,924 | **9,108** | **9,472** |
+| `ros_probe` checks | 24 | **31** | **37** |
+| bag on disk | 672 KB | **14 MB** | **36 MB** |
+
+Declared coverage is **30 / 45** in both; `phase4-cams` writes 29 because it carries no cloud.
+Unit tests went 917 → **947**.
+
+### `FFMPEGPacket` was wrong, and could not have raised
+
+The definition vendored in `ros_schema.EXTRA_DEFINITIONS` since stage 10 read
+
+```
+std_msgs/Header header, string encoding, uint32 width, uint32 height,
+uint32 pts, uint8 flags, uint64 frame_id, uint8[] data
+```
+
+and `ffmpeg_image_transport_msgs` 1.1.2 - the humble branch, the distro
+`Stores.ROS2_HUMBLE` pins everything else to - says
+
+```
+std_msgs/Header header, int32 width, int32 height, string encoding,
+uint64 pts, uint8 flags, bool is_bigendian, uint8[] data
+```
+
+**Four differences: the field order, two widths, one invented field (`frame_id`), one missing
+(`is_bigendian`).** None of it could raise while no camera topic was written, and a bag written
+against the old text would still open - rosbag2 stores the definition beside the data, so our
+own reader agrees with itself. A consumer with the real package installed reads the encoding
+string out of the width field. It is exactly the fault `ros_schema.py`'s own comment warns about
+for `vision_msgs`, sitting unexercised in the file. Now verbatim from commit
+`5395eac7dd830245c29d13c4db9fac1574137014`, and pinned character for character by a test.
+
+Identical on the `humble`, `rolling` and `master` branches; master adds comments and no fields.
+
+### `encoding` is the codec, and `libx264` is the string that works on both decoders
+
+`ffmpeg_image_transport`'s current decoder resolves it with `find_id_for_encoder_or_encoding`,
+which accepts an encoder name or a codec name; the humble-era one carried an explicit
+`libx264 -> h264` map. `libx264` satisfies both. The newer four-token form -
+`codec;av_pix_fmt;cv_bridge_fmt;ros_fmt` - is deliberately **not** written: it is a
+`master`-branch feature, and the humble decoder takes the whole string as a codec name and finds
+none.
+
+### The three faults that are silent in the bytes
+
+- **The pictures are BGR.** `BaseCamera.get_rgb_array_cpu` returns panda3d's RAM image with the
+  rows flipped and the channels untouched; MetaDrive's own `get_image(mode="bgr")` returns it
+  unchanged and `mode="rgb"` is the one that reverses (`base_camera.py:110-113`). Declaring the
+  source `rgb24` is a one-word change that mirrors red and blue in every frame of every bag.
+- **A vertical flip** is described by no field in `FFMPEGPacket` and shows in no header.
+- **A delayed packet.** With B-frames or a lookahead the packet coming out of `encode()` belongs
+  to an earlier frame than the one going in, so every camera stamp in the bag is a decision
+  early - and a delayed packet is a perfectly valid packet. `tune=zerolatency` is what makes
+  libx264 one-in-one-out. Measured over three presets, 20 frames each: exactly one packet per
+  call, every call, nothing left to flush at close.
+
+### Preset, and why `ultrafast` is the wrong reflex
+
+Measured on 512x288, 20 synthetic frames:
+
+| preset | bytes a frame | ms a frame |
+|---|---|---|
+| `ultrafast` | 1,412 | 1.59 |
+| **`veryfast`** | **1,277** | **0.96** |
+| `medium` | 1,486 | 2.03 |
+
+`veryfast` is both smaller and quicker than `ultrafast` here, which is the opposite of what the
+names suggest, and it is the default for that reason. On real junction-1 frames the six streams
+came to **6,075 bytes a frame** against the rig's own measured 7,159 - the same order, which is
+the useful thing to know about it - and **73x** smaller than the 442 KB an uncompressed
+`sensor_msgs/Image` would be at that size.
+
+Round-tripped, a frame comes back at 42.0 dB mean PSNR against the source.
+
+### Equality is the wrong test for a held frame, and this is the measurement
+
+`frame_gate` re-uses the last drawn picture on a step between two decisions, so a stream written
+every step would carry one re-encode of a held buffer in every gap. The obvious check is whether
+two consecutive decoded pictures are equal. **It does not work.** Encoding one identical source
+frame ten times gives:
+
+| stream | exact repeats | median PSNR between consecutive pictures |
+|---|---|---|
+| the same frame ten times | **0** | 47.2 .. 61.4 dB, climbing as the encoder converges |
+| actually moving | 0 | 24.8 dB |
+
+A keyframe and the P-frames after it quantise differently, so nothing is ever bit-identical. The
+probe therefore uses a **40 dB ceiling on the median** - the median rather than the worst,
+because a car stopped at a red really does draw the same picture twice and that is not a fault -
+and backs it with the structural check that actually settles it: the packets arrive at the
+**decision** rate the bag's own metadata declares, measured 10.00 Hz against 10.00 Hz, and a
+stream written every step would be `stride` times too fast.
+
+### What the probe added
+
+Seven checks, six of them relationships between two independently produced quantities:
+
+```
+ok  every camera stream holds the same number of packets - front_left=364 ... rear_right=364
+ok  each packet says the same size and frame as its own camera_info - 6 streams agree
+ok  every stream opens on a keyframe and keeps one at least every 10 frames
+ok  the packets arrive at the decision rate the bag declares, not the step rate - 10.00 vs 10.00 Hz
+ok  every packet decodes back to a picture of the declared size - 2184 packets across 6 streams
+ok  the pictures move - no stream is one held buffer re-encoded
+ok  the cameras drew a scene rather than an empty buffer
+```
+
+The decode is the point. Every other check in `ros_probe.py` reads a number off the wire; these
+run the decoder, because a bag full of well-formed packets carrying the wrong pixels opens,
+plays and renders.
+
+### `av`, and what it does and does not add
+
+`av>=15,<18` joins `rosbags` in the `ros` dependency group. **The wheel carries its own ffmpeg,
+statically, including libx264** - no apt package, no system `libavcodec`, and nothing added to
+`docker/Dockerfile` but a rebuild. The import succeeding is not the same as the encoder being
+there: a PyAV built from source against a distro ffmpeg without `--enable-libx264` imports
+perfectly and has no encoder, so `ros_encode.refuse_if_unsupported` checks
+`av.codecs_available` by name.
+
+## Traps
+- **A `sbg_driver` message is version-dependent and CDR will not tell you.** `SbgEkfStatus` went
+  from 16 fields to 23 between 3.1.0 and 3.4.0, two of them removed - a mismatched subscriber
+  reads the wrong field and carries on. `tools/sbg_msgs/` pins 3.4.0 and every bag records it.
+- **`rosbags` does not store your definition text, it regenerates it.** The comments in
+  `tools/sbg_msgs/*.msg` never reach a bag; the field list does, exactly.
+- **NaN, not zero, for a quantity a simulator does not have** wherever the message type has no
+  `-1` and no status flag to say so - `SbgImuData.temp` above all, whose topic-level twin
+  `/sensing/gnss/imu/temp` is excluded from the 45 for the very same reason. An *accuracy* of
+  zero is the opposite case and must stay a number: for ground truth it is true.
+- **The drive's `t = 0` is the GPS epoch, deliberately.** A 1980 date in `utc_time` is the
+  sentinel, not a bug; `clock_utc_status` is 0 and `utc_ref` carries the offset. Stamping a real
+  wall clock would make two runs of one drive differ.
+
+- **The vendored `FFMPEGPacket` definition was wrong for three weeks and nothing could have
+  said so.** A message type nothing writes is a type nothing checks. Any `.msg` in
+  `EXTRA_DEFINITIONS` that no topic uses yet is in the same position.
+- **`CameraRig.read()` returns BGR**, whatever `get_rgb_array_cpu` is called. `mode="rgb"` is the
+  branch that reverses, not the other way round.
+- **Two consecutive decoded H.264 frames are never bit-identical, even from one identical source
+  frame.** A held-buffer check written with `==` passes on a bag that is entirely held buffers.
+- **Eight image buffers blind the point cloud, and nothing raises.** A 7-camera rig plus
+  `--ros-lidar` records 364 well-formed sweeps that are 99.8% NaN. `MAX_IMAGE_BUFFERS` does not
+  cover it - that ceiling counts runs that survive, and this one survives.
+- **`perceive(to_float=False)` is the destructive branch for a cloud, not `True`.**
+  `DepthCamera._format` returns the array untouched on the `True` branch; the flag's name argues
+  for exactly the wrong one.
+- **An unhit ray is a point up to 18 km away, not a zero and not a NaN.** The far plane is
+  100 km and the buffer is non-linear out there, so there is no sentinel - the range that calls
+  a return a miss is declared by us, and without it the cloud describes the sky.
 - **`CompressionMode.FILE` destroys the index-only read** the rig's own audit depends on.
 - **`metadata.get("old_origin_in_current_coordinate") or (0.0, 0.0)` raises.** It is a numpy
   array and a two-element array has no truth value. Skipping the shift instead is worse: 93.8 m

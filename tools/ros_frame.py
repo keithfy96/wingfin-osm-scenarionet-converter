@@ -40,6 +40,32 @@ FALLBACK_SIZES = {
     "VEHICLE": (4.6, 1.85, 1.5),
 }
 
+#: What MetaDrive calls the point-cloud sensor in `config["sensors"]`, and what
+#: `engine.get_sensor` is asked for. One name, used by `drive.py` to register it and by
+#: `mount_lidar` to find it again.
+LIDAR_SENSOR = "point_cloud"
+
+#: Rays across a beam, and beams. 200x64 is `sensor_survey.py`'s own default, so a cloud in a
+#: bag and a cloud in a survey are the same shape and can be compared without rescaling.
+LIDAR_DEFAULT_SIZE = (200, 64)
+
+#: Horizontal FOV, set on the lens explicitly. MetaDrive's `camera_fov` default is also 65, so
+#: leaving it alone would look identical today and silently follow that key if it ever moved -
+#: and the vertical FOV, which nothing sets directly, follows the aspect ratio from here
+#: (200x64 at 65 deg measures 23.045 deg vertically).
+LIDAR_FOV_DEG = 65.0
+
+#: Where the sensor sits, in MetaDrive's ego frame: x right, y forward, z up. 0.8 m forward and
+#: 1.5 m up is `metadrive.constants.DEFAULT_SENSOR_OFFSET`, which is where every other camera in
+#: this repo is mounted, so the cloud and the rig's images look out from the same place.
+LIDAR_MOUNT = (0.0, 0.8, 1.5)
+
+#: Beyond this, a return is called a miss and written NaN. See `ros_schema.LidarCloud`: the
+#: depth buffer's far plane is 100 km, so this is a range we declare, not one MetaDrive
+#: enforces. Matches `sensor_survey.POINT_CLOUD_MAX_RANGE_M`, which was measured against the
+#: same sensor. On junction-1 roughly half of every sweep is sky and falls outside it.
+LIDAR_MAX_RANGE_M = 200.0
+
 
 class RosFrameError(RuntimeError):
     pass
@@ -266,8 +292,25 @@ def ego_of(env):
     )
 
 
-def read(env, index, sim_time_s, projection=None):
-    """One frame. Called immediately after `env.step`, before anything else consumes the env."""
+def read(env, index, sim_time_s, projection=None, lidar=None, camera_packets=()):
+    """One frame. Called immediately after `env.step`, before anything else consumes the env.
+
+    `lidar` is a `ros_schema.LidarCloud` or None, and None is the ordinary case: a cloud is read
+    at the **decision** rate rather than every step, so most frames of a strided drive carry
+    none and `lidar_points_message` drops the topic for those frames rather than repeating the
+    last sweep under a new stamp. A held sweep republished is the same fault as a held camera
+    frame republished - it tells a reader the world stood still.
+
+    `camera_packets` is the same arrangement for the six `image_raw/ffmpeg` topics: a tuple of
+    `ros_schema.CameraPacket` on a decision frame and empty on every other, and empty is the
+    ordinary case for the same reason. It is literally the held-camera-frame case the sentence
+    above is about.
+    """
+    extra = {}
+    if lidar is not None:
+        extra["lidar"] = lidar
+    if camera_packets:
+        extra["camera_packets"] = tuple(camera_packets)
     return ros_schema.Frame(
         index=index,
         sim_time_s=sim_time_s,
@@ -275,6 +318,60 @@ def read(env, index, sim_time_s, projection=None):
         boxes=boxes_of(env),
         lights=lights_of(env),
         projection=projection,
+        extra=extra,
+    )
+
+
+def sensor_config(size=LIDAR_DEFAULT_SIZE):
+    """The `sensors=` entry that registers the point cloud, for merging into MetaDrive's config.
+
+    `ego_centric=True`, and it does less than the name promises: it zeroes the translation and
+    leaves the rotation built from the camera's *world* hpr, so the cloud comes back as metres
+    from the sensor on **world** axes. `ros_schema.lidar_points_message` is what finishes the
+    job. `ego_centric=False` would hand back true world coordinates, which need no rotation at
+    all and for that exact reason cannot be checked - see that function.
+    """
+    from metadrive.component.sensors.point_cloud_lidar import PointCloudLidar
+
+    width, height = size
+    return {LIDAR_SENSOR: (PointCloudLidar, int(width), int(height), True)}
+
+
+def mount_lidar(env, fov_deg=LIDAR_FOV_DEG):
+    """Bolt the sensor to the ego and fix its lens. Call after each `reset()`, like `Rig.mount`.
+
+    Mounted rather than aimed per read for the reason `camera_rig.Rig.mount` is: `perceive` with
+    a `new_parent_node` re-parents the camera and steps the task manager **twice** to re-render
+    it, which is a second render pass per frame for a picture the frame pass has already drawn.
+    Mounted, `perceive()` reads the buffer that is already there.
+    """
+    sensor = env.engine.get_sensor(LIDAR_SENSOR)
+    sensor.lens.setFov(float(fov_deg))
+    sensor.track(env.agent.origin, LIDAR_MOUNT, (0.0, 0.0, 0.0))
+    return sensor
+
+
+def lidar_cloud(sensor, fov_deg=LIDAR_FOV_DEG, max_range_m=LIDAR_MAX_RANGE_M):
+    """One sweep off a mounted sensor, in metres.
+
+    **`to_float=True` is not what it sounds like, and it is the correct call here.** For an RGB
+    camera `BaseCamera._format` divides by 255 to get 0-1; `DepthCamera._format`, which
+    `PointCloudLidar` inherits, overrides that and returns the array **untouched**
+    (`depth_camera.py:184-191`). It is the `to_float=False` branch that converts - `(ret *
+    255).astype(uint8)` - and a cloud running thousands of metres does not survive it. Measured
+    on junction-1: `perceive(to_float=True)` is bit-identical to `get_rgb_array_cpu()`, ratio
+    exactly 1.0 on every element, while `to_float=False` comes back uint8 clipped to 0..255.
+
+    So the fault `docs/reference/sensors-and-observations.md` records for the policy socket is
+    real and is the uint8 path. Reading in-process does avoid it, and this is the line that has
+    to keep doing so: `to_float=False` here would be silent.
+    """
+    import numpy
+
+    return ros_schema.LidarCloud(
+        points=numpy.asarray(sensor.perceive(to_float=True)),
+        fov_deg=float(fov_deg),
+        max_range_m=float(max_range_m),
     )
 
 
@@ -297,17 +394,31 @@ def mounts_from_rig(rig):
     centreline pointing sideways; negate the yaw and the left and right cameras trade places,
     which looks entirely normal until something fuses an image with the boxes.
     """
-    out = {}
-    for camera in getattr(rig, "cameras", ()):
-        right, forward, up = camera.position
-        heading_deg = camera.hpr[0]
-        out[camera.name] = (
-            float(forward),
-            -float(right),
-            float(up),
-            math.radians(float(heading_deg)),
-        )
-    return out
+    return {
+        camera.name: _ros_mount(camera.position, camera.hpr[0])
+        for camera in getattr(rig, "cameras", ())
+    }
+
+
+def _ros_mount(position, heading_deg):
+    """MetaDrive's ego frame to REP-103's, for one sensor. The only place that does the swap.
+
+    Factored out when the lidar became the second thing mounted on the car: two copies of this
+    is two chances to negate the wrong one, and a `/tf_static` where the cameras are right and
+    the lidar is mirrored is exactly the sort of thing that looks fine until something fuses
+    the two.
+    """
+    right, forward, up = position
+    return (float(forward), -float(right), float(up), math.radians(float(heading_deg)))
+
+
+def lidar_mount():
+    """The lidar's own `/tf_static` entry, `{frame: (x, y, z, yaw)}`, ready to merge with the rig's.
+
+    Through the same conversion the cameras go through, from the same kind of MetaDrive-frame
+    tuple, so the two cannot disagree about which way is forward.
+    """
+    return {ros_schema.LIDAR_FRAME: _ros_mount(LIDAR_MOUNT, 0.0)}
 
 
 def cameras_from_rig(rig):

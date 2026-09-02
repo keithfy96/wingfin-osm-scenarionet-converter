@@ -2,9 +2,9 @@
 
 ## Status
 
-**Phases 0 and 1 are built; 2 to 5 are not.** Stage 10 produces a bag that real ROS 2 reads and
-rviz2 renders; this stage is about how much of the vehicle rig's bag it actually covers, which
-was **8 of 45** when this was written and is **14 of 45** now that phase 1 has landed.
+**Phases 0 to 4 are built; 5 is not.** Stage 10 produces a bag that real ROS 2 reads
+and rviz2 renders; this stage is about how much of the vehicle rig's bag it actually covers,
+which was **8 of 45** when this was written and is **30 of 45** now that phase 4 has landed.
 
 Written 2026-09-02, after the question *"so it should generate all 45 topics already?"* could not
 be answered by any command in the repo. Every count below was derived by script against
@@ -21,9 +21,9 @@ Stage 10: the drive written out as a ROS 2 bag  (8 of the rig's 45 topics)  <- w
   -> Stage 11: the rest of the bag, in six phases, each one testable on its own
        phase 0  the ledger and the definition extractor      8 / 45   done
        phase 1  camera_info_latched + tf_static             14 / 45   done
-       phase 2  the SBG GNSS family                         23 / 45
-       phase 3  /sensing/lidar/points                       24 / 45
-       phase 4  image_raw/ffmpeg - the encoder              30 / 45
+       phase 2  the SBG GNSS family                         23 / 45   done
+       phase 3  /sensing/lidar/points                       24 / 45   done
+       phase 4  image_raw/ffmpeg - the encoder              30 / 45   done
        phase 5  the fifteen rig-typed topics                45 / 45
 ```
 
@@ -118,7 +118,7 @@ This is what turns phase 5 from a research task into a paste.
 
 | | n | needs |
 |---|---|---|
-| **reachable with nothing from anyone** | **22** | 6 `camera_info_latched` (`sensor_msgs/CameraInfo`, core) · 6 `image_raw/ffmpeg` (`FFMPEGPacket`, **already in `EXTRA_DEFINITIONS`**) · 7 `sbg_driver` (public, copy verbatim) · `imu/pos_ecef` · `imu/utc_ref` · `/sensing/lidar/points` |
+| **reachable with nothing from anyone** | **22** | 6 `camera_info_latched` (`sensor_msgs/CameraInfo`, core) · 6 `image_raw/ffmpeg` (`FFMPEGPacket`, *believed* already in `EXTRA_DEFINITIONS` - phase 4 found the vendored text wrong in four ways) · 7 `sbg_driver` (public, copy verbatim) · `imu/pos_ecef` · `imu/utc_ref` · `/sensing/lidar/points` |
 | **needs one `.mcap`, then a verbatim paste** | **15** | 6 camera `meta` · `/vehicle/state`, `/vehicle/actuators_output`, `/vehicle/engagement`, `/control/actuators` · the 5 model topics |
 
 ### One call site feeds all of it
@@ -310,7 +310,7 @@ exists to have avoided.
   and 7 on the wire for a drive with no rig - `tools/ros_probe.py bags/j1-lights --coverage` now
   lists all seven declared-but-unwritten topics by name.
 
-- [ ] **Phase 2 - the SBG GNSS family.** `+9`
+- [x] **Phase 2 - the SBG GNSS family.** `+9`   **14 / 45 -> 23 / 45**
   `sbg_ros2_driver` is public; copy the `.msg` text **verbatim** into `EXTRA_DEFINITIONS`. Seven
   topics: `ekf_nav`, `ekf_quat`, `ekf_euler`, `imu_data`, `gps_pos`, `gps_vel`, `utc_time`. Plus
   `imu/pos_ecef` (`geometry_msgs/PointStamped` in most SBG drivers, unconfirmed) and
@@ -327,7 +327,80 @@ exists to have avoided.
   disagreeing is the only way this can be wrong without raising. `MISSING_DEFINITIONS` shrinks by
   exactly nine and phase 0's counter proves it.
 
-- [ ] **Phase 3 - `/sensing/lidar/points`.** `+1`
+  *Done.* `tools/sbg_msgs/` holds the twelve `.msg` files - seven message types and the five
+  nested status submessages they name - copied byte for byte from `SBG-Systems/sbg_ros2_driver`
+  at tag **3.4.0**, commit `3efaf29`, and loaded at import by `ros_schema._sbg_definitions`.
+  Files rather than string literals, because "copied verbatim" is a claim somebody has to be able
+  to diff against upstream, and rewrapping a `.msg` into a 99-column Python literal is precisely
+  where a field changes order.
+
+  **Two of the nine were never definition-blocked at all.** `imu/pos_ecef` is a
+  `geometry_msgs/PointStamped` and `imu/utc_ref` a `sensor_msgs/TimeReference`, both in the
+  humble typestore since before this repo existed; they sat in `MISSING_DEFINITIONS` because
+  nobody had decided what the rig meant by them, which is a different problem wearing the same
+  label. `geodesy.geodetic_to_ecef` is the one piece of arithmetic that was actually missing.
+
+  **A `sbg_driver` message is version-dependent and nothing catches a mismatch.** Measured
+  against 3.1.0: `SbgGpsPosStatus` went from 7 fields to 22, `SbgEkfStatus` from 16 to 23 with
+  two *removed*, `SbgUtcTime` 11 to 14. CDR carries no field names, so a subscriber built against
+  3.1.0 reading our `SbgEkfStatus` reads `dvl_bt_used` as `gps1_course_used` and carries on. Two
+  things guard it: rosbag2 writes the definitions into every bag, and the version is recorded as
+  `sbg_driver_version` in each bag's own `wingfin` metadata. Which version the rig recorded is
+  still unknown - `bag_audit.html` carries rates, not types - so the day a rig bag arrives,
+  `tools/ros_defs.py` compares them instead of anyone assuming.
+
+  **Absence had to be encoded, in message types with no way to state it.** `sensor_msgs/Imu` has
+  its `-1` and `NavSatFix` its covariance type; `SbgImuData.temp` is a bare float32 and every
+  value one can hold is a temperature, `0.0` included - which reads as a sensor at freezing. Four
+  quantities are therefore **NaN** (`ABSENT_SCALAR`, verified round-tripping through CDR):
+  `accel` (the same refusal `imu_message` already makes), `temp` (whose topic-level twin
+  `/sensing/gnss/imu/temp` is one of the ten excluded from the 45 for exactly this reason),
+  `delta_vel` / `delta_angle` (a strapdown integrator's intermediates; there is no integrator),
+  and `undulation`. An *accuracy* of zero is the opposite case and stays a number - for ground
+  truth "1-sigma is zero" is true - and where the type provides its own N/A it is used instead,
+  so `num_sv_tracked` is `0xFF` as `SbgGpsPos.msg` documents.
+
+  **The drive declares the GPS epoch as its `t = 0`.** `SbgUtcTime` wants a calendar date and
+  `gps_tow` a time of week; the simulator has neither. A wall clock read at conversion time would
+  claim the drive happened then and make two runs of one drive differ, and a recent-looking date
+  would be worse because it would be believed. So `t = 0` is 1980-01-06T00:00:00Z: elapsed time
+  inside the drive is exact, the date is a sentinel, and `clock_utc_status` is `0` - the message's
+  own "the UTC time is not known" - so the caveat is in-band. `imu/utc_ref` publishes the sim
+  clock and that declared UTC as two values differing by exactly `315964800 s`; equal values would
+  have said "our clock is UTC".
+
+  *Measured*, `bags/phase2-sbg`, a 364-frame `junction-1` drive with `rigs/cams.txt`:
+  **3,648 messages across 18 topics -> 6,924 across 27**. `MISSING_DEFINITIONS` 24 -> 15. The
+  probe went 16 checks to **24, all passing**, and the eight new ones are each one channel
+  against another rather than against a constant, because every value here is a re-shaping of one
+  position and one velocity: `ekf_nav` against `nav_sat_fix` (worst `0.000e+00 m` over 364
+  frames), `gps_pos` against `ekf_nav`, `pos_ecef` converted back through `geodesy` (`0.000e+00
+  m`, frame `earth`), `ekf_quat` / `ekf_euler` / `imu/data` as one rotation (worst yaw
+  `5.09e-14 deg`), `gps_vel`'s course against its own velocity measured from **east** (worst
+  `7.52e-06 deg`, the tolerance being float32), the four NaN fields still NaN, `imu_data`'s gyro
+  bit-identical to `imu/data`'s angular velocity, and the two clocks offset by the declared epoch.
+
+  *Verified* in 23 new tests across `TestTheSbgFamily` and `TestTheSbgDefinitionsInAWrittenBag`,
+  the second of which writes a real MCAP and checks every field of all twelve types against the
+  upstream files - the only place anything is checked against upstream rather than against our own
+  code. **`uv run pytest`: 904 passed, 2 skipped** (from 881); `ruff check` clean.
+
+  *One earlier claim corrected on the way.* This work first recorded that the `.msg` comments
+  travel into the bag "since rosbag2 stores the definition text in the bag itself". Measured on
+  `bags/phase2-sbg`, they do not: `rosbags` **regenerates** the definition from its parsed
+  typestore when it writes a connection, so the bag carries field lines only. The field lists
+  round-trip exactly, which is the half that matters for decoding; `tools/sbg_msgs/README.md` and
+  `_sbg_definitions` now say so, and a test asserts it so a future `rosbags` that starts carrying
+  them is a notification rather than a surprise.
+
+  *One pre-existing test had to be loosened rather than satisfied.*
+  `test_the_vendored_definitions_are_parseable_message_text` asserted two whitespace-separated
+  tokens per line, which held while every entry was a compact hand-written string and rejects an
+  upstream file with comments in it. It now runs each definition through `get_types_from_msg` -
+  the parser the code actually depends on - which is a stronger check than the shape heuristic it
+  replaced and covers both families.
+
+- [x] **Phase 3 - `/sensing/lidar/points`.** `+1`  **23 / 45 -> 24 / 45.** *Done.*
   Verdicted *"possible - you dropped it"*. `sensor_msgs/PointCloud2` is core.
   **Read `docs/reference/sensors-and-observations.md` first:** the point-cloud sensor inherits a
   `_format` that *converts* to uint8 rather than reformats, and a cloud running −18476.9 to
@@ -338,18 +411,109 @@ exists to have avoided.
   test that already catches a skipped `old_origin_in_current_coordinate`, which is 93.8 m on
   junction-1 and looks entirely plausible when wrong.
 
-- [ ] **Phase 4 - `tools/ros_encode.py`, the encoder.** `+6`
-  The one genuinely new module. `ffmpeg_image_transport_msgs/FFMPEGPacket` is **already
-  defined**; what is missing is the H.264 encode behind it. The rig writes 7.2 KB a frame where
-  raw `sensor_msgs/Image` at `cams.txt`'s 512×288 would be 442 KB - **62×**, or ~41 GB against
-  the rig's 0.67 GB for a six-camera 780 s drive. Raw is not an option.
+  **Measured, and the assumption above was half right.** `DepthCamera._format`, which
+  `PointCloudLidar` inherits, overrides the uint8 conversion: `to_float=True` returns the array
+  **untouched** and only `to_float=False` converts. So `perceive(to_float=True)` is bit-identical
+  to `get_rgb_array_cpu()` - ratio exactly 1.0 on every element - and reading in-process does
+  avoid the fault, provided that flag stays as it is. `tools/ros_frame.lidar_cloud` is the line
+  that has to keep it.
 
-  Written at the **decision rate**, not the step rate. `frame_gate.py` re-uses the last drawn
-  frame on a held step, and writing it again under a new stamp tells a model the world froze.
+  **The cloud is published in a `lidar` frame, not in `map`, and that was the design decision.**
+  MetaDrive hands the sweep over on world axes with its origin at the sensor, so a `map`-frame
+  cloud would need no arithmetic from us at all - and for that exact reason nothing about it
+  could ever be checked. Turning it into the sensor's own frame is one rotation by minus the
+  car's heading, and the wrong sign produces the same points rigidly rotated: a plausible road,
+  a plausible density, a plausible extent, every point behind the car, nothing raising. What
+  catches it is that a forward-facing sensor cannot return a point behind itself, so in the
+  correct frame every point lies inside the sensor's own FOV. Measured over a full drive:
+  **2,320,220 of 2,320,220 points ahead, worst bearing 32.49 deg against a 32.50 deg
+  half-angle** - and 0.00% with the sign flipped.
 
-  *Verify:* decode the bag's packets back to frames and compare against `rig.read()`. The encoder
-  is the one thing in this stage that can be wrong in a way no header check sees - a bag full of
-  well-formed packets carrying the wrong pixels opens, plays, and renders.
+  **A miss keeps its slot and is written NaN**, so the sweep stays organised - 64 beams of 200
+  rays - which is `is_dense: false`'s whole purpose and the one structure a lidar payload has.
+  The range that decides a miss is **declared, not enforced by MetaDrive**: the depth buffer's
+  far plane is 100 km, so an unhit ray comes back as a point up to 18 km out rather than as
+  nothing. Default 200 m, `--ros-lidar-range` to move it, and roughly half of every sweep on
+  junction-1 is sky.
+
+  **A new failure was found on the way, and it is silent.** A 7-camera rig plus the cloud is
+  8 image buffers, and above 7 the depth buffer comes back at its far plane: the env does not
+  crash, `perceive` returns the right shape, and every sweep differs from the last, so nothing
+  raises or repeats - but **99.8% of the cloud is NaN**. Measured on junction-1 over 12 sweeps
+  at each size: 1, 4 and 7 buffers all give 48.52..57.70% of rays within range; 8 gives
+  0.10..0.27%. `camera_rig.MAX_IMAGE_BUFFERS` did not cover this - its 5/5 counts runs that
+  *survive*, and this one survives. So there is a second, lower ceiling
+  (`MAX_BUFFERS_WITH_POINT_CLOUD = 7`), `drive.py` refuses the pairing by name, and the probe
+  checks the share of rays that hit. `rigs/cams.txt` is exactly one camera over, and the one
+  over is `cam_front_wide`, the spare with no rig topic - a six-camera rig plus the cloud
+  records and passes all 30 checks.
+
+  *Verified:* a full offscreen drive on junction-1, `364 frames, 7288 messages across 28
+  topics`, the cloud on the wire at **10.00 Hz** - the rig's own rate, because a sweep is
+  written at the decision rate and not every step. `ros_probe` **24 checks -> 30**, all passing,
+  the six new ones being the payload's shape against its header, the FOV, NaN-in-place, the
+  hit share, that no two sweeps are the same buffer republished, and that the cloud lands on
+  the OSM extent within its own range. Coverage `24 / 45`. `uv run pytest` and
+  `uv run ruff check .` clean. The bag grows from 672 KB to 24 MB - 74.83 MB of payload at
+  3.14x - which is what a real sensor costs and the reason the flag is opt-in.
+
+- [x] **Phase 4 - `tools/ros_encode.py`, the encoder.** `+6`  → **30 / 45**
+  `--ros-camera` on a drive that already has `--camera-rig`. Six H.264 streams out of the rig's
+  own buffers, `libx264` at crf 23, one keyframe a second, at the **decision** rate - because
+  `frame_gate` re-uses the last drawn picture on a held step and encoding it again under a new
+  stamp tells a reader the world froze. Off by default: it is the one channel in the bag that
+  costs real time per frame.
+
+  **`FFMPEGPacket` was already defined and the definition was wrong**, which is the finding of
+  this phase. It had the fields in a different order, two of them the wrong width, one invented
+  (`frame_id`) and one missing (`is_bigendian`) - and none of it could raise, because no topic
+  used the type. A bag written against it opens perfectly: rosbag2 stores the definition beside
+  the data, so our own reader agrees with itself, and only a consumer with the real package
+  installed finds it is reading the encoding string out of the width field. It is exactly the
+  fault `ros_schema.py`'s own comment warns about for `vision_msgs`, sitting unexercised in the
+  file. Now verbatim from `ffmpeg_image_transport_msgs` 1.1.2, humble branch, commit
+  `5395eac`, pinned character for character by a test. **The general lesson - a `.msg` no topic
+  writes is a `.msg` nothing checks - is in CLAUDE.md.**
+
+  Three more things that are silent when wrong, all measured and all pinned:
+  **the pictures are BGR** (MetaDrive's `get_rgb_array_cpu` returns panda3d's buffer channels
+  untouched; `mode="rgb"` is the branch that reverses), **a vertical flip** is described by no
+  field in the message, and **`tune=zerolatency` is load-bearing** rather than a performance
+  setting - it is what makes libx264 one-in-one-out, which is what lets a packet carry the stamp
+  of the `env.step` that drew it. With a lookahead the packet coming out belongs to an earlier
+  step, and a delayed packet is a perfectly valid packet.
+
+  `veryfast` rather than the reflex `ultrafast`: measured on 512×288, `veryfast` is both smaller
+  (1,277 vs 1,412 bytes a frame) and quicker (0.96 vs 1.59 ms), and `medium` is worse on both.
+
+  **The read is not shared with `model.observe`, deliberately.** That one happens *before*
+  `env.step` and pulls buffers drawn on the previous decision - av3_base's own ordering, and
+  right for a model acting on what it has already seen. A bag frame claims that these pixels and
+  this pose are one instant, so its picture is the one drawn by the step whose pose it carries.
+
+  *Verified:* a full offscreen drive on junction-1 with `rigs/cams.txt`, `364 frames, 9108
+  messages across 33 topics`, **6,075 bytes a frame** against the rig's own measured 7,159 and
+  **73× smaller** than the 442 KB an uncompressed `sensor_msgs/Image` would be. `ros_probe`
+  **24 checks → 31**, all passing; the same drive with six cameras and `--ros-lidar` gives
+  **30 / 45 on the wire, 34 topics, 37 checks**. The seven new probe checks include the one that
+  matters - the packets are decoded back and looked at, because a bag full of well-formed
+  packets carrying the wrong pixels opens, plays and renders. Coverage `30 / 45`. `uv run
+  pytest` 947 passed and `uv run ruff check .` clean. The bag grows from 672 KB to 14 MB.
+
+  **One check had to be rewritten after it was measured.** "No two consecutive decoded frames are
+  identical" is the obvious held-buffer test and **it does not work**: re-encoding one identical
+  source frame ten times produces zero exact repeats, because a keyframe and the P-frames after
+  it quantise differently. The measured separation is 47-61 dB for a held stream against 24.8 dB
+  for a moving one, so the probe uses a 40 dB ceiling on the *median* - the median because a car
+  stopped at a red really does draw the same picture twice - backed by the structural check that
+  actually settles it: the packets arrive at the decision rate the bag's own metadata declares,
+  10.00 Hz measured against 10.00 Hz, where a stream written every step would be `stride` times
+  too fast.
+
+  `av>=15,<18` joins `rosbags` in the `ros` group. The wheel carries its own ffmpeg statically,
+  libx264 included, so nothing is added to `docker/Dockerfile` but a rebuild - and
+  `refuse_if_unsupported` checks `av.codecs_available` by name, because a PyAV built against a
+  distro ffmpeg without `--enable-libx264` imports perfectly and has no encoder.
 
 - [ ] **Phase 5 - the fifteen rig-typed topics.** `+15`
   Isolated deliberately, so nothing above waits on it. The whole input is one `.mcap` from
@@ -403,6 +567,15 @@ uv run pytest && uv run ruff check .
   kind of thing nothing downstream would question.
 - **45 of 45 is not parity.** The ten ❌ topics stay absent on purpose, and `/vehicle/can_tx` was
   empty in the rig's bag anyway. A bag that claimed 55 would be claiming a CAN bus.
+- **The camera streams are a rendered scene, not a camera.** No lens distortion, no rolling
+  shutter, no exposure, no noise, no motion blur - `camera_info` says so with an empty `d` and
+  an empty `distortion_model`, which is ROS's way of stating that no distortion is modelled
+  rather than that one was measured and came out zero. `rigs/av3.txt` records the same thing
+  about its four fisheye corners, which are rendered unwarped.
+- **The camera rate is the drive's decision rate, not the rig's 20 Hz.** `env.step` is the world
+  tick, so every rate in this bag is a decimation of `--step-hz`; a default drive gives 10 Hz
+  and `--step-hz 100 --decision-hz 20` gives the rig's. Resampling to 20 in the writer would be
+  inventing frames.
 - **`rigs/cams.txt` contradicts itself about which way two of its cameras face**, and phase 1
   reports that rather than resolving it. Its front pair reads `+yaw` as right and its back pair
   reads it as left, so `cam_back_left` publishes as `rear_left` and is mounted aiming rear-right.

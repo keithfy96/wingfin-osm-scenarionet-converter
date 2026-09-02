@@ -112,7 +112,16 @@ model = [
 # without inflating the whole file -- which would break exactly the index-only audit the rig's
 # own tooling performs (1.47 M timestamps out of 7.41 GB in 0.3 s). `MESSAGE` comes out
 # *larger* than no compression at all.
+#
+# **`av` is here for phase 11.4 and it brings its own ffmpeg**, statically, inside the wheel --
+# no apt package, no system libavcodec, and nothing added to docker/Dockerfile but a rebuild.
+# It carries libx264, which a build of PyAV from source against a distro ffmpeg without
+# `--enable-libx264` would not; `ros_encode.refuse_if_unsupported` checks for the encoder by
+# name rather than assuming the import is enough. It is also what `ros_probe.py` decodes the
+# camera packets back with -- the encoder is the one thing in the bag whose output cannot be
+# checked by reading it.
 ros = [
+  "av>=15,<18",
   "rosbags>=0.10,<1",
 ]
 

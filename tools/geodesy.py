@@ -133,3 +133,27 @@ def projection_origin(wkt):
             return None
         found[key] = float(match.group(1))
     return found["latitude"], found["longitude"]
+
+
+def geodetic_to_ecef(latitude, longitude, height_m=0.0):
+    """WGS 84 latitude/longitude/height to earth-centred earth-fixed metres.
+
+    Returns `(x, y, z)`: +x through 0 deg N 0 deg E, +y through 0 deg N 90 deg E, +z through the
+    north pole. The closed-form standard conversion, no iteration - unlike the inverse, which
+    needs one.
+
+    `height_m` is **height above the ellipsoid**, and this repo does not have one: MetaDrive's
+    `z` is metres above a near-flat world with no relation to WGS 84's spheroid or to any geoid.
+    So the ECEF this produces is right in latitude and longitude and carries whatever the caller
+    passed as its radial component. `ros_schema.pos_ecef_message` says the same thing at the
+    other end.
+    """
+    e_sq = FLATTENING * (2 - FLATTENING)
+    phi, lam = math.radians(latitude), math.radians(longitude)
+    sin_phi, cos_phi = math.sin(phi), math.cos(phi)
+    prime_vertical = SEMI_MAJOR_M / math.sqrt(1 - e_sq * sin_phi * sin_phi)
+    return (
+        (prime_vertical + height_m) * cos_phi * math.cos(lam),
+        (prime_vertical + height_m) * cos_phi * math.sin(lam),
+        (prime_vertical * (1 - e_sq) + height_m) * sin_phi,
+    )
