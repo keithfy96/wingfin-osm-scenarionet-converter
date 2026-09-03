@@ -2,6 +2,8 @@
 
     uv run python tools/ros_defs.py bags/j1-lights
     uv run python tools/ros_defs.py /path/to/ros2_mig_phase_5_p1 --all
+    uv run python tools/ros_defs.py /path/to/ros2_mig_phase_5_p1 \
+        --write tools/wingfin_msgs --package wingfin_msgs
 
 `ros_schema.MISSING_DEFINITIONS` lists 24 of the rig's topics we do not publish, each because we
 have no `.msg` text for its type - or, for two of them, no knowledge of which standard type the
@@ -24,6 +26,18 @@ This tool is what turns that from a fact into a command. It prints each recovere
 before printing it**, because the failure this whole approach exists to avoid is a field in the
 wrong order: that serialises silently and deserialises into nonsense, which is worse than an
 absent topic and is exactly why these are copied rather than inferred.
+
+`--write` skips the paste and puts each one in a `.msg` file beside the loader that reads it,
+which is where the fifteen belong: **verbatim has to be checkable**, and a file diffs against the
+bag it came out of in one command where the same text rewrapped into a Python literal does not.
+`--package` keeps one directory to one package, the way `tools/sbg_msgs/` holds `sbg_driver` and
+nothing else. `ros_schema._wingfin_definitions` loads `tools/wingfin_msgs/` at import, so what
+this writes registers with no edit to any source file.
+
+It also answers the question anyone pointing it at a rig bag is actually asking - *"is this file
+enough?"* - by naming the fifteen blocked topics one by one with whatever type the recorder filed
+each under. That lookup runs topic-first because **the fifteen type names are themselves
+unknown**; that is the blockage, not a convenience.
 
 By default only the unknown types are printed - the ones `Stores.ROS2_HUMBLE` has never heard of,
 which is precisely the set worth pasting. `--all` prints the core types too, which is only useful
@@ -196,6 +210,70 @@ def quote(text: str) -> list[str]:
     return [f'        "{chunk.encode("unicode_escape").decode()}"' for chunk in chunks]
 
 
+def vendor(entry: Definition, directory: Path, force=False) -> tuple[str, str]:
+    """Write one recovered definition to `<directory>/<Type>.msg`. Returns `(verdict, detail)`.
+
+    The alternative to this is a paste into a Python string literal, and `tools/sbg_msgs/`
+    already argues why that is the worse of the two: **verbatim has to be checkable.** A `.msg`
+    file can be diffed against the bag it came out of, or against whatever the package's owner
+    eventually publishes, in one command; the same text rewrapped to fit a source line cannot,
+    and rewrapping is exactly where a field changes order.
+
+    The one thing this refuses to do quietly is **overwrite a definition that disagrees with the
+    one already on disk.** That is not a hypothetical here. `wingfin_msgs/TrafficLightArray` is a
+    type *we* invented for a topic the rig does not have, and it sits in the same package
+    namespace as the rig's own types - so a rig bag that turns out to carry a real
+    `wingfin_msgs/TrafficLightArray` would land on top of ours, and every bag written afterwards
+    would serialise our traffic lights against a field list nothing in this repo agreed to. A
+    collision is a question for a person, so it is reported and skipped rather than resolved.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / f"{entry.name.rsplit('/', 1)[-1]}.msg"
+    if target.exists():
+        existing = target.read_text(encoding="utf-8")
+        if existing == entry.text:
+            return "unchanged", str(target)
+        if not force:
+            return "CONFLICT", (
+                f"{target} already holds a different definition of {entry.name} - "
+                "diff the two and decide, or re-run with --force"
+            )
+    target.write_text(entry.text, encoding="utf-8")
+    return "written", str(target)
+
+
+def blocked_report(found: dict[str, Definition], out) -> None:
+    """What this bag does for the topics phase 5 is waiting on, named one by one.
+
+    The question anyone pointing this tool at a rig bag is actually asking is *"is this file
+    enough?"*, and the count of definitions above does not answer it. **We do not know the type
+    names of the fifteen** - that is the whole blockage, since `bag_audit.html` records rates and
+    not types - so the lookup has to run the other way round, from the topic to whatever type the
+    recorder filed it under. A bag that carries fourteen of the fifteen is a bag worth having and
+    is not the end of the job, and only a per-topic list says which one is short.
+    """
+    waiting = sorted(ros_schema.MISSING_DEFINITIONS)
+    if not waiting:
+        return
+    by_topic: dict[str, str] = {}
+    for entry in found.values():
+        for topic in entry.topics:
+            by_topic.setdefault(topic, entry.name)
+
+    covered = [topic for topic in waiting if topic in by_topic]
+    print(f"\n  the {len(waiting)} topics phase 5 waits on: {len(covered)} carried by this bag",
+          file=out)
+    for topic in waiting:
+        name = by_topic.get(topic)
+        print(f"    {'+' if name else '-'} {topic}  {name or 'not in this bag'}", file=out)
+    if not covered:
+        print(
+            "  None of them. This is a bag of ours, not one off the rig - the definitions the\n"
+            "  fifteen need live in the rig's own ros2_mig_phase_5_p1 bag and nowhere else.",
+            file=out,
+        )
+
+
 def render(entry: Definition) -> str:
     """One `EXTRA_DEFINITIONS` entry, ready to paste."""
     body = quote(entry.text)
@@ -208,8 +286,13 @@ def render(entry: Definition) -> str:
     return f'    "{entry.name}": (\n{joined}\n    ),'
 
 
-def report(path, show_all=False, out=None) -> bool:
-    """Print every definition worth pasting. `False` if anything could not be parsed."""
+def report(path, show_all=False, out=None, write=None, force=False, package=None) -> bool:
+    """Print every definition worth pasting. `False` if anything could not be parsed.
+
+    `write` vendors the recovered definitions as `.msg` files under that directory instead of
+    only printing them, which is what makes phase 5 a command rather than a paste. A conflict
+    there is a failure: it means two different field lists are in play under one type name.
+    """
     # Resolved here, not in the signature: a default argument is bound at import, which pins
     # this to whatever `sys.stdout` was then and makes the output invisible to any caller that
     # redirects it - `capsys` in the tests being the first one to notice.
@@ -241,12 +324,23 @@ def report(path, show_all=False, out=None) -> bool:
             count = len(entry.conflicts) + 1
             print(f"\n  ! {name} has {count} different definitions in one bag", file=out)
 
-    if new:
+    if write is not None:
+        directory = Path(write)
+        chosen = [n for n in printable if package is None or n.split("/")[0] == package]
+        print(f"\n  vendoring {len(chosen)} definition(s) into {directory}/", file=out)
+        for name in chosen:
+            verdict, detail = vendor(found[name], directory, force=force)
+            if verdict == "CONFLICT":
+                ok = False
+            print(f"    {verdict:>9}  {name}\n               {detail}", file=out)
+    elif new:
         print(f"\n# paste into ros_schema.EXTRA_DEFINITIONS - {len(new)} new:", file=out)
         for name in new:
             print(render(found[name]), file=out)
     elif printable:
         print("\n  nothing new - every definition here is already known", file=out)
+
+    blocked_report(found, out)
 
     if undefined:
         print(f"\n  no definition recorded for {len(undefined)} connection(s):", file=out)
@@ -268,10 +362,36 @@ def main(argv=None):
         action="store_true",
         help="print the core types too, not only the ones the humble typestore lacks",
     )
+    parser.add_argument(
+        "--write",
+        metavar="DIR",
+        help="write each definition to DIR/<Type>.msg instead of printing it, the way "
+        "tools/sbg_msgs/ holds the SBG family",
+    )
+    parser.add_argument(
+        "--package",
+        help="with --write, vendor only this package's types, e.g. wingfin_msgs. One directory "
+        "holds one package, the way tools/sbg_msgs/ holds sbg_driver",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="with --write, overwrite a file that holds a different definition of the same type",
+    )
     arguments = parser.parse_args(argv)
     # A refusal, not a traceback -- see the same guard in `ros_audit.main` and `ros_probe.main`.
     try:
-        return 0 if report(arguments.bag, arguments.all) else 1
+        return (
+            0
+            if report(
+                arguments.bag,
+                arguments.all,
+                write=arguments.write,
+                force=arguments.force,
+                package=arguments.package,
+            )
+            else 1
+        )
     except ValueError as error:
         print(f"\n  {error}\n", file=sys.stderr)
         return 1

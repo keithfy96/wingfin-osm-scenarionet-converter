@@ -106,18 +106,9 @@ EXTRA_DEFINITIONS: dict[str, str] = {
     # `FFMPEG_MSGS_VERSION` below for why the provenance is recorded rather than assumed, and
     # what the definition that stood here before phase 4 got wrong.
     "ffmpeg_image_transport_msgs/msg/FFMPEGPacket": FFMPEG_PACKET_MSG,
-    # Ours, for a topic the reference bag does not have. A traffic light is a position and a
-    # colour name, and no ROS core message carries that: `visualization_msgs/Marker` would put
-    # the state in an RGBA value, which renders nicely and is poor training data - "was this
-    # light red" should not be a floating-point comparison. Inventing a type is safe here in a
-    # way it would not be for one of the rig's own topics, because rosbag2 writes the message
-    # definition text into the bag itself, so a reader decodes this without our package.
-    "wingfin_msgs/msg/TrafficLight": (
-        "string id\nstring status\nstring lane\ngeometry_msgs/Point position\n"
-    ),
-    "wingfin_msgs/msg/TrafficLightArray": (
-        "std_msgs/Header header\nwingfin_msgs/TrafficLight[] lights\n"
-    ),
+    # `wingfin_msgs` is not here. It is a whole package rather than a type, ours and the rig's
+    # types share its namespace, and it is loaded off disk by `_wingfin_definitions` below for
+    # the reasons `tools/wingfin_msgs/README.md` gives.
 }
 
 #: The `sbg_driver` release `tools/sbg_msgs/` was copied from, written into every bag we produce.
@@ -157,6 +148,34 @@ def _sbg_definitions() -> dict[str, str]:
 
 
 EXTRA_DEFINITIONS.update(_sbg_definitions())
+
+#: Where the `wingfin_msgs` package's `.msg` files live, beside this module.
+WINGFIN_MSG_DIR = Path(__file__).resolve().parent / "wingfin_msgs"
+
+
+def _wingfin_definitions() -> dict[str, str]:
+    """The `wingfin_msgs` types, read off disk for the same reason the SBG ones are.
+
+    **This directory is how phase 5 lands.** Fifteen of the rig's topics carry types only the
+    rig's own package defines, and the whole plan for them is to recover the `.msg` text out of a
+    bag the rig recorded rather than guess at it - `tools/ros_defs.py --write tools/wingfin_msgs
+    --package wingfin_msgs` does exactly that, and this loader registers whatever it finds with
+    no edit to this file. What is here today is the two types *we* invented for
+    `/perception/traffic_lights`, a topic the rig does not have; they were themselves round-
+    tripped out of `bags/j1-lights` by that command, so the path is carried by every test in the
+    suite rather than waiting on the one file to be exercised for the first time.
+
+    The two are safe to have invented in a way one of the rig's own topics would not be, because
+    rosbag2 writes the definition text into the bag itself: a reader decodes them without our
+    package. A *collision* is the thing to watch for - see `ros_defs.vendor`, which refuses one.
+    """
+    return {
+        f"wingfin_msgs/msg/{path.stem}": path.read_text(encoding="utf-8")
+        for path in sorted(WINGFIN_MSG_DIR.glob("*.msg"))
+    }
+
+
+EXTRA_DEFINITIONS.update(_wingfin_definitions())
 
 # --- the rig's own bag, as data ------------------------------------------------------------
 #
@@ -218,7 +237,10 @@ class RigTopic:
         return self.verdict != IMPOSSIBLE
 
 
-_WINGFIN = "wingfin message; recover with tools/ros_defs.py off a rig bag"
+_WINGFIN = (
+    "a wingfin_msgs type; recover it with "
+    "tools/ros_defs.py <rig bag> --write tools/wingfin_msgs --package wingfin_msgs"
+)
 
 #: The rig's six cameras, under the names its own bag gives them. Every camera topic is
 #: `/sensing/camera/cam_sync_rig/<one of these>/<channel>`.

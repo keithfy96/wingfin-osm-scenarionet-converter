@@ -965,7 +965,9 @@ def coverage(path=None, out=sys.stdout):
 
     print(
         f"\n  waiting on a .msg        {ledger['definitions_missing']:>3}"
-        "   or on which type the rig used; tools/ros_defs.py recovers them",
+        "   or on which type the rig used. One command, against one bag:\n"
+        "      uv run python tools/ros_defs.py <rig bag> "
+        "--write tools/wingfin_msgs --package wingfin_msgs",
         file=out,
     )
     print(

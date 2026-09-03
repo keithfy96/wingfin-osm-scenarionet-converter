@@ -144,7 +144,22 @@ uv run python tools/ros_probe.py bags/phase4-full --workspace workspaces/junctio
 uv run python tools/ros_probe.py bags/phase4-full --coverage
 ```
 
-**Writes** nothing; both print to the terminal.
+**Reading a bag's message definitions back out of it** is the third reader, and the one that
+unblocks phase 5. It needs no ROS and no rig — `rosbags` exposes the schemas directly:
+
+```bash
+uv run python tools/ros_defs.py bags/j1-lights          # self-test: ours round-trips
+uv run python tools/ros_defs.py bags/j1-lights --write tools/wingfin_msgs \
+    --package wingfin_msgs                              # idempotent, prints "unchanged"
+```
+
+**Expect** `27 message definitions`, `nothing new`, and `the 15 topics phase 5 waits on: 0
+carried by this bag` — none of them are, because they only exist in a bag off the rig. Pointed
+at one of those, the same command vendors the fifteen types into `tools/wingfin_msgs/` and the
+line reads `15 carried by this bag`.
+
+**Writes** nothing, except `--write`, which writes `.msg` files and refuses to overwrite one that
+disagrees.
 
 **Check those figures against `docs/reference/ros-bags.md`.** That file records what was
 measured on 2026-08-31, and a disagreement is the finding — it exists to be contradicted.

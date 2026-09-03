@@ -909,10 +909,10 @@ class TestTheGeneratedMessagePackage:
 class TestReadingDefinitionsBackOutOfABag:
     """`tools/ros_defs.py` - the tool that unblocks the fifteen topics we have no `.msg` for.
 
-    `MISSING_DEFINITIONS` gives the reason for four of them as "type not in the audit", which is
-    true and points at the wrong place. `bag_audit.html` records *rates*; the only message type
-    named anywhere in it is `geometry_msgs/TwistStamped`. The definitions were never going to be
-    there.
+    `MISSING_DEFINITIONS` used to give the reason as "type not in the audit", which was true and
+    pointed at the wrong place. `bag_audit.html` records *rates*; the only message type named
+    anywhere in it is `geometry_msgs/TwistStamped`. The definitions were never going to be there,
+    and the reason now names the command that gets them instead.
 
     **They are in the bag.** rosbag2 writes each type's full `.msg` text into the file so a
     reader can decode it without the package that wrote it - which is the same property that made
@@ -1998,3 +1998,238 @@ class TestTheCameraPackets:
         frame = self.frame([self.packet("rear_right", "cam_back_right")])
         built = [builder(frame) for builder in builders]
         assert [b is not None for b in built] == [False, False, False, False, False, True]
+
+
+class TestVendoringADefinitionToDisk:
+    """`ros_defs.vendor` and `--write` - what turns phase 5 from a paste into a command.
+
+    Recovering a definition and *keeping* it are two different problems. `render` solves the
+    first and produces a Python string literal, which is where `tools/sbg_msgs/README.md`'s
+    argument bites: **verbatim has to be checkable**, and a `.msg` rewrapped to fit a source line
+    cannot be diffed against the bag it came out of. So the fifteen land as files.
+
+    The whole path is exercised here against types we already own, which is deliberate. The one
+    file phase 5 waits on is not in the repo and cannot be, so the alternative would be a loader
+    whose first real use is the day it matters.
+    """
+
+    @staticmethod
+    def _found(tmp_path):
+        import ros_defs
+
+        found, _ = ros_defs.read(TestReadingDefinitionsBackOutOfABag._bag(tmp_path))
+        return found
+
+    def test_a_vendored_file_holds_exactly_what_the_bag_carried(self, tmp_path):
+        import ros_defs
+
+        found = self._found(tmp_path)
+        out = tmp_path / "msgs"
+        verdict, _ = ros_defs.vendor(found["wingfin_msgs/msg/TrafficLight"], out)
+        assert verdict == "written"
+        text = (out / "TrafficLight.msg").read_text(encoding="utf-8")
+        assert text == found["wingfin_msgs/msg/TrafficLight"].text
+        assert text == EXTRA_DEFINITIONS["wingfin_msgs/msg/TrafficLight"]
+
+    def test_writing_the_same_definition_twice_is_not_a_change(self, tmp_path):
+        import ros_defs
+
+        found = self._found(tmp_path)
+        out = tmp_path / "msgs"
+        ros_defs.vendor(found["wingfin_msgs/msg/TrafficLight"], out)
+        verdict, _ = ros_defs.vendor(found["wingfin_msgs/msg/TrafficLight"], out)
+        assert verdict == "unchanged", "a re-run must be idempotent, not a rewrite"
+
+    def test_a_definition_that_disagrees_with_the_file_is_refused(self, tmp_path):
+        """The collision that matters, and the reason `vendor` is not a `write_text` call.
+
+        `wingfin_msgs` is the *vehicle's* package and two of its types are ours, invented for a
+        topic the rig does not have. A rig bag carrying its own `TrafficLightArray` would land on
+        top of ours, and CDR carries no field names - so every bag written afterwards would
+        serialise our traffic lights against a field list nothing here agreed to, with nothing
+        downstream raising. A collision is a question for a person.
+        """
+        import ros_defs
+
+        found = self._found(tmp_path)
+        out = tmp_path / "msgs"
+        target = out / "TrafficLight.msg"
+        out.mkdir()
+        target.write_text("uint8 something_else\n", encoding="utf-8")
+
+        verdict, detail = ros_defs.vendor(found["wingfin_msgs/msg/TrafficLight"], out)
+        assert verdict == "CONFLICT"
+        assert "--force" in detail
+        assert target.read_text(encoding="utf-8") == "uint8 something_else\n", "it overwrote"
+
+    def test_force_is_what_overwrites_and_nothing_else_is(self, tmp_path):
+        import ros_defs
+
+        found = self._found(tmp_path)
+        out = tmp_path / "msgs"
+        out.mkdir()
+        (out / "TrafficLight.msg").write_text("uint8 something_else\n", encoding="utf-8")
+
+        verdict, _ = ros_defs.vendor(found["wingfin_msgs/msg/TrafficLight"], out, force=True)
+        assert verdict == "written"
+        assert (out / "TrafficLight.msg").read_text(encoding="utf-8") == (
+            EXTRA_DEFINITIONS["wingfin_msgs/msg/TrafficLight"]
+        )
+
+    def test_a_conflict_fails_the_run_rather_than_printing_and_returning_zero(self, tmp_path):
+        import ros_defs
+
+        out = tmp_path / "msgs"
+        out.mkdir()
+        (out / "TrafficLight.msg").write_text("uint8 something_else\n", encoding="utf-8")
+        bag = TestReadingDefinitionsBackOutOfABag._bag(tmp_path)
+        assert ros_defs.main([str(bag), "--write", str(out), "--package", "wingfin_msgs"]) == 1
+
+    def test_the_package_filter_keeps_one_directory_to_one_package(self, tmp_path, capsys):
+        """`tools/sbg_msgs/` holds `sbg_driver` and nothing else; the same rule applies here.
+
+        Without the filter a bag of ours vendors `vision_msgs` alongside `wingfin_msgs`, and a
+        directory named after one package holding another's types is how a loader keyed on the
+        directory name starts registering a type under the wrong package.
+        """
+        import ros_defs
+
+        bag = TestReadingDefinitionsBackOutOfABag._bag(tmp_path)
+        out = tmp_path / "msgs"
+        assert ros_defs.main([str(bag), "--write", str(out), "--package", "wingfin_msgs"]) == 0
+        assert sorted(path.name for path in out.glob("*.msg")) == [
+            "TrafficLight.msg",
+            "TrafficLightArray.msg",
+        ]
+
+    def test_the_files_on_disk_are_what_the_module_loads(self):
+        """The loader, not a copy of it: what phase 5 relies on with no edit to `ros_schema`."""
+        import ros_schema
+
+        on_disk = {
+            f"wingfin_msgs/msg/{path.stem}": path.read_text(encoding="utf-8")
+            for path in sorted(ros_schema.WINGFIN_MSG_DIR.glob("*.msg"))
+        }
+        assert on_disk, "tools/wingfin_msgs/ has no .msg files"
+        for name, text in on_disk.items():
+            assert EXTRA_DEFINITIONS[name] == text, f"{name} on disk is not what is registered"
+
+    def test_a_new_msg_dropped_in_registers_with_no_source_edit(self, tmp_path, monkeypatch):
+        """The claim phase 5 turns on, tested rather than asserted in a comment."""
+        import ros_schema
+
+        monkeypatch.setattr(ros_schema, "WINGFIN_MSG_DIR", tmp_path)
+        (tmp_path / "VehicleState.msg").write_text(
+            "std_msgs/Header header\nfloat64 speed\n", encoding="utf-8"
+        )
+        loaded = ros_schema._wingfin_definitions()
+        assert loaded == {
+            "wingfin_msgs/msg/VehicleState": "std_msgs/Header header\nfloat64 speed\n"
+        }
+
+    def test_it_says_which_of_the_fifteen_a_bag_carries(self, tmp_path, capsys):
+        """"Is this file enough?" is the question, and a definition count does not answer it.
+
+        The lookup runs topic-first because **the type names are themselves unknown** - that is
+        the blockage, `bag_audit.html` recording rates and not types - so the only way to ask is
+        "what did the recorder file this topic under".
+        """
+        import ros_defs
+        import ros_schema
+
+        ros_defs.report(TestReadingDefinitionsBackOutOfABag._bag(tmp_path))
+        printed = capsys.readouterr().out
+        assert "the 15 topics phase 5 waits on: 0 carried by this bag" in printed
+        for topic in ros_schema.MISSING_DEFINITIONS:
+            assert f"- {topic}  not in this bag" in printed
+
+    def test_the_fifteen_are_still_fifteen_and_still_absent(self):
+        """Nothing above declares a topic. Vendoring is the input to phase 5, not phase 5."""
+        import ros_schema
+
+        missing = ros_schema.MISSING_DEFINITIONS
+        assert len(missing) == 15
+        assert not set(missing) & set(ros_schema.TOPICS)
+        assert all("--write tools/wingfin_msgs" in why for why in missing.values())
+
+
+class TestARigBagArriving:
+    """The branch that runs on the one file phase 5 waits on, exercised without it.
+
+    Everything else about the ingest is tested against bags of ours, and bags of ours carry none
+    of the fifteen - so the interesting half of `blocked_report`, and the whole of the "a type we
+    have never seen lands and registers" path, would otherwise sit untested until the day it
+    mattered. This writes a stand-in: a bag holding a `/vehicle/state` connection under a type
+    nothing in this repo defines, which is exactly the shape the rig's bag has.
+
+    **The stand-in's field list is not a guess at the rig's** and nothing here treats it as one.
+    It exists to be recovered, not to be believed; the point being proved is that whatever text a
+    bag carries comes back out of it and registers.
+    """
+
+    TYPE = "wingfin_msgs/msg/VehicleState"
+    TEXT = "std_msgs/Header header\nfloat64 speed\nfloat64 steering_angle\n"
+
+    def _bag(self, tmp_path):
+        from rosbags.rosbag2 import Writer
+        from rosbags.typesys import Stores, get_types_from_msg, get_typestore
+
+        store = get_typestore(Stores.ROS2_HUMBLE)
+        store.register(get_types_from_msg(self.TEXT, self.TYPE))
+        path = tmp_path / "rig-stand-in"
+        with Writer(path, version=9) as writer:
+            connection = writer.add_connection(
+                "/vehicle/state", self.TYPE, typestore=store, serialization_format="cdr"
+            )
+            message = store.types[self.TYPE]
+            header = store.types["std_msgs/msg/Header"]
+            stamp = store.types["builtin_interfaces/msg/Time"]
+            writer.write(connection, 0, store.serialize_cdr(
+                message(
+                    header=header(stamp=stamp(sec=0, nanosec=0), frame_id="base_link"),
+                    speed=1.0,
+                    steering_angle=0.0,
+                ),
+                self.TYPE,
+            ))
+        return path
+
+    def test_a_type_this_repo_has_never_seen_comes_back_out(self, tmp_path):
+        import ros_defs
+
+        found, undefined = ros_defs.read(self._bag(tmp_path))
+        assert undefined == [], "the writer recorded no definition"
+        assert self.TYPE in found
+        assert found[self.TYPE].text == self.TEXT
+        assert ros_defs.parses(self.TYPE, found[self.TYPE].text) is None
+
+    def test_the_per_topic_list_counts_it(self, tmp_path, capsys):
+        """`0 carried` becomes `1 carried`, and the row for that topic names the type."""
+        import ros_defs
+
+        ros_defs.report(self._bag(tmp_path))
+        printed = capsys.readouterr().out
+        assert "the 15 topics phase 5 waits on: 1 carried by this bag" in printed
+        assert f"+ /vehicle/state  {self.TYPE}" in printed
+        assert "+ /vehicle/engagement" not in printed
+
+    def test_vendoring_it_makes_ros_schema_carry_it(self, tmp_path, monkeypatch):
+        """The claim phase 5 rests on, run end to end: bag -> file -> registered definition."""
+        import ros_defs
+        import ros_schema
+
+        out = tmp_path / "wingfin_msgs"
+        assert ros_defs.main(
+            [str(self._bag(tmp_path)), "--write", str(out), "--package", "wingfin_msgs"]
+        ) == 0
+        assert (out / "VehicleState.msg").read_text(encoding="utf-8") == self.TEXT
+
+        monkeypatch.setattr(ros_schema, "WINGFIN_MSG_DIR", out)
+        assert ros_schema._wingfin_definitions()[self.TYPE] == self.TEXT
+
+    def test_it_still_does_not_write_the_topic(self, tmp_path):
+        """A definition is necessary and not sufficient - the builder is the missing half."""
+        import ros_schema
+
+        assert "/vehicle/state" not in ros_schema.TOPICS
+        assert "/vehicle/state" in ros_schema.MISSING_DEFINITIONS

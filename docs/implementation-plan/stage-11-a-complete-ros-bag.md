@@ -2,7 +2,8 @@
 
 ## Status
 
-**Phases 0 to 4 are built; 5 is not.** Stage 10 produces a bag that real ROS 2 reads
+**Phases 0 to 4 are built. Phase 5's ingest is built; its fifteen builders are not,
+and cannot be until one `.mcap` off the rig exists on this machine.** Stage 10 produces a bag that real ROS 2 reads
 and rviz2 renders; this stage is about how much of the vehicle rig's bag it actually covers,
 which was **8 of 45** when this was written and is **30 of 45** now that phase 4 has landed.
 
@@ -24,7 +25,9 @@ Stage 10: the drive written out as a ROS 2 bag  (8 of the rig's 45 topics)  <- w
        phase 2  the SBG GNSS family                         23 / 45   done
        phase 3  /sensing/lidar/points                       24 / 45   done
        phase 4  image_raw/ffmpeg - the encoder              30 / 45   done
-       phase 5  the fifteen rig-typed topics                45 / 45
+       phase 5  the fifteen rig-typed topics                45 / 45   ingest built;
+                                                                     the builders
+                                                                     need one .mcap
 ```
 
 Phases 1-4 are independent of one another and of phase 5. **Only phase 0 must come first**,
@@ -112,7 +115,10 @@ types.** Nothing needs to be guessed, nobody needs to hand over a source package
 does not need to be running. What is needed is **one `.mcap` file** and forty lines of Python -
 and no ROS, because `rosbags` exposes the schemas directly.
 
-This is what turns phase 5 from a research task into a paste.
+This is what turns phase 5 from a research task into a command. Not a paste, in the end -
+`--write` puts each recovered definition in a `.msg` file beside the loader that reads it,
+because verbatim has to be checkable and a file diffs against its source where a rewrapped
+string literal does not.
 
 ### So the 37 split by work, not by permission
 
@@ -515,28 +521,84 @@ exists to have avoided.
   `refuse_if_unsupported` checks `av.codecs_available` by name, because a PyAV built against a
   distro ffmpeg without `--enable-libx264` imports perfectly and has no encoder.
 
-- [ ] **Phase 5 - the fifteen rig-typed topics.** `+15`
+- [~] **Phase 5 - the fifteen rig-typed topics.** `+15`. **Half built. The other half is one
+  file away, and the file is not in this repo.**
+
   Isolated deliberately, so nothing above waits on it. The whole input is one `.mcap` from
   `ros2_mig_phase_5_p1` - not the rig running, not the wingfin source package, and not
   `bag_audit.html`, which carries rates and no types.
 
+  **What is built (2026-09-03): the ingest, end to end, and it is a command.**
+
   ```bash
-  uv run python tools/ros_defs.py /path/to/rig-bag      # every type's .msg text, verbatim
+  uv run python tools/ros_defs.py /path/to/ros2_mig_phase_5_p1 \
+      --write tools/wingfin_msgs --package wingfin_msgs
   ```
 
-  Paste the fifteen into `EXTRA_DEFINITIONS`, then fill them from what `drive.py:2478` already
-  has in scope: `action` is the commanded `[steering, throttle_brake]` behind `/control/actuators`
-  and `/vehicle/actuators_output`; the ego's speed and heading are `/vehicle/state`; `prediction`
-  is the five model topics, on an `--agent-policy remote` drive only.
+  `ros_defs.py --write` vendors each recovered definition to `tools/wingfin_msgs/<Type>.msg`,
+  and `ros_schema._wingfin_definitions` loads that directory at import - so **the fifteen types
+  register with no edit to any source file.** `--package` keeps one directory to one package,
+  the way `tools/sbg_msgs/` holds `sbg_driver` and nothing else.
 
-  **Nothing here is guessed**, and that is the whole design. Copying is what `ros_schema.py`
-  already does for `vision_msgs` and `FFMPEGPacket`, for the reason its own comment gives: a
-  field out of order serialises silently.
+  Files rather than a paste into `EXTRA_DEFINITIONS`, for `tools/sbg_msgs/README.md`'s reason:
+  *verbatim has to be checkable*. A `.msg` file can be diffed against the bag it came out of in
+  one command; the same text rewrapped to fit a 100-column source line cannot, and rewrapping is
+  exactly where a field changes order.
 
-  Until that file exists these stay in `MISSING_DEFINITIONS`, with the reason corrected from
-  *"type not in the audit"* to **"the audit carries rates, not types - recoverable from any rig
-  bag with `tools/ros_defs.py`"**. That tells the next reader what to do, rather than only what
-  is wrong.
+  **The path is not scaffolding waiting for its first real use.** `wingfin_msgs/TrafficLight` and
+  `TrafficLightArray` - ours, invented for a topic the rig does not have - were moved out of the
+  string literal and into that directory *by running the command above against `bags/j1-lights`*.
+  They came back byte for byte identical to the literals they replaced, and every bag test in the
+  suite now carries the loader. The day the rig's file arrives, nothing about the mechanism is
+  being tried for the first time.
+
+  Two things the ingest reports that a definition count does not:
+
+  - **Which of the fifteen a given bag actually carries**, named one by one. "Is this file
+    enough?" is the real question and the lookup has to run *topic-first*, because **the type
+    names are themselves unknown** - that is the whole blockage. A bag carrying fourteen of the
+    fifteen is worth having and is not the end of the job, and only a per-topic list says which
+    one is short.
+  - **A collision, as a failure rather than an overwrite.** `wingfin_msgs` is the *vehicle's*
+    package and two of its types are ours. A rig bag carrying its own `TrafficLightArray` would
+    land on top of ours, and CDR carries no field names - so every bag written afterwards would
+    serialise our traffic lights against a field list nothing here agreed to, with nothing
+    downstream raising. `vendor` reports `CONFLICT`, skips the file and fails the run. `--force`
+    is for after a person has decided, not instead of one.
+
+  **What is not built, and cannot honestly be: the fifteen builders.** They need field names and
+  field *order*, and both live only in that `.mcap`. Writing them against a plausible field list
+  would produce a bag that opens, plays, and is wrong - `ros_schema.py`'s own opening argument:
+  a subscriber deserialising `wingfin_msgs/VehicleState` off a `geometry_msgs/TwistStamped`
+  wearing its topic name fails, and a topic that is present and invented cannot be tested for,
+  where an absent one can. So coverage stays **30 / 45**, and nothing above was allowed to
+  declare a topic it cannot fill.
+
+  The values are already in scope at the one call site (`drive.py:2478`) and are not the
+  blockage: `action` is the commanded `[steering, throttle_brake]` behind `/control/actuators`
+  and `/vehicle/actuators_output`, the ego's speed and heading are `/vehicle/state`, and
+  `prediction` is the five model topics on an `--agent-policy remote` drive. They stay unplumbed
+  until there is a builder to consume them, rather than shipping as fields nothing reads.
+
+  *Verify, today:*
+
+  ```bash
+  uv run python tools/ros_defs.py bags/j1-lights --write tools/wingfin_msgs \
+      --package wingfin_msgs          # idempotent: "unchanged", twice
+  uv run python tools/ros_probe.py bags/phase4-full --coverage    # 30 / 45, naming the command
+  uv run pytest tests/unit/test_ros_schema.py -q                  # 151, was 137
+  uv run pytest && uv run ruff check .                            # 961 passed, 2 skipped
+  ```
+
+  `TestARigBagArriving` writes a stand-in - a bag holding `/vehicle/state` under a type nothing
+  in this repo defines - and runs the whole path on it: recovered, vendored, registered, and the
+  per-topic list turning `0 carried` into `1 carried`. **Its field list is not a guess at the
+  rig's** and nothing treats it as one; it exists to be recovered, not believed. Without it the
+  interesting half of the ingest would sit untested until the day it mattered.
+
+  *Verify, the day the file lands:* the same `--write`, then the per-topic list comes back
+  `15 carried by this bag`, `MISSING_DEFINITIONS` empties as each builder is written, and
+  `--coverage` reaches `45 / 45`.
 
 ## Testing one phase at a time
 

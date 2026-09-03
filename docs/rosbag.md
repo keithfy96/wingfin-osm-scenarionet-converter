@@ -258,8 +258,22 @@ cross-referenced the prose against the code. Now nothing can: `tests/unit/test_r
 `TestTheRigCoverageLedger` asserts the 55 rows partition and that our own ground-truth topics are
 never counted as coverage of a bag that has none.
 
-**The plan for the rest** is `docs/implementation-plan/stage-11-a-complete-ros-bag.md`, in five
-remaining phases.
+**Where the fifteen still-blocked types come from** is not this file and not `bag_audit.html`,
+which records rates: grep every message type named anywhere in that audit and exactly one comes
+back, `geometry_msgs/TwistStamped`. They are in the rig's own bag, because rosbag2 writes each
+type's `.msg` text into the file so a reader can decode it without the package that wrote it:
+
+```bash
+uv run python tools/ros_defs.py <a bag off the rig> \
+    --write tools/wingfin_msgs --package wingfin_msgs
+```
+
+That vendors each one beside `ros_schema`, which loads the directory at import. The same command
+run against a bag of ours prints `the 15 topics phase 5 waits on: 0 carried by this bag` — none
+of them are, and it says so per topic rather than leaving a count to be interpreted.
+
+**The plan for the rest** is `docs/implementation-plan/stage-11-a-complete-ros-bag.md`; phase 5
+is the one still open, and only its builders.
 
 | file | covers |
 |---|---|

@@ -771,6 +771,81 @@ there: a PyAV built from source against a distro ffmpeg without `--enable-libx26
 perfectly and has no encoder, so `ros_encode.refuse_if_unsupported` checks
 `av.codecs_available` by name.
 
+## Recovering the rig's own message types, 2026-09-03 (stage 11 phase 5, the ingest)
+
+Phase 5's fifteen topics are blocked on nothing but `.msg` text, and this half of it is built:
+**the recovery is a command, and the result registers with no edit to any source file.**
+
+```bash
+uv run python tools/ros_defs.py /path/to/ros2_mig_phase_5_p1 \
+    --write tools/wingfin_msgs --package wingfin_msgs
+```
+
+The other half - fifteen builders that put values on the wire - is not built and cannot honestly
+be, because it needs the field *order* those files carry. Coverage stays 30 / 45.
+
+### Files, not a paste, for the reason `tools/sbg_msgs/` gives
+
+`render` already emitted a pasteable Python literal, and that was the wrong destination.
+**Verbatim has to be checkable**: a `.msg` file diffs against the bag it came out of in one
+command, and the same text rewrapped to fit a 100-column source line does not - rewrapping being
+exactly where a field changes order. So `--write` writes `<Type>.msg` beside the loader, the way
+the SBG family already sits in `tools/sbg_msgs/`.
+
+`--package` keeps one directory to one package. Without it, `--write` on a bag of ours vendors
+`vision_msgs`' five types into the same directory as `wingfin_msgs`' two - measured, first run -
+and a directory named after one package holding another's is how a loader keyed on that name
+starts registering a type under the wrong package.
+
+### The loader is carried by the existing suite, not waiting on the rig
+
+`wingfin_msgs/TrafficLight` and `TrafficLightArray` - **ours**, invented for
+`/perception/traffic_lights`, a topic the rig's bag does not have - were moved out of the
+`EXTRA_DEFINITIONS` string literal into `tools/wingfin_msgs/` by running that command against
+`bags/j1-lights`. They came back byte for byte identical to the literals they replaced:
+
+```text
+bags/j1-lights: 27 message definitions across the bag's connections
+  vendoring 2 definition(s) into tools/wingfin_msgs/
+      written  wingfin_msgs/msg/TrafficLight
+      written  wingfin_msgs/msg/TrafficLightArray
+```
+
+That was the point of moving them. `_wingfin_definitions` is now on the path of every bag test in
+the suite - 947 of them - rather than being exercised for the first time on the day the rig's
+file arrives. Re-running is `unchanged`, twice.
+
+### "Is this file enough?" runs topic-first, because the type names are the blockage
+
+A definition count does not answer the only question worth asking of a rig bag, so `report`
+prints the fifteen one by one with whatever type the recorder filed each under. The lookup
+**cannot** run type-first: we do not know the fifteen type names - that is the blockage itself,
+`bag_audit.html` recording rates and not types. A bag carrying fourteen of the fifteen is worth
+having and is not the end of the job, and only a per-topic list says which one is short.
+
+On one of ours it reads `the 15 topics phase 5 waits on: 0 carried by this bag`, and says why.
+
+### The collision that would be silent: ours and the rig's share one namespace
+
+`wingfin_msgs` is the **vehicle's** package, and two of its types are ours. A rig bag carrying
+its own `wingfin_msgs/TrafficLightArray` would land on top of ours, and every bag written
+afterwards would serialise our traffic lights against a field list nothing in this repo agreed
+to. CDR carries no field names, so nothing downstream raises.
+
+`vendor` reports `CONFLICT`, leaves the file alone, and `report` returns non-zero. Resolving one
+is a decision for a person - either the rig's definition wins and `/perception/traffic_lights` is
+rebuilt against it, or ours is renamed out of the collision. `--force` is for after that, not
+instead of it.
+
+### Why the builders are not written ahead of the definitions
+
+The values are not the blockage and are already in scope at `drive.py:2478` - `action` is the
+commanded `[steering, throttle_brake]`, the ego's speed and heading are `/vehicle/state`,
+`prediction` is the five model topics. Field names and field order are the blockage, and a
+builder written against a plausible field list produces a bag that opens, plays and is wrong.
+`ros_schema.py`'s opening argument applies to its own package: **a topic that is present and
+invented cannot be tested for, where an absent one can.**
+
 ## Traps
 - **A `sbg_driver` message is version-dependent and CDR will not tell you.** `SbgEkfStatus` went
   from 16 fields to 23 between 3.1.0 and 3.4.0, two of them removed - a mismatched subscriber
@@ -798,6 +873,15 @@ perfectly and has no encoder, so `ros_encode.refuse_if_unsupported` checks
 - **`perceive(to_float=False)` is the destructive branch for a cloud, not `True`.**
   `DepthCamera._format` returns the array untouched on the `True` branch; the flag's name argues
   for exactly the wrong one.
+
+- **A recovered `.msg` and an invented one live in the same package namespace.** `wingfin_msgs`
+  is the vehicle's; two of its types are ours. `ros_defs.vendor` refuses a differing overwrite
+  because CDR carries no field names and the resulting mismatch raises nowhere.
+- **`--write` without `--package` mixes packages into one directory.** A bag of ours vendors
+  `vision_msgs` alongside `wingfin_msgs` - one directory holds one package, as `tools/sbg_msgs/`
+  does.
+- **"Which types does this bag have" does not answer "is this bag enough".** The fifteen type
+  names are unknown, so the check has to run topic-first.
 - **An unhit ray is a point up to 18 km away, not a zero and not a NaN.** The far plane is
   100 km and the buffer is non-linear out there, so there is no sentinel - the range that calls
   a return a miss is declared by us, and without it the cloud describes the sky.
