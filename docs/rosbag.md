@@ -1,9 +1,20 @@
 # Rosbag — what a MetaDrive drive can and cannot put on the wire
 
-Scope: turning a drive from this repo into a rosbag shaped like the real vehicle's. The reference
-is `bag_audit.html` — a 779.6 s MCAP·zstd bag, **55 topics**, 1,466,940 messages, 10.50 GB. This
-file records which of those 55 the simulator can supply, which it can only approximate, and which
-it cannot honestly produce at all.
+Scope: turning a drive from this repo into a rosbag shaped like the real vehicle's. This file
+records which of the vehicle's topics the simulator can supply, which it can only approximate, and
+which it cannot honestly produce at all.
+
+> **The reference changed on 2026-09-03 and the table below has not been rewritten to match.**
+> It argues `bag_audit.html`'s **55 topics** — an audit of a 779.6 s recording, 1,466,940
+> messages, 10.50 GB. The vehicle's *own* bag, `bags/074143` (3783.56 s, 6,267,599 messages,
+> 14.7 GB), has **50**, and five names have moved: `/control/actuators` is now
+> `/control/openpilot/actuators`, `/vehicle/actuators_output` is gone, `/sensing/lidar/points` is
+> now `/sensing/lidar/points/soa_zstd`, and neither CAN topic is recorded any more.
+>
+> **The live ledger is `tools/reference_bag.json`, derived from that bag**, and the counts come
+> from `uv run python tools/ros_probe.py --coverage`: 50 topics, 14 not producible, **36 the
+> target**, all 36 built. The rows below are kept because each one still carries the *argument*
+> for its verdict, which the JSON does not. Where the two disagree, the JSON is the vehicle.
 
 ## The headline: the bag has no labels in it
 
@@ -247,9 +258,11 @@ uv run python tools/ros_probe.py --coverage            # what the code can write
 uv run python tools/ros_probe.py bags/j1-lights --coverage   # what a bag actually holds
 ```
 
-The 55 rows above live in code as `ros_schema.RIG_TOPICS`, and every count — the 45, the
-24/21/10 split, how many topics each remaining phase lands — is **derived from them**, including
-`ros_schema.MISSING_DEFINITIONS`. That is deliberate: a figure written into this file goes stale
+The rows above lived in code as `ros_schema.RIG_TOPICS` until 2026-09-03 and now do not:
+that tuple is **built from `tools/reference_bag.json`**, extracted from the vehicle's own
+recording, and only the *judgements* — not producible and why, truth rather than measurement —
+are kept in code. Every count is derived from it, including `ros_schema.MISSING_DEFINITIONS`,
+which is now empty. That is deliberate: a figure written into this file goes stale
 in silence, and did. `/sensing/gnss/imu_data` was producible and missing from the code's table
 altogether, one character from the `/sensing/gnss/imu/data` we do publish; `/sensing/gnss/imu/temp`
 and `/sensing/gnss/status` sat in it as though a `.msg` were all that stood between a simulator

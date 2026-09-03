@@ -2709,6 +2709,19 @@ def main() -> int:
             started_wall = last_report = time.perf_counter()
             last_steps = 0
             last_policy = (0.0, 0)
+            # For the two `VehicleState` fields that are differences rather than readings -
+            # `a_ego` and `steering_rate_deg_s`. Kept here because this loop is the only place
+            # that has the previous frame; `ros_frame.controls_of` stays a pure function of what
+            # it is handed. Both start `None`, so the first frame reports no difference at all
+            # rather than an acceleration of zero it did not measure.
+            ros_last_speed = None
+            ros_last_angle = None
+            # The model's own output for the decision this frame belongs to. Held across the
+            # non-decision steps of a strided drive so that the three model topics are written
+            # at the decision rate rather than being absent on four frames in five - the same
+            # arrangement the cloud and the camera packets have, except that a *trajectory* is
+            # still true between decisions where a re-encoded camera frame is not.
+            ros_prediction = None
             while budget is None or steps < budget:
                 # Read here, at the top, and never anywhere inside the step. MetaDrive appends
                 # a frame in `after_step`, and `convert_recorded_scenario_exported` asserts
@@ -2737,6 +2750,10 @@ def main() -> int:
                     # reads a camera nor spends a forward pass.
                     model.observe(rig.read(), env.agent)
                     prediction = model.predict(env.agent)
+                    if ros_bag is not None:
+                        ros_prediction = ros_frame.prediction_of(
+                            model, prediction, steps, env.agent
+                        )
                     remote.extra = {
                         # Sent even under `--waypoints modelv2`: `server.py:_handle_step`
                         # reads `waypoints` FIRST and returns a hard stop on an empty list,
@@ -2782,6 +2799,28 @@ def main() -> int:
                         except ros_encode.RosEncodeError as error:
                             print(f"result       FAILED: {error}")
                             return 1
+                    # The commanded half of the pair whose observed half is everything else in
+                    # the frame - read off the agent rather than off `action`, because under
+                    # `--agent-policy idm` the policy lives inside the environment and this
+                    # loop's `action` stays `[0, 0]` all drive. See `ros_frame.controls_of`.
+                    #
+                    # **`replay` gets none of it, deliberately.** That policy teleports the ego
+                    # onto its recorded positions; `action` stays `[0, 0]` and nothing is
+                    # commanding anything, so writing a `VehicleState` full of zeros would say
+                    # the car was asked for no steering and no throttle and coincidentally
+                    # drove the route. `EngagementStatus`'s own comment asks for the absence.
+                    ros_controls = None
+                    if arguments.agent_policy != "replay":
+                        ros_controls = ros_frame.controls_of(
+                            env,
+                            arguments.agent_policy,
+                            engaged=True,
+                            previous_speed=ros_last_speed,
+                            previous_angle_deg=ros_last_angle,
+                            dt=sim_dt,
+                        )
+                        ros_last_speed = float(env.agent.speed)
+                        ros_last_angle = ros_controls.steering_angle_deg
                     ros_bag.write(
                         ros_frame.read(
                             env,
@@ -2790,6 +2829,8 @@ def main() -> int:
                             ros_projection,
                             lidar=ros_cloud,
                             camera_packets=ros_packets,
+                            controls=ros_controls,
+                            prediction=ros_prediction,
                         )
                     )
                     ros_stopped_at = None

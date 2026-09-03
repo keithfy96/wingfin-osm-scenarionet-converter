@@ -60,16 +60,49 @@ def load(path):
     from rosbags.rosbag2 import Reader
 
     store = _typestore()
-    by_topic = defaultdict(list)
+
+    class _ByTopic(defaultdict):
+        """A `defaultdict` that also remembers each topic's declared type.
+
+        A plain `defaultdict` has no `__dict__`, so the type map cannot simply be attached to
+        one; and returning a third value would change a signature two other call sites and a
+        test already unpack. A one-line subclass keeps both.
+        """
+
+        types: dict[str, str] = {}
+
+    by_topic = _ByTopic(list)
+    by_topic.types = {}
     by_stamp = defaultdict(set)
     with Reader(path) as reader:
         for connection, log_time, raw in reader.messages():
             message = store.deserialize_cdr(raw, connection.msgtype)
+            by_topic.types[connection.topic] = connection.msgtype
             by_topic[connection.topic].append((log_time, message))
             by_stamp[log_time].add(connection.topic)
     for messages in by_topic.values():
         messages.sort(key=lambda pair: pair[0])
     return by_topic, by_stamp
+
+
+def stale_types(by_topic) -> dict[str, tuple[str, str]]:
+    """Topics whose type in this bag is not the type this module now declares.
+
+    **A bag outlives the code that wrote it**, and this repo has now changed a type once:
+    `/sensing/gnss/pose` carried a `geometry_msgs/PoseStamped` until 2026-09-03 and carries a
+    `sensor_msgs/NavSatFix` after it. Every check downstream reads fields by name, so an older
+    bag met the new checks with an `AttributeError` and a traceback - which says nothing about
+    the bag and looks like a broken tool.
+
+    Reporting it is the useful behaviour and it is also a real finding: a bag whose types no
+    longer match the code is a bag whose consumers were built against something else.
+    """
+    found = getattr(by_topic, "types", {})
+    return {
+        topic: (was, ros_schema.TOPICS[topic][0])
+        for topic, was in found.items()
+        if topic in ros_schema.TOPICS and was != ros_schema.TOPICS[topic][0]
+    }
 
 
 def _yaw(orientation):
@@ -112,6 +145,15 @@ def probe(path, workspace=None, out=sys.stdout):
     by_topic, by_stamp = load(path)
     checks = Checks()
     print(f"{path}", file=out)
+
+    stale = stale_types(by_topic)
+    for topic, (was, now) in sorted(stale.items()):
+        print(
+            f"        STALE  {topic} carries {was}; this repo now writes {now}.\n"
+            "               The bag predates the correction - re-record it. Checks that read "
+            "this topic are skipped.",
+            file=out,
+        )
 
     odom = by_topic.get(ros_schema.ODOMETRY, [])
     tf = by_topic.get(ros_schema.TF, [])
@@ -275,6 +317,36 @@ def probe(path, workspace=None, out=sys.stdout):
     # --- 7. GNSS is the same car, in the real world -------------------------------------
     fixes = by_topic.get(ros_schema.GNSS_FIX, [])
     if fixes:
+        # The two the vehicle publishes, against each other. `/sensing/gnss/pose` is the
+        # driver's own republication of the fix and `/sensing/gnss/imu/nav_sat_fix` the
+        # IMU-framed one; both are built here from one position, so they must be the same float.
+        #
+        # **This is the check that was missing.** `/sensing/gnss/pose` carried a
+        # `geometry_msgs/PoseStamped` from stage 10 until 2026-09-03 - our x, y, z and a
+        # quaternion, on a topic the vehicle publishes a latitude and longitude on. Nothing
+        # raised, because CDR carries no field names and a subscriber decodes whatever arrives.
+        # A relationship check between two channels built from one truth is the only shape of
+        # test that catches it, which is why every check in this file is one.
+        poses = (
+            {(m.header.stamp.sec, m.header.stamp.nanosec): m
+             for _, m in by_topic.get(ros_schema.GNSS_POSE, [])}
+            if ros_schema.GNSS_POSE not in stale
+            else {}
+        )
+        if poses:
+            worst_pose = max(
+                (_metres(fix.latitude, fix.longitude, poses[key].latitude, poses[key].longitude)
+                 for _, fix in fixes
+                 if (key := (fix.header.stamp.sec, fix.header.stamp.nanosec)) in poses),
+                default=None,
+            )
+            checks.check(
+                "gnss/pose and nav_sat_fix are one position, and both are a fix",
+                worst_pose == 0.0,
+                f"{len(poses)} poses paired against {len(fixes)} fixes, "
+                f"worst {worst_pose:.3e} m" if worst_pose is not None
+                else "no pose messages sharing a stamp with a fix",
+            )
         latitudes = [m.latitude for _, m in fixes]
         longitudes = [m.longitude for _, m in fixes]
         checks.check(
@@ -739,6 +811,70 @@ def probe(path, workspace=None, out=sys.stdout):
                 f"{total - outside} of {total} returns inside {south:.4f}..{north:.4f} N, "
                 f"{west:.4f}..{east:.4f} E",
             )
+        # The vehicle's own version of the same sweep, and the only pair of channels in this
+        # bag carrying one quantity in two encodings. `soa+zstd` is a byte-plane transpose the
+        # vehicle documents nowhere, worked out by decoding one of its messages - so the check
+        # that matters is that ours decodes back to exactly the cloud beside it. A transpose
+        # applied the wrong way round still decompresses, still has the right length, and still
+        # parses as floats; what it does not do is come back equal.
+        packed = by_topic.get(ros_schema.LIDAR_POINTS_COMPRESSED, [])
+        if packed:
+            import zstandard
+
+            plain_by_stamp = {(m.header.stamp.sec, m.header.stamp.nanosec): m for m in clouds}
+            wrong, checked = [], 0
+            for _, message in packed[:: max(1, len(packed) // 10)]:
+                key = (message.header.stamp.sec, message.header.stamp.nanosec)
+                twin = plain_by_stamp.get(key)
+                if twin is None:
+                    wrong.append("a compressed sweep has no uncompressed twin")
+                    continue
+                raw = zstandard.ZstdDecompressor().stream_reader(
+                    bytes(message.compressed_data)
+                ).read(1 << 30)
+                count = message.height * message.width
+                if len(raw) != count * message.point_step:
+                    wrong.append(f"decompressed to {len(raw)} not {count * message.point_step}")
+                    continue
+                buffer = numpy.frombuffer(raw, dtype=numpy.uint8)
+                offset, recovered = 0, {}
+                for name, _datatype, field_width in ros_schema.COMPRESSED_FIELDS:
+                    plane = buffer[offset : offset + field_width * count]
+                    offset += field_width * count
+                    recovered[name] = (
+                        plane if field_width == 1
+                        else plane.reshape(field_width, count).T.copy().view(
+                            "<f4" if field_width == 4 else "<f8"
+                        ).ravel()
+                    )
+                original = numpy.asarray(twin.data).view("<f4").reshape(-1, 3)
+                for index, axis in enumerate("xyz"):
+                    a = numpy.nan_to_num(recovered[axis], nan=-9e9)
+                    b = numpy.nan_to_num(original[:, index], nan=-9e9)
+                    if not numpy.array_equal(a, b):
+                        wrong.append(f"{axis} differs from the uncompressed sweep")
+                checked += 1
+            checks.check(
+                "the compressed sweep de-shuffles back to exactly the sweep beside it",
+                checked > 0 and not wrong,
+                "; ".join(sorted(set(wrong)))
+                or f"{checked} sweeps sampled, all identical after zstd + byte-plane transpose",
+            )
+            first = packed[0][1]
+            layout = [(f.name, f.offset, f.datatype) for f in first.fields]
+            expected, running = [], 0
+            for name, datatype, field_width in ros_schema.COMPRESSED_FIELDS:
+                expected.append((name, running, datatype))
+                running += field_width
+            checks.check(
+                "the compressed cloud has the vehicle's own layout, field for field",
+                layout == expected
+                and first.point_step == ros_schema.COMPRESSED_POINT_STEP
+                and first.format == ros_schema.COMPRESSED_FORMAT
+                and first.header.frame_id == ros_schema.COMPRESSED_LIDAR_FRAME,
+                f"{first.format!r} in {first.header.frame_id}, {len(layout)} fields at "
+                f"step {first.point_step}",
+            )
     else:
         print("        no lidar in this bag (--ros-lidar was not asked for)", file=out)
 
@@ -916,6 +1052,98 @@ def probe(path, workspace=None, out=sys.stdout):
     else:
         print("        no camera packets in this bag (--ros-camera was not asked for)", file=out)
 
+    # --- 12. the car about itself: commanded against observed ----------------------------
+    #
+    # The three phase-5 topics are the only ones here built from what the drive *commanded*
+    # rather than from what it observed, which is what makes them checkable: a command and its
+    # consequence are two independently produced quantities, and every check below is one
+    # against the other. The vehicle's own recording could not settle any of this - its car
+    # never moves, `v_ego` max 0.00 m/s over all 63 minutes - so these run on our bags.
+    states = by_topic.get(ros_schema.VEHICLE_STATE, [])
+    if states:
+        actuators = {(m.header.stamp.sec, m.header.stamp.nanosec): m
+                     for _, m in by_topic.get(ros_schema.CONTROL_ACTUATORS, [])}
+        print(f"        vehicle: {len(states)} states, {len(actuators)} actuator commands, "
+              f"policy {by_topic[ros_schema.VEHICLE_ENGAGEMENT][0][1].alert_text1}", file=out)
+
+        # One number, one path. `VehicleState.steering_angle_deg` and `ActuatorsOutput`'s are
+        # both `Controls.steering_angle_deg`, so a difference means a second conversion appeared
+        # - and a second conversion is where the 57.3 the type's own comment warns about lands.
+        worst_angle = max(
+            (abs(state.steering_angle_deg.value - actuators[key].steering_angle_deg)
+             for _, state in states
+             if (key := (state.header.stamp.sec, state.header.stamp.nanosec)) in actuators),
+            default=None,
+        )
+        checks.check(
+            "the wheel angle the car reports is the one it was commanded",
+            worst_angle is not None and worst_angle < 1e-4,
+            f"worst {worst_angle:.3e} deg over {len(actuators)} paired frames"
+            if worst_angle is not None else "no actuator command shares a stamp with a state",
+        )
+
+        # `v_ego` against the twist this bag already publishes - the same speed reached by two
+        # builders off one `Ego`.
+        odoms = {(m.header.stamp.sec, m.header.stamp.nanosec): m for _, m in odom}
+        worst_speed = max(
+            (abs(state.v_ego.value - math.hypot(odoms[key].twist.twist.linear.x,
+                                                odoms[key].twist.twist.linear.y))
+             for _, state in states
+             if (key := (state.header.stamp.sec, state.header.stamp.nanosec)) in odoms),
+            default=None,
+        )
+        checks.check(
+            "v_ego is the same speed the odometry twist carries",
+            worst_speed is not None and worst_speed < 1e-6,
+            f"worst {worst_speed:.3e} m/s" if worst_speed is not None else "no paired odometry",
+        )
+
+        # **The sign, and the only check here that could not be written from the type alone.**
+        # Commanded steering against *measured* curvature: a left command that produces a right
+        # curve is the fault that put a car smoothly into oncoming traffic on the openpilot
+        # bridge, and nothing in a header can see it. Correlation rather than a per-frame
+        # comparison because a real car's response lags its command; measured +0.90 on a
+        # junction-1 IDM drive.
+        turning = [(state.steering_angle_deg.value, actuators[key].curvature)
+                   for _, state in states
+                   if (key := (state.header.stamp.sec, state.header.stamp.nanosec)) in actuators
+                   and abs(state.steering_angle_deg.value) > 1.0
+                   and state.v_ego.value > 2.0]
+        correlation = None
+        if len(turning) > 30:
+            angles = numpy.array([a for a, _ in turning])
+            curves = numpy.array([c for _, c in turning])
+            if angles.std() > 0 and curves.std() > 0:
+                correlation = float(numpy.corrcoef(angles, curves)[0, 1])
+        checks.check(
+            "steering left curves the car left - the command agrees with the measurement",
+            correlation is not None and correlation > 0.5,
+            f"corr(steering_angle_deg, measured curvature) = {correlation:+.3f} "
+            f"over {len(turning)} turning frames" if correlation is not None
+            else f"only {len(turning)} frames were both turning and moving",
+        )
+
+        # The convention the type provides for "no data", and the reason this bag can be honest
+        # about an EPS and a set of body sensors it does not have. Frame 0 is skipped: this
+        # drive's clock starts at zero, so on that one frame a filled field is indistinguishable
+        # from an unfilled one.
+        unfilled = ("steering_torque", "steering_pressed", "door_open", "seatbelt_unlatched",
+                    "blindspot_left", "blindspot_right", "cruise_speed")
+        wrong = [
+            name for name in unfilled
+            for _, state in states[1:]
+            if (getattr(state, name).stamp.sec, getattr(state, name).stamp.nanosec) != (0, 0)
+        ]
+        checks.check(
+            "what the simulator does not have carries a zero stamp, not a plausible default",
+            not wrong,
+            f"{len(unfilled)} fields unfilled on all {len(states) - 1} frames after the first"
+            if not wrong else f"filled anyway: {sorted(set(wrong))}",
+        )
+    else:
+        print("        nothing drove this bag (--agent-policy replay writes no vehicle state)",
+              file=out)
+
     print(file=out)
     if checks.failed:
         print(f"  {len(checks.failed)} FAILED: {', '.join(checks.failed)}", file=out)
@@ -957,17 +1185,26 @@ def coverage(path=None, out=sys.stdout):
     for topic in quiet:
         print(f"      declared, not written   {topic}", file=out)
 
-    print("\n  absent, by the phase that lands it", file=out)
-    for phase, rows in ledger["absent"].items():
-        title = ros_schema.PHASE_TITLES.get(phase, "")
-        print(f"    phase {phase}  {title:<44} {len(rows):>3}", file=out)
-    print(f"    {'':<52} {sum(len(r) for r in ledger['absent'].values()):>3}", file=out)
+    if ledger["absent"]:
+        print("\n  absent, by the phase that lands it", file=out)
+        for phase, rows in ledger["absent"].items():
+            title = ros_schema.PHASE_TITLES.get(phase, "")
+            print(f"    phase {phase}  {title:<44} {len(rows):>3}", file=out)
+        print(f"    {'':<52} {sum(len(r) for r in ledger['absent'].values()):>3}", file=out)
+    else:
+        # A header over an empty table and a total of zero reads as a broken report. Every
+        # producible topic is declared, so the only gap left is the declared-against-written one
+        # printed above, which is a property of the *drive* rather than of the code.
+        print("\n  nothing is absent - every producible topic has a builder", file=out)
 
     print(
         f"\n  waiting on a .msg        {ledger['definitions_missing']:>3}"
-        "   or on which type the rig used. One command, against one bag:\n"
-        "      uv run python tools/ros_defs.py <rig bag> "
-        "--write tools/wingfin_msgs --package wingfin_msgs",
+        + (
+            "   every type the vehicle publishes is vendored, verbatim from its own recording"
+            if not ledger["definitions_missing"]
+            else "   recover them: tools/ros_defs.py <a bag off the vehicle> "
+            "--write tools/<pkg> --package <pkg>"
+        ),
         file=out,
     )
     print(
@@ -977,15 +1214,17 @@ def coverage(path=None, out=sys.stdout):
     )
     print(
         f"  simulator extras         {len(ledger['extras']):>3}"
-        "   never counted against the 45 - the rig's bag has no ground truth",
+        "   never counted against the target - the vehicle records no ground truth",
         file=out,
     )
     for topic in ledger["extras"]:
         print(f"      {topic}", file=out)
 
     counts = ledger["verdicts"]
+    reference = ros_schema._reference()
     print(
-        f"\n  the reference bag is {sum(counts.values())} topics: "
+        f"\n  the reference bag is {reference['bag']} - {sum(counts.values())} topics, "
+        f"{reference['message_count']} messages over {reference['duration_s']} s: "
         f"{counts[ros_schema.DIRECT]} direct, {counts[ros_schema.APPROXIMATE]} approximate, "
         f"{counts[ros_schema.IMPOSSIBLE]} not producible.  docs/rosbag.md argues each row.",
         file=out,

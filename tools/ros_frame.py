@@ -292,7 +292,76 @@ def ego_of(env):
     )
 
 
-def read(env, index, sim_time_s, projection=None, lidar=None, camera_packets=()):
+def controls_of(env, policy, engaged, previous_speed=None, previous_angle_deg=None, dt=0.0):
+    """What the drive commanded this step, as a `ros_schema.Controls`.
+
+**Read off the agent, not off the `action` array `env.step` was given.** Those are the
+    same numbers only under `--agent-policy remote` and `manual`, where the caller supplies the
+    action. Under `idm` the policy is registered inside the environment and sets the vehicle
+    directly, so the caller's array stays `[0, 0]` for the whole drive - measured: a bag written
+    from it carried `steer 0.0000` and `steering_angle_deg 0.000` on every frame of a drive
+    whose own measured curvature reached 0.086 1/m. `agent.steering` and `agent.throttle_brake`
+    are what was actually applied (`base_vehicle.py:465`), whoever decided it.
+
+    `max_steering` comes off the agent too, because it is a per-vehicle config value and
+    hard-coding a road-wheel angle would make every `steering_angle_deg` in the bag a property
+    of whichever car the config happened to name.
+
+    `previous_speed` and `previous_angle_deg` are the last frame's, and `dt` the step between;
+    together they give `a_ego` and `steering_rate_deg_s`, which are differences and not readings.
+    Passed as plain floats rather than the previous `Controls`, because the speed being
+    differenced is the *observed* one off the agent and does not live on a commanded-controls
+    record.
+    `VehicleState.a_ego`'s own comment says the vehicle does the same - differenced by the
+    publisher, because the DBC declares no longitudinal accelerometer - so this follows a stated
+    convention rather than inventing one. Both are 0.0 on the first frame, which is honest: no
+    previous frame means no difference, not an acceleration of zero measured.
+    """
+    agent = env.agent
+    steering = float(agent.steering)
+    max_steering_deg = float(getattr(agent, "max_steering", 0.0))
+    accel = 0.0
+    rate = 0.0
+    if dt > 0.0:
+        if previous_speed is not None:
+            accel = (float(agent.speed) - previous_speed) / dt
+        if previous_angle_deg is not None:
+            rate = (steering * max_steering_deg - previous_angle_deg) / dt
+    return ros_schema.Controls(
+        steering=steering,
+        throttle_brake=float(agent.throttle_brake),
+        max_steering_deg=max_steering_deg,
+        policy=policy,
+        engaged=engaged,
+        accel=accel,
+        steering_rate_deg_s=rate,
+    )
+
+
+def prediction_of(model, waypoints, frame_counter, agent):
+    """One decision's model output, as a `ros_schema.ModelPrediction`.
+
+    `waypoints` is the checkpoint's raw `(N, 8)`, **unconverted** - the mirror out of the
+    model's frame happens in the builder, once, where it is named. Passing an already-mirrored
+    array here would put the flip in two places and make the second one invisible.
+    """
+    import av3_model
+
+    rows = getattr(waypoints, "shape", (0,))[0]
+    return ros_schema.ModelPrediction(
+        waypoints=waypoints,
+        times_s=tuple(av3_model.waypoint_times(rows)) if rows else (),
+        frame_counter=int(frame_counter),
+        model_name=getattr(model, "model_name", ""),
+        weight_name=getattr(model, "weight_name", ""),
+        ego_x=float(agent.position[0]),
+        ego_y=float(agent.position[1]),
+        ego_heading=float(agent.heading_theta),
+    )
+
+
+def read(env, index, sim_time_s, projection=None, lidar=None, camera_packets=(), controls=None,
+         prediction=None):
     """One frame. Called immediately after `env.step`, before anything else consumes the env.
 
     `lidar` is a `ros_schema.LidarCloud` or None, and None is the ordinary case: a cloud is read
@@ -305,6 +374,13 @@ def read(env, index, sim_time_s, projection=None, lidar=None, camera_packets=())
     `ros_schema.CameraPacket` on a decision frame and empty on every other, and empty is the
     ordinary case for the same reason. It is literally the held-camera-frame case the sentence
     above is about.
+
+    `prediction` is the model's own output for this decision, `None` on every drive without
+    one - which is most of them, and is why the three model topics are absent rather than empty.
+
+    `controls` is what the drive commanded - `None` when nothing is driving, which is not a
+    degenerate case but the ordinary one for a replay. The three phase-5 topics are then absent
+    rather than zero-filled, which `EngagementStatus`'s own comment asks for outright.
     """
     extra = {}
     if lidar is not None:
@@ -318,6 +394,8 @@ def read(env, index, sim_time_s, projection=None, lidar=None, camera_packets=())
         boxes=boxes_of(env),
         lights=lights_of(env),
         projection=projection,
+        controls=controls,
+        prediction=prediction,
         extra=extra,
     )
 

@@ -131,17 +131,22 @@ those can be wrong in isolation and look fine; they cannot all agree while any i
 
 **The check count is the ladder, and it rises with each stage-11 phase.** A bag carries only the
 checks its own channels earn: 13 on a plain drive, **16** with `--camera-rig`, **24** once
-phase 2's GNSS family is on the wire, **30** with `--ros-lidar` beside a six-camera rig, and
-**37** with `--ros-camera` as well. A number *lower* than the bag's channels deserve means a
-section printed its "not asked for" line instead of running.
+phase 2's GNSS family is on the wire, **30** with `--ros-lidar` beside a six-camera rig, **37**
+with `--ros-camera` as well, and **44** with a driving policy under it, which lights up the
+compressed cloud and the three vehicle topics. A number *lower* than the bag's channels deserve
+means a section printed its "not asked for" line instead of running.
+
+**A bag recorded before 2026-09-03 reports `STALE /sensing/gnss/pose`** and loses two checks. That
+is correct: it carries `geometry_msgs/PoseStamped` where the vehicle carries `sensor_msgs/NavSatFix`
+and this repo now writes one too. Re-record it.
 
 ```bash
-# the widest one: six cameras, the cloud and the packets - 30 / 45 on the wire, 37 checks
+# the widest one: six cameras, both clouds, the packets and a policy - 33 / 36, 44 checks
 METADRIVE_PYTHON=.venv/bin/python ./scripts/ros-bag.sh junction-1 -- \
-    --out bags/phase4-full --camera-rig <a six-camera spec> --render offscreen \
-    --ros-camera --ros-lidar
-uv run python tools/ros_probe.py bags/phase4-full --workspace workspaces/junction-1
-uv run python tools/ros_probe.py bags/phase4-full --coverage
+    --out bags/phase5 --camera-rig <a six-camera spec> --render offscreen \
+    --ros-camera --ros-lidar --agent-policy idm
+uv run python tools/ros_probe.py bags/phase5 --workspace workspaces/junction-1
+uv run python tools/ros_probe.py bags/phase5 --coverage
 ```
 
 **Reading a bag's message definitions back out of it** is the third reader, and the one that
@@ -153,10 +158,19 @@ uv run python tools/ros_defs.py bags/j1-lights --write tools/wingfin_msgs \
     --package wingfin_msgs                              # idempotent, prints "unchanged"
 ```
 
-**Expect** `27 message definitions`, `nothing new`, and `the 15 topics phase 5 waits on: 0
-carried by this bag` — none of them are, because they only exist in a bag off the rig. Pointed
-at one of those, the same command vendors the fifteen types into `tools/wingfin_msgs/` and the
-line reads `15 carried by this bag`.
+**Expect** `27 message definitions`, `nothing new`, and a line saying every topic the vehicle
+publishes and a simulator can honestly produce is written.
+
+**Pointed at the vehicle's own bag it does the real job**, and that bag is *truncated* — the
+library will not open it, so the tool reads forwards from the header instead:
+
+```bash
+uv run python tools/ros_defs.py bags/074143              # 61 definitions, 31 outside humble
+uv run python tools/ros_defs.py bags/074143 --reference tools/reference_bag.json
+```
+
+The second regenerates the table `ros_schema.RIG_TOPICS` is derived from. Expect `50 topics,
+6267599 messages over 3783.56 s`.
 
 **Writes** nothing, except `--write`, which writes `.msg` files and refuses to overwrite one that
 disagrees.
@@ -444,14 +458,19 @@ the row.
   the bag; `/tf_static` carries the geometry, so follow `frame_id` rather than the topic name.
   `rigs/av3.txt` has no such rows.
 
-- **15 of the rig's 55 topics stay omitted** for want of a `.msg` definition
-  (`ros_schema.MISSING_DEFINITIONS`; `tools/ros_probe.py --coverage` counts them), omitted rather than published under a substitute type: a
-  subscriber deserialising `wingfin_msgs/VehicleState` fails on a `geometry_msgs/TwistStamped`
-  wearing that topic name, which is worse than an absent topic. **They are recoverable from one
-  `.mcap` off the rig**, because rosbag2 writes each type's `.msg` text into the bag itself:
-  `uv run python tools/ros_defs.py <bag>` prints them ready to paste. Run it on `bags/j1-lights`
-  and it finds 27 definitions and nothing new, which is the right answer for a bag written from
-  our own table - and is the self-test that says the rig's will come out the same way.
+- **14 of the vehicle's 50 topics stay omitted, and none of them for want of a definition.**
+  `MISSING_DEFINITIONS` has been empty since 2026-09-03: every type the vehicle publishes is
+  vendored, recovered verbatim from `bags/074143` by `tools/ros_defs.py`. The fourteen are the
+  cabin camera and microphone, the GNSS receiver's own temperature and health, `/diagnostics` and
+  `/rosout` — and the **six camera `meta` channels**, whose `flir_camera_msgs/ImageMetaData` is
+  exposure, gain and brightness: facts of a physical image sensor that a rendered frame does not
+  have. Omitted rather than published under a substitute type or with invented values, because a
+  consumer can test for a topic that is not there and cannot test for one that is there and made
+  up. `tools/ros_probe.py --coverage` lists each with its reason.
+
+- **Three more are declared and written only on a drive with a model at the wheel.** An IDM drive
+  reads `36 declared, 33 on the wire`; `--agent-policy remote` closes it. That gap is a property
+  of the drive, not of the code, which is why the report prints both numbers.
 
 - **Every channel is truth, not measurement**, and the bag says so — its `wingfin` metadata
   records `source: simulated, noise_model: none`. The rig's GNSS has noise, lag, multipath and

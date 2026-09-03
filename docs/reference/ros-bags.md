@@ -846,6 +846,128 @@ builder written against a plausible field list produces a bag that opens, plays 
 `ros_schema.py`'s opening argument applies to its own package: **a topic that is present and
 invented cannot be tested for, where an absent one can.**
 
+## The vehicle's own recording, 2026-09-03 (stage 11 phase 5)
+
+`bags/074143/drive_20260826-074143_0.mcap` - 14.7 GB, 6,267,599 messages, 3783.56 s, **50
+topics**. What the reference had been until then was `bag_audit.html`, an audit of an older bag,
+and the two disagree in five places.
+
+### The file is truncated, and that is the normal case
+
+Its end magic is missing, so `rosbags`' `Reader` raises `File end magic is invalid` and returns
+nothing. rosbag2 writes its summary section at the *end*; a recording pulled off a vehicle is
+routinely cut short. **All thirty schemas are intact in the first 28 MB**, so `ros_defs.scan_mcap`
+walks top-level records forwards from the header, skipping chunk payloads by length - a seek, not
+a read - and decompressing only until every channel has been seen.
+
+`zstandard.decompress()` is not sufficient. rosbag2 writes *some* chunks with no content size in
+the frame header, so it raises "error determining content size" partway through a scan and not at
+the start. `stream_reader` has no such requirement.
+
+### What the recording corrected
+
+| | |
+|---|---|
+| package is `wing_msgs` | not `wingfin_msgs`, which is ours; no shared namespace |
+| camera `meta` is `flir_camera_msgs/ImageMetaData` | a public camera driver's, not the vehicle's |
+| `/sensing/gnss/pose` is `sensor_msgs/NavSatFix` | we published `geometry_msgs/PoseStamped` from stage 10 |
+| `/control/actuators` -> `/control/openpilot/actuators` | and `/vehicle/actuators_output` is gone, merged into it |
+| `/sensing/lidar/points` -> `/sensing/lidar/points/soa_zstd` | and compressed |
+| no `/vehicle/can_rx` or `can_tx` at all | the ten "not producible" became fourteen for other reasons |
+
+### And what it confirmed
+
+**`FFMPEGPacket` matches field for field**, and so do all seven `sbg_driver` types. Phase 4's
+vendored 1.1.2 text and phase 2's 3.4.0 pin were both right, now checked against the car rather
+than against a git tag. `TestTheProductionBag` runs both comparisons whenever the bag is on disk.
+
+### The car never moves
+
+`v_ego` is 0.00 m/s at its maximum across all 63 minutes, and the odometry yaw rate never exceeds
+0.0015 rad/s. It is a stationary bench capture: engine on, sensors running, parked.
+
+**That is the limit of what this bag can settle.** Types, field orders, rates, frame ids and the
+lidar encoding, yes. A steering sign, a wheel-speed spread under load, a gear while driving - no.
+Those are checked on our own bags instead, by relationship: measured +0.90 between commanded
+`steering_angle_deg` and measured curvature on a junction-1 IDM drive, +0.88 against yaw rate.
+
+### `soa+zstd`, decoded
+
+`format` is that literal string and nothing documents it. One real message, pulled out and read:
+`livox_link`, 45,216 points, `point_step` 26, seven fields (`x y z intensity` float32, `tag line`
+uint8, `timestamp` float64), 428,440 B compressed to 1,175,616 B - **2.7x**, and exactly
+`width * point_step`.
+
+**It is a per-field byte-plane transpose, then one zstd frame over the whole thing.** For a
+`w`-byte field: `w` planes of `n` bytes, plane `k` holding byte `k` of every value.
+
+It is *not* plain structure-of-arrays, and the sizes cannot tell you - both arrangements are the
+same total length. What gives it away is that reading a real payload as either plain SoA or plain
+AoS produces garbage floats **while the one-byte fields come out clean**, which is exactly what a
+byte-plane shuffle does: a one-byte field has a single plane and is unaffected.
+
+De-shuffled it is unambiguous: `x` in [0, 184.9] m, `intensity` exactly [0, 255], `line` in
+{0..5} for a six-line Livox, and per-point timestamps spanning exactly 100 ms - one 10 Hz sweep.
+
+Ours re-encodes the phase 3 cloud the same way and compresses **7.2x**, better than the vehicle
+because a rendered grid has more structure than a real return. `intensity` is NaN, `tag` is 0, and
+every point carries the frame's stamp because ours is one buffer rather than a sweep.
+
+### `/sensing/gnss/pose`, and why nothing could have caught it
+
+We published a position and a quaternion on a topic the vehicle publishes a latitude and a
+longitude on. **CDR carries no field names**, so a subscriber decodes our x/y/z/w as a lat/lon/alt
+and carries on. It is precisely the fault `ros_schema.py`'s opening paragraph describes, and it
+shipped for three stages because no check had the vehicle's own answer to compare against.
+
+Two things now stop it recurring: the type table is derived from `tools/reference_bag.json`, so
+every declared type is compared with the vehicle's on every test run; and `ros_probe` requires
+`/sensing/gnss/pose` and `/sensing/gnss/imu/nav_sat_fix` to be the same position to 0 m, which is
+the relationship check that would have caught it in the first place.
+
+A bag written before the fix is **reported, not crashed on**: `ros_probe.stale_types` names the
+topic, says the bag predates the correction, and skips the checks that read it.
+
+### `wing_msgs/VehicleState`'s comments are the specification
+
+Three traps, each silent when got wrong, none written down anywhere else in this repo:
+
+- **`steering_angle_deg` is degrees.** Every other angle in the package is SI. The degree
+  convention runs unbroken from the DBC through `ControlCommand`, `ActuatorsOutput` and
+  openpilot's `steeringAngleDeg`; converting one link in isolation puts 57.3 somewhere no reader
+  looks.
+- **`wheel_speed_*` is m/s, not the DBC's km/h**, and in simulation all four carry the ego speed -
+  the definition says so about the CARLA bridge, so the zero spread is by construction.
+- **`cruise_standstill` must be produced `false` by a producer with no ACC**, never copied from
+  `standstill`. Measured cost of the substitution, recorded in the comment: 5,066 cycles of an
+  engaged, unfaulted stack braking forever with a healthy plan asking to accelerate.
+
+**Absence has a representation and it is used.** Every field is `{stamp, value}` and a zero stamp
+means never filled. Seven fields carry it here - an EPS and body sensors a simulated car does not
+have - and the vehicle itself leaves five of those seven unfilled, measured on a real message. One
+collision worth knowing: this drive's clock starts at zero, so on frame 0 a filled field is
+indistinguishable from an unfilled one. Stated rather than papered over; shifting the whole bag's
+clock would change every topic's stamps to fix one frame.
+
+### The command is on the agent, not in `action`
+
+Under `--agent-policy idm` the policy is registered inside the environment and sets the vehicle
+directly, so the caller's `action` array stays `[0, 0]` for the whole drive. Measured: the first
+bag written from it carried `steer 0.0000` and `steering_angle_deg 0.000` on every frame of a
+drive whose own measured curvature reached 0.086 1/m. `agent.steering` and `agent.throttle_brake`
+are what was applied, whoever decided it.
+
+### The model topics are not verified by a model drive
+
+`PredictedTrajectory` is REP-103 with **y LEFT** - its own comment says so, and says it claimed
+openpilot's device frame wrongly until 2026-08-03. Our checkpoint emits the opposite handedness,
+so the mirror runs backwards on `MIRRORED_COLUMNS` = `(1, 2, 3, 5, 7)`: `y`, `yaw`, `yaw_rate`,
+`v_y`, `a_y`.
+
+There is no `torch` and no checkpoint on this machine, so the three are pinned by unit tests on
+the arithmetic and by the ledger, **not by a recording**. An IDM drive reads `36 declared, 33 on
+the wire`, and `--agent-policy remote` is what closes it.
+
 ## Traps
 - **A `sbg_driver` message is version-dependent and CDR will not tell you.** `SbgEkfStatus` went
   from 16 fields to 23 between 3.1.0 and 3.4.0, two of them removed - a mismatched subscriber
@@ -882,6 +1004,20 @@ invented cannot be tested for, where an absent one can.**
   does.
 - **"Which types does this bag have" does not answer "is this bag enough".** The fifteen type
   names are unknown, so the check has to run topic-first.
+
+- **A bag off a vehicle is truncated and the library will not open it.** `File end magic is
+  invalid` means the summary is missing, not that the file is useless - read forwards.
+- **`zstandard.decompress()` raises on a chunk written with no content size**, partway through a
+  scan rather than at the start. Use `stream_reader`.
+- **The vehicle's reference bag is stationary.** It settles types, rates and encodings and cannot
+  settle a single sign. Check conventions on our own bags, by relationship.
+- **`soa+zstd` is a byte-plane transpose, not structure-of-arrays**, and the two are the same
+  length. Only the one-byte fields decoding cleanly tells them apart.
+- **Under `--agent-policy idm` the caller's `action` array is never filled in.** Read the command
+  off `agent.steering`, or write a bag that says the car steered zero all drive.
+- **`wing_msgs` is the vehicle's package; `wingfin_msgs` is ours.** One character, two packages.
+- **`VehicleState.steering_angle_deg` is degrees and `wheel_speed_*` is m/s**, alone in a package
+  that is otherwise SI and a DBC that is otherwise km/h.
 - **An unhit ray is a point up to 18 km away, not a zero and not a NaN.** The far plane is
   100 km and the buffer is non-linear out there, so there is no sentinel - the range that calls
   a return a miss is declared by us, and without it the cloud describes the sky.

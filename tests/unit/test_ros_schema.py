@@ -15,6 +15,7 @@ nothing raising anything.
 
 import math
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -359,12 +360,12 @@ class TestTheTopicTable:
 
 
 class TestTheRigCoverageLedger:
-    """`RIG_TOPICS` - the reference vehicle's 55 topics as data, and the count derived off them.
+    """`RIG_TOPICS` - the vehicle's own recording as data, and the count derived off it.
 
-    This exists because a prose ledger and a code table drift apart in silence, and they had.
-    `docs/rosbag.md` verdicted the 55 and `ros_schema.MISSING_DEFINITIONS` listed what we lacked
-    a `.msg` for, and **nothing cross-referenced the two**, so both of the following were true
-    at once and neither was visible to any check:
+    This exists because a prose ledger and a code table drift apart in silence, and they have
+    now done so twice. First within the repo: `docs/rosbag.md` verdicted the topics and
+    `MISSING_DEFINITIONS` listed what we lacked a `.msg` for, and **nothing cross-referenced the
+    two**, so both of the following were true at once and neither was visible to any check:
 
     * `/sensing/gnss/imu_data` was producible and absent from `MISSING_DEFINITIONS` altogether -
       one character away from `/sensing/gnss/imu/data`, which we do publish.
@@ -372,33 +373,59 @@ class TestTheRigCoverageLedger:
       all that stood between a simulator and a real receiver's temperature.
 
     Both are now structurally impossible rather than merely fixed: `MISSING_DEFINITIONS` is
-    computed from these rows, so a topic can no longer be in one and not the other. The tests
-    below are the rest of that guarantee - that the rows partition, that the phases add to the
-    ladder they are judged against, and that our own ground-truth topics never earn credit
-    against a bag that has none.
+    computed from these rows, so a topic can no longer be in one and not the other.
+
+    **Then between the repo and the vehicle**, which is the drift these rows now close. The 55
+    they described came from `bag_audit.html`, an audit of an older recording, and by 2026-09-03
+    five of them were wrong: `/control/actuators` had become `/control/openpilot/actuators`,
+    `/vehicle/actuators_output` was gone, `/sensing/lidar/points` had become
+    `/sensing/lidar/points/soa_zstd`, and both CAN topics had stopped being recorded. So the
+    rows are now built from `tools/reference_bag.json`, extracted from the vehicle's own bag, and
+    only the *judgements* - not producible, truth-rather-than-measurement, still to build - are
+    kept in code.
     """
 
-    def test_the_ledger_is_the_reference_bags_own_55(self):
-        assert len(ros_schema.RIG_TOPICS) == 55
-        assert len({row.topic for row in ros_schema.RIG_TOPICS}) == 55
+    def test_the_ledger_is_the_reference_bags_own_50(self):
+        reference = ros_schema._reference()["topics"]
+        assert len(ros_schema.RIG_TOPICS) == 50
+        assert {row.topic for row in ros_schema.RIG_TOPICS} == set(reference)
+
+    def test_every_rate_is_the_recordings_own_and_not_a_number_typed_in(self):
+        """The half of a row that must never be maintained by hand - see the class docstring."""
+        reference = ros_schema._reference()["topics"]
+        for row in ros_schema.RIG_TOPICS:
+            assert row.hz == reference[row.topic]["hz"], row.topic
+
+    def test_every_type_we_declare_is_the_type_the_vehicle_publishes(self):
+        """The check that caught `/sensing/gnss/pose`, and the reason the table is derived.
+
+        We published `geometry_msgs/PoseStamped` there; the vehicle publishes
+        `sensor_msgs/NavSatFix`. **Same topic name, different contents** - the fault this
+        module's opening paragraph warns about, shipped since stage 10 and invisible to every
+        check that existed, because no check had the vehicle's own answer to compare against.
+        """
+        reference = ros_schema._reference()["topics"]
+        for topic, (declared, _family) in TOPICS.items():
+            if topic in reference:
+                assert declared == reference[topic]["type"], topic
 
     def test_the_verdicts_split_the_way_the_doc_argues_them(self):
         counts = ros_schema.rig_coverage()["verdicts"]
         assert counts == {
-            ros_schema.DIRECT: 24,
-            ros_schema.APPROXIMATE: 21,
-            ros_schema.IMPOSSIBLE: 10,
+            ros_schema.DIRECT: 17,
+            ros_schema.APPROXIMATE: 19,
+            ros_schema.IMPOSSIBLE: 14,
         }
 
-    def test_45_is_55_less_the_ten_that_a_simulator_cannot_honestly_produce(self):
-        """The target, and the reason it is not 55.
+    def test_36_is_50_less_the_fourteen_a_simulator_cannot_honestly_produce(self):
+        """The target, and the reason it is not 50.
 
-        A bag claiming all 55 would be claiming a CAN bus, a cabin camera, a microphone and a
-        GNSS receiver's own temperature. Each of those absences is a fact about the vehicle,
-        and a consumer can test for a topic that is not there - it cannot test for one that is
-        there and invented.
+        A bag claiming all 50 would be claiming a cabin camera, a microphone, a GNSS receiver's
+        own temperature and health, and **six image sensors with an exposure and a gain**. Each
+        of those absences is a fact about the vehicle, and a consumer can test for a topic that
+        is not there - it cannot test for one that is there and invented.
         """
-        assert ros_schema.rig_coverage()["producible"] == 45
+        assert ros_schema.rig_coverage()["producible"] == 36
 
     def test_every_declared_topic_is_a_rig_topic_or_a_declared_extra(self):
         """The check that would have caught both defects, and the reason phase 0 came first."""
@@ -437,13 +464,9 @@ class TestTheRigCoverageLedger:
         """
         ledger = ros_schema.rig_coverage()
         per_phase = {phase: len(rows) for phase, rows in ledger["absent"].items()}
-        assert per_phase == {5: 15}
-        running, ladder = len(ledger["produced"]), []
-        assert running == 30
-        for phase in sorted(per_phase):
-            running += per_phase[phase]
-            ladder.append(running)
-        assert ladder == [45]
+        assert per_phase == {}, "a phase with nothing left in it leaves the table entirely"
+        assert len(ledger["produced"]) == 36
+        assert len(ledger["produced"]) == ledger["producible"], "the ladder is finished"
 
     def test_nothing_impossible_is_waiting_on_a_message_definition(self):
         """Defect two, made unrepresentable.
@@ -469,7 +492,7 @@ class TestTheRigCoverageLedger:
         assert "/sensing/gnss/imu_data" in TOPICS
         assert TOPICS["/sensing/gnss/imu/data"][0] != TOPICS["/sensing/gnss/imu_data"][0]
         assert BUILDERS["/sensing/gnss/imu/data"] is not BUILDERS["/sensing/gnss/imu_data"]
-        assert "/sensing/gnss/imu_data" not in ros_schema.MISSING_DEFINITIONS
+        assert "/sensing/gnss/imu_data" not in ros_schema.AWAITING_BUILDER
 
     def test_missing_definitions_is_derived_and_never_names_a_topic_off_the_ledger(self):
         rig = {row.topic for row in ros_schema.RIG_TOPICS}
@@ -479,12 +502,17 @@ class TestTheRigCoverageLedger:
             assert reason, topic
 
     def test_a_row_says_what_it_needs_exactly_when_we_do_not_write_it(self):
+        """`phase` is the plan's record of which phase owns a topic and stays true after that
+        phase lands; `produced` is a question about `TOPICS`, asked now. Conflating the two is
+        how a row claims to be waiting on work that is already done, which made the coverage
+        total and the per-phase breakdown disagree by exactly the number of rows that had
+        landed."""
         for row in ros_schema.RIG_TOPICS:
-            if row.producible:
-                assert bool(row.needs) == (not row.produced), row.topic
-                assert (row.phase is None) == row.produced, row.topic
+            if row.producible and not row.produced:
+                assert row.needs, row.topic
+                assert row.phase is not None, row.topic
 
-    def test_the_declared_thirty_are_the_rig_topics_this_module_actually_builds(self):
+    def test_the_declared_twenty_nine_are_the_rig_topics_this_module_actually_builds(self):
         ledger = ros_schema.rig_coverage()
         assert {row.topic for row in ledger["declared"]} == {
             "/tf",
@@ -506,11 +534,23 @@ class TestTheRigCoverageLedger:
             "/sensing/gnss/utc_time",
             "/sensing/gnss/imu/pos_ecef",
             "/sensing/gnss/imu/utc_ref",
-            # Phase 3, and the only one of the 45 whose payload is a shape.
-            "/sensing/lidar/points",
             # Phase 4, and the only six whose payload has to be decoded before it can be read.
             *ros_schema.CAMERA_PACKET_TOPICS,
+            # Phase 5, slice 2: the only three built from what the drive *commanded* rather
+            # than from what it observed.
+            ros_schema.VEHICLE_STATE,
+            ros_schema.VEHICLE_ENGAGEMENT,
+            ros_schema.CONTROL_ACTUATORS,
+            # Slice 3: the vehicle's own cloud, compressed, beside our plain one.
+            ros_schema.LIDAR_POINTS_COMPRESSED,
+            # Slice 4: written only on a drive with a model at the wheel.
+            ros_schema.PREDICTED_TRAJECTORY,
+            ros_schema.INFERENCE_CONTROL,
+            ros_schema.MODEL_INFO,
         }
+        # Phase 3's cloud is no longer one of the vehicle's topics - it publishes a compressed
+        # one under another name - so it is counted as ours rather than as coverage.
+        assert ros_schema.LIDAR_POINTS in ros_schema.SIMULATOR_EXTRAS
 
     def test_a_bag_is_counted_by_what_reached_the_wire_not_by_what_was_declared(self):
         """30 declared, 12 written on a plain drive with no rig, no lidar and no projection.
@@ -524,32 +564,36 @@ class TestTheRigCoverageLedger:
         eighteen, and every phase widens the gap rather than narrowing it.
         """
         declared = {row.topic for row in ros_schema.rig_coverage()["declared"]}
-        assert len(declared) == 30
+        assert len(declared) == 36
 
-        # Neither `--camera-rig` nor `--ros-lidar`: the transform tree, the six lenses, the six
-        # camera streams and the cloud are all declared and absent.
+        # No `--camera-rig`: the transform tree, the six lenses and the six camera streams are
+        # all declared and absent. The cloud is no longer counted here at all - see above.
         asked_for = {
             "/tf_static",
-            ros_schema.LIDAR_POINTS,
             *ros_schema.CAMERA_INFO_TOPICS,
             *ros_schema.CAMERA_PACKET_TOPICS,
         }
         no_rig = ros_schema.rig_coverage(declared - asked_for)
-        assert len(no_rig["declared"]) == 30
-        assert len(no_rig["produced"]) == 16
+        assert len(no_rig["declared"]) == 36
+        assert len(no_rig["produced"]) == 23
 
-        # No projection either: the four topics that need a real position drop as well. Three
-        # of those four are phase 2's, so this gap grew with the phase rather than shrinking.
+        # No projection either: the five topics that need a real position drop as well. Three
+        # are phase 2's and `/sensing/gnss/pose` joined them when it became a `NavSatFix`, so
+        # this gap grew with each correction rather than shrinking.
         neither = ros_schema.rig_coverage(
             declared - asked_for - set(ros_schema.GEODETIC_TOPICS)
         )
-        assert len(neither["produced"]) == 12
+        assert len(neither["produced"]) == 18
 
     def test_the_two_rates_above_the_simulator_tick_are_recorded_as_such(self):
         """`env.step` is the world tick, so every rate here is a decimation of `--step-hz`.
         These two are not, and a bag that claims them is claiming a clock it does not have."""
         fast = {row.topic: row.hz for row in ros_schema.RIG_TOPICS if (row.hz or 0) > 100.0}
-        assert fast == {"/sensing/gnss/imu/velocity": 200.0, "/sensing/lidar/imu": 202.9}
+        assert fast == {
+            "/sensing/gnss/imu/velocity": 199.99,
+            "/sensing/lidar/imu": 203.05,
+            "/tf": 100.89,
+        }
 
     def test_the_coverage_report_runs_with_no_bag_at_all(self):
         """It is a question about the code, not about a recording, and answers before one
@@ -561,9 +605,8 @@ class TestTheRigCoverageLedger:
         rendered = io.StringIO()
         assert ros_probe.coverage(None, out=rendered)
         text = rendered.getvalue()
-        assert "30 / 45" in text
-        assert "phase 5" in text
-        assert "24 direct, 21 approximate, 10 not producible" in text
+        assert "36 / 36" in text
+        assert "17 direct, 19 approximate, 14 not producible" in text
 
     def test_the_probe_still_refuses_a_run_with_neither_a_bag_nor_coverage(self):
         import ros_probe
@@ -2118,13 +2161,15 @@ class TestVendoringADefinitionToDisk:
         """The claim phase 5 turns on, tested rather than asserted in a comment."""
         import ros_schema
 
-        monkeypatch.setattr(ros_schema, "WINGFIN_MSG_DIR", tmp_path)
-        (tmp_path / "VehicleState.msg").write_text(
+        monkeypatch.setattr(ros_schema, "MSG_ROOT", tmp_path)
+        monkeypatch.setattr(ros_schema, "VENDORED_PACKAGES", {"made_up_msgs": "made_up_msgs"})
+        (tmp_path / "made_up_msgs").mkdir()
+        (tmp_path / "made_up_msgs" / "Widget.msg").write_text(
             "std_msgs/Header header\nfloat64 speed\n", encoding="utf-8"
         )
-        loaded = ros_schema._wingfin_definitions()
+        loaded = ros_schema._vendored_definitions()
         assert loaded == {
-            "wingfin_msgs/msg/VehicleState": "std_msgs/Header header\nfloat64 speed\n"
+            "made_up_msgs/msg/Widget": "std_msgs/Header header\nfloat64 speed\n"
         }
 
     def test_it_says_which_of_the_fifteen_a_bag_carries(self, tmp_path, capsys):
@@ -2139,18 +2184,25 @@ class TestVendoringADefinitionToDisk:
 
         ros_defs.report(TestReadingDefinitionsBackOutOfABag._bag(tmp_path))
         printed = capsys.readouterr().out
-        assert "the 15 topics phase 5 waits on: 0 carried by this bag" in printed
-        for topic in ros_schema.MISSING_DEFINITIONS:
-            assert f"- {topic}  not in this bag" in printed
+        assert ros_schema.AWAITING_BUILDER == {}
+        assert "every topic the vehicle publishes and a simulator can honestly produce" in printed
+        assert "left out on purpose" in printed
 
     def test_the_fifteen_are_still_fifteen_and_still_absent(self):
-        """Nothing above declares a topic. Vendoring is the input to phase 5, not phase 5."""
+        """Nothing above declares a topic. Vendoring is the input to phase 5, not phase 5.
+
+        And `MISSING_DEFINITIONS` is now **empty**, which is the result rather than an
+        oversight: every type the vehicle publishes is vendored, recovered from its own
+        recording. What is left is seven builders, which is a different problem and has its own
+        name.
+        """
         import ros_schema
 
-        missing = ros_schema.MISSING_DEFINITIONS
-        assert len(missing) == 15
-        assert not set(missing) & set(ros_schema.TOPICS)
-        assert all("--write tools/wingfin_msgs" in why for why in missing.values())
+        assert ros_schema.MISSING_DEFINITIONS == {}
+        assert ros_schema.AWAITING_BUILDER == {}
+        ledger = ros_schema.rig_coverage()
+        assert ledger["absent"] == {}
+        assert len(ledger["produced"]) == ledger["producible"] == 36
 
 
 class TestARigBagArriving:
@@ -2167,7 +2219,8 @@ class TestARigBagArriving:
     bag carries comes back out of it and registers.
     """
 
-    TYPE = "wingfin_msgs/msg/VehicleState"
+    TOPIC = "/perception/model_info"
+    TYPE = "made_up_msgs/msg/ModelInfo"
     TEXT = "std_msgs/Header header\nfloat64 speed\nfloat64 steering_angle\n"
 
     def _bag(self, tmp_path):
@@ -2179,7 +2232,7 @@ class TestARigBagArriving:
         path = tmp_path / "rig-stand-in"
         with Writer(path, version=9) as writer:
             connection = writer.add_connection(
-                "/vehicle/state", self.TYPE, typestore=store, serialization_format="cdr"
+                self.TOPIC, self.TYPE, typestore=store, serialization_format="cdr"
             )
             message = store.types[self.TYPE]
             header = store.types["std_msgs/msg/Header"]
@@ -2203,33 +2256,445 @@ class TestARigBagArriving:
         assert found[self.TYPE].text == self.TEXT
         assert ros_defs.parses(self.TYPE, found[self.TYPE].text) is None
 
-    def test_the_per_topic_list_counts_it(self, tmp_path, capsys):
-        """`0 carried` becomes `1 carried`, and the row for that topic names the type."""
-        import ros_defs
+    def test_the_per_topic_list_counts_it(self, tmp_path, capsys, monkeypatch):
+        """`0 carried` becomes `1 carried`, and the row for that topic names the type.
 
+        Nothing is waiting any more - the ledger is 36 of 36 - so the branch is exercised
+        against a stand-in list rather than deleted. It is the branch that answers *"is this
+        file enough?"*, and the next type the vehicle adds puts it straight back into use.
+        """
+        import ros_defs
+        import ros_schema
+
+        monkeypatch.setattr(
+            ros_schema, "AWAITING_BUILDER", {self.TOPIC: "a builder", "/vehicle/engagement": "x"}
+        )
         ros_defs.report(self._bag(tmp_path))
         printed = capsys.readouterr().out
-        assert "the 15 topics phase 5 waits on: 1 carried by this bag" in printed
-        assert f"+ /vehicle/state  {self.TYPE}" in printed
-        assert "+ /vehicle/engagement" not in printed
+        assert "the 2 topics phase 5 still has to build: 1 carried by this bag" in printed
+        assert f"+ {self.TOPIC}  {self.TYPE}" in printed
+        assert "- /vehicle/engagement  not in this bag" in printed
 
     def test_vendoring_it_makes_ros_schema_carry_it(self, tmp_path, monkeypatch):
         """The claim phase 5 rests on, run end to end: bag -> file -> registered definition."""
         import ros_defs
         import ros_schema
 
-        out = tmp_path / "wingfin_msgs"
+        root = tmp_path / "vendored"
+        out = root / "made_up_msgs"
         assert ros_defs.main(
-            [str(self._bag(tmp_path)), "--write", str(out), "--package", "wingfin_msgs"]
+            [str(self._bag(tmp_path)), "--write", str(out), "--package", "made_up_msgs"]
         ) == 0
-        assert (out / "VehicleState.msg").read_text(encoding="utf-8") == self.TEXT
+        assert (out / "ModelInfo.msg").read_text(encoding="utf-8") == self.TEXT
 
-        monkeypatch.setattr(ros_schema, "WINGFIN_MSG_DIR", out)
-        assert ros_schema._wingfin_definitions()[self.TYPE] == self.TEXT
+        monkeypatch.setattr(ros_schema, "MSG_ROOT", root)
+        monkeypatch.setattr(ros_schema, "VENDORED_PACKAGES", {"made_up_msgs": "made_up_msgs"})
+        assert ros_schema._vendored_definitions()[self.TYPE] == self.TEXT
 
     def test_it_still_does_not_write_the_topic(self, tmp_path):
         """A definition is necessary and not sufficient - the builder is the missing half."""
         import ros_schema
 
-        assert "/vehicle/state" not in ros_schema.TOPICS
-        assert "/vehicle/state" in ros_schema.MISSING_DEFINITIONS
+        assert ros_schema.AWAITING_BUILDER == {}
+        assert "/perception/model_info" in ros_schema.TOPICS
+
+
+#: The vehicle's own recording. 14.7 GB, not tracked, and the source of `reference_bag.json`.
+PRODUCTION_BAG = Path(__file__).resolve().parents[2] / "bags" / "074143"
+
+
+class TestTheProductionBag:
+    """Read against the vehicle's own recording, when it is on this machine.
+
+    `tools/reference_bag.json` is vendored precisely because the bag is 14.7 GB and `bags/` is
+    not tracked, so the ledger has to work without it. These tests are the other half of that
+    bargain: when the bag *is* present they re-derive the table from it, so a vendored file that
+    has drifted from the recording it claims to describe cannot go unnoticed.
+
+    Skipped rather than failed when the bag is absent - the same arrangement
+    `test_conversion.py` has with the MetaDrive checkout, and with the same caveat, that a
+    skipped gate is a gate that is not running.
+    """
+
+    @pytest.mark.skipif(not PRODUCTION_BAG.exists(), reason=f"no bag at {PRODUCTION_BAG}")
+    def test_the_vendored_table_is_what_the_recording_says(self):
+        import ros_defs
+
+        assert ros_defs.reference_table(PRODUCTION_BAG) == ros_schema._reference()
+
+    @pytest.mark.skipif(not PRODUCTION_BAG.exists(), reason=f"no bag at {PRODUCTION_BAG}")
+    def test_a_truncated_recording_still_gives_up_every_definition(self):
+        """The enabling change, against the file that motivated it.
+
+        `rosbags`' `Reader` raises `File end magic is invalid` on this bag and returns nothing:
+        rosbag2 writes its summary at the *end*, and a recording pulled off a vehicle is
+        routinely cut short. Reading forwards from the header gets all thirty schemas out of the
+        first few chunks of a 14.7 GB file.
+        """
+        import ros_defs
+
+        found, undefined = ros_defs.read(PRODUCTION_BAG)
+        assert undefined == []
+        for name in (
+            "wing_msgs/msg/VehicleState",
+            "wing_msgs/msg/ActuatorsOutput",
+            "flir_camera_msgs/msg/ImageMetaData",
+            "point_cloud_interfaces/msg/CompressedPointCloud2",
+        ):
+            assert name in found, name
+            assert ros_defs.parses(name, found[name].text) is None, name
+
+    @pytest.mark.skipif(not PRODUCTION_BAG.exists(), reason=f"no bag at {PRODUCTION_BAG}")
+    def test_what_we_vendored_is_byte_for_byte_what_the_bag_carried(self):
+        """The claim the whole approach rests on, checked rather than asserted in a README."""
+        import ros_defs
+
+        found, _ = ros_defs.read(PRODUCTION_BAG)
+        vendored = {
+            name: text
+            for name, text in EXTRA_DEFINITIONS.items()
+            if name.split("/")[0] in ("wing_msgs", "flir_camera_msgs", "point_cloud_interfaces")
+        }
+        assert vendored, "nothing was vendored from the production bag"
+        for name, text in vendored.items():
+            assert found[name].text == text, f"{name} on disk is not what the bag carried"
+
+    @pytest.mark.skipif(not PRODUCTION_BAG.exists(), reason=f"no bag at {PRODUCTION_BAG}")
+    def test_the_ffmpeg_packet_we_ship_is_the_one_the_vehicle_ships(self):
+        """Phase 4's wire format, against the vehicle rather than against a git tag.
+
+        It was vendored from `ffmpeg_image_transport_msgs` 1.1.2 on the strength of a commit
+        hash. This is the check that the vehicle is on the same one.
+        """
+        import ros_defs
+
+        found, _ = ros_defs.read(PRODUCTION_BAG)
+        theirs = found["ffmpeg_image_transport_msgs/msg/FFMPEGPacket"].text
+        assert _fields(theirs) == _fields(ros_schema.FFMPEG_PACKET_MSG)
+
+    @pytest.mark.skipif(not PRODUCTION_BAG.exists(), reason=f"no bag at {PRODUCTION_BAG}")
+    def test_the_sbg_release_we_pinned_is_the_one_the_vehicle_runs(self):
+        """Phase 2's `SBG_DRIVER_VERSION`, likewise. The field lists change between releases and
+        a mismatch is silent - `tools/sbg_msgs/README.md` measures 3.1.0 against 3.4.0."""
+        import ros_defs
+
+        found, _ = ros_defs.read(PRODUCTION_BAG)
+        compared = 0
+        for name, text in EXTRA_DEFINITIONS.items():
+            if name.startswith("sbg_driver/") and name in found:
+                assert _fields(found[name].text) == _fields(text), name
+                compared += 1
+        assert compared >= 7, f"only {compared} SBG types were in the bag to compare"
+
+
+def _fields(text: str) -> list[tuple[str, str]]:
+    """The top block's `(type, name)` pairs - no comments, no constants, no dependencies."""
+    out = []
+    for line in text.splitlines():
+        if line.startswith(("====", "MSG:")):
+            break
+        stripped = line.split("#")[0].strip()
+        if stripped and "=" not in stripped.split()[-1]:
+            out.append(tuple(stripped.split()[:2]))
+    return out
+
+
+class TestAStaleBag:
+    """`ros_probe.stale_types` - a bag written before a type changed.
+
+    A bag outlives the code that wrote it, and this repo has now changed a type once. Every
+    check downstream reads fields by name, so the seven bags recorded before 2026-09-03 met the
+    new `/sensing/gnss/pose` checks with an `AttributeError` and a traceback - which says nothing
+    about the bag and reads as a broken tool. Reporting it is both the kinder behaviour and a
+    real finding.
+    """
+
+    def test_a_topic_carrying_its_old_type_is_named_rather_than_crashed_on(self):
+        import ros_probe
+
+        by_topic = type("_T", (dict,), {})()
+        by_topic.types = {ros_schema.GNSS_POSE: "geometry_msgs/msg/PoseStamped"}
+        stale = ros_probe.stale_types(by_topic)
+        assert stale == {
+            ros_schema.GNSS_POSE: ("geometry_msgs/msg/PoseStamped", "sensor_msgs/msg/NavSatFix")
+        }
+
+    def test_a_bag_whose_types_all_match_reports_nothing(self):
+        import ros_probe
+
+        by_topic = type("_T", (dict,), {})()
+        by_topic.types = {topic: declared for topic, (declared, _) in TOPICS.items()}
+        assert ros_probe.stale_types(by_topic) == {}
+
+    def test_a_topic_the_module_does_not_declare_is_not_stale(self):
+        """A bag may carry topics we never wrote. Those are not our business to police."""
+        import ros_probe
+
+        by_topic = type("_T", (dict,), {})()
+        by_topic.types = {"/some/other/thing": "std_msgs/msg/String"}
+        assert ros_probe.stale_types(by_topic) == {}
+
+
+class TestWhatTheCarWasTold:
+    """`vehicle_state_message`, `engagement_message`, `actuators_output_message` - phase 5.
+
+    The only three topics in this bag built from what the drive **commanded** rather than from
+    what it observed, which is what makes them checkable at all: a command and its consequence
+    are two independently produced quantities.
+
+    `wing_msgs/VehicleState`'s own comments are the specification, and the three tests that
+    matter here are the three traps it states outright - degrees not radians, m/s not km/h, and
+    a `cruise_standstill` that must be produced rather than copied.
+    """
+
+    @staticmethod
+    def _frame(steering=0.5, throttle_brake=0.3, speed=10.0, engaged=True, **kwargs):
+        controls = ros_schema.Controls(
+            steering=steering,
+            throttle_brake=throttle_brake,
+            max_steering_deg=40.0,
+            policy="idm",
+            engaged=engaged,
+            **kwargs,
+        )
+        return Frame(
+            index=7,
+            sim_time_s=1.5,
+            ego=Ego(x=1.0, y=2.0, z=0.0, heading=0.0, velocity_east=speed, velocity_north=0.0,
+                    speed=speed, yaw_rate=0.2),
+            controls=controls,
+        )
+
+    def test_the_wheel_angle_is_in_degrees_and_scaled_by_the_cars_own_maximum(self):
+        """The first trap. Every other angle in `wing_msgs` is SI and this one is not.
+
+        Converting one link of the DBC -> ControlCommand -> ActuatorsOutput -> openpilot chain
+        in isolation puts a factor of 57.3 somewhere no reader would look, so the conversion
+        happens once, in `Controls`, and `max_steering` comes off the car rather than a constant.
+        """
+        message = ros_schema.vehicle_state_message(self._frame(steering=0.5))
+        assert message["steering_angle_deg"]["value"] == pytest.approx(20.0)
+        assert ros_schema.vehicle_state_message(self._frame(steering=-1.0))[
+            "steering_angle_deg"
+        ]["value"] == pytest.approx(-40.0)
+
+    def test_left_is_positive_all_the_way_through(self):
+        """MetaDrive is left-positive and so is REP-103; CARLA is not, and that difference has
+        already driven a car into oncoming traffic once in this repo."""
+        message = ros_schema.vehicle_state_message(self._frame(steering=0.25))
+        assert message["steering_angle_deg"]["value"] > 0
+        assert ros_schema.actuators_output_message(self._frame(steering=0.25))["steer"] > 0
+
+    def test_all_four_wheels_carry_the_ego_speed_in_metres_per_second(self):
+        """The second trap, and it is the definition's own instruction rather than our shortcut:
+        a simulator models no per-wheel dynamics, so the spread is zero **by construction** and
+        not because the car happens to be going straight."""
+        message = ros_schema.vehicle_state_message(self._frame(speed=13.5))
+        wheels = [message[f"wheel_speed_{corner}"]["value"] for corner in
+                  ("front_left", "front_right", "rear_left", "rear_right")]
+        assert wheels == [13.5] * 4
+        assert message["v_ego"]["value"] == 13.5
+
+    def test_cruise_standstill_is_produced_false_and_never_copied_from_standstill(self):
+        """The third trap, and the one with a measured cost.
+
+        Three consumers fed `LongControl` the *motion* standstill instead, which deadlocks the
+        car at every stop: standstill -> stay_stopped -> kStopping -> accel < 0, while
+        `starting_condition` needs `not standstill` and so is never true. 5,066 cycles of an
+        engaged, unfaulted stack braking forever with a healthy plan asking to accelerate.
+
+        We have no ACC loop to read back, so the answer is false - a fact, not a default.
+        """
+        stopped = ros_schema.vehicle_state_message(self._frame(speed=0.0))
+        assert stopped["standstill"]["value"] is True
+        assert stopped["cruise_standstill"]["value"] is False
+        moving = ros_schema.vehicle_state_message(self._frame(speed=10.0))
+        assert moving["standstill"]["value"] is False
+        assert moving["cruise_standstill"]["value"] is False
+
+    def test_what_the_simulator_does_not_have_carries_a_zero_stamp(self):
+        """`wing_msgs`' own in-band absence, and the vehicle uses it too - measured on a real
+        message from `bags/074143`, where five of these seven are unfilled on the vehicle as
+        well. A plausible `false` in a blindspot field is a claim; a zero stamp is the truth."""
+        message = ros_schema.vehicle_state_message(self._frame())
+        for name in ("steering_torque", "steering_pressed", "door_open", "seatbelt_unlatched",
+                     "blindspot_left", "blindspot_right", "cruise_speed"):
+            assert message[name]["stamp"] == {"sec": 0, "nanosec": 0}, name
+        for name in ("v_ego", "a_ego", "gas", "brake", "steering_angle_deg", "gear"):
+            assert message[name]["stamp"] != {"sec": 0, "nanosec": 0}, name
+
+    def test_throttle_and_brake_are_the_two_halves_of_one_signed_number(self):
+        assert ros_schema.vehicle_state_message(self._frame(throttle_brake=0.4))["gas"][
+            "value"] == pytest.approx(0.4)
+        assert ros_schema.vehicle_state_message(self._frame(throttle_brake=0.4))["brake"][
+            "value"] == 0.0
+        braking = ros_schema.vehicle_state_message(self._frame(throttle_brake=-0.7))
+        assert braking["gas"]["value"] == 0.0
+        assert braking["brake"]["value"] == pytest.approx(0.7)
+
+    def test_steer_output_can_is_nan_because_there_is_no_can_bus(self):
+        """A zero there would say the column was commanded and did nothing."""
+        assert math.isnan(ros_schema.actuators_output_message(self._frame())["steer_output_can"])
+
+    def test_curvature_is_measured_rather_than_restated_from_the_command(self):
+        """The one field in `ActuatorsOutput` that is a second opinion rather than an echo, and
+        so the only one that can disagree with the steering. `yaw_rate / speed`."""
+        message = ros_schema.actuators_output_message(self._frame(speed=10.0))
+        assert message["curvature"] == pytest.approx(0.02)
+        # Below a crawl the quotient explodes, so it is not reported rather than reported huge.
+        assert ros_schema.actuators_output_message(self._frame(speed=0.0))["curvature"] == 0.0
+
+    def test_nothing_driving_writes_none_of_the_three(self):
+        """`EngagementStatus`'s own comment: *absence of this message IS a state*. A replay
+        teleports the ego onto recorded positions and commands nothing, so a `VehicleState` full
+        of zeros would say the car was asked for nothing and drove the route by coincidence."""
+        frame = Frame(index=0, sim_time_s=0.0,
+                      ego=Ego(x=0.0, y=0.0, z=0.0, heading=0.0, velocity_east=0.0,
+                              velocity_north=0.0, speed=0.0))
+        assert frame.controls is None
+        assert ros_schema.vehicle_state_message(frame) is None
+        assert ros_schema.engagement_message(frame) is None
+        assert ros_schema.actuators_output_message(frame) is None
+
+    def test_engagement_names_the_policy_because_nothing_else_does(self):
+        message = ros_schema.engagement_message(self._frame(engaged=True))
+        assert message["state"] == 2 and message["enabled"] is True
+        assert "idm" in message["alert_text1"]
+        idle = ros_schema.engagement_message(self._frame(engaged=False))
+        assert idle["state"] == 0 and idle["enabled"] is False
+
+    def test_the_differences_are_zero_on_a_frame_with_no_predecessor(self):
+        """No previous frame means no difference - not an acceleration of zero measured."""
+        message = ros_schema.vehicle_state_message(self._frame())
+        assert message["a_ego"]["value"] == 0.0
+        assert message["steering_rate_deg_s"]["value"] == 0.0
+        moved = ros_schema.vehicle_state_message(
+            self._frame(accel=-1.25, steering_rate_deg_s=8.0)
+        )
+        assert moved["a_ego"]["value"] == -1.25
+        assert moved["steering_rate_deg_s"]["value"] == 8.0
+
+
+class TestWhatTheModelPredicted:
+    """`predicted_trajectory_message` and its two companions - phase 5, slice 4.
+
+    **Only the mirror matters here**, and it matters more than anything else in the phase.
+    `wing_msgs/PredictedTrajectory` carries REP-103 - x forward, **y LEFT**, `orientation_z`
+    CCW-positive - and says so in a comment that exists because it was wrong the other way for
+    months: *"⚠️ NOT openpilot's frame, which this comment claimed until 2026-08-03."*
+
+    Our checkpoint emits the opposite handedness. Get half the flip right and the published
+    trajectory is a plausible drive down a plausible road on the wrong side of it, with nothing
+    raising anything - the failure `openpilot-and-the-model.md` records for the bridge.
+
+    These run without `torch` and without a checkpoint, which is the point: **no model drive is
+    possible on this machine**, so the mirror is pinned by arithmetic rather than by a drive.
+    """
+
+    @staticmethod
+    def _frame(rows=None):
+        import numpy
+
+        if rows is None:
+            # [x, y, yaw, yaw_rate, v_x, v_y, a_x, a_y] - one waypoint, every column distinct
+            # and non-zero, so a flip that hits the wrong column cannot hide behind a match.
+            rows = numpy.array([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]])
+        return Frame(
+            index=3,
+            sim_time_s=0.5,
+            ego=Ego(x=0.0, y=0.0, z=0.0, heading=0.0, velocity_east=0.0, velocity_north=0.0,
+                    speed=0.0),
+            prediction=ros_schema.ModelPrediction(
+                waypoints=rows,
+                times_s=tuple(0.1 * (i + 1) for i in range(len(rows))),
+                frame_counter=42,
+                model_name="av3",
+                weight_name="av3/checkpoint.ep",
+                ego_x=10.0, ego_y=-4.0, ego_heading=0.25,
+            ),
+        )
+
+    def test_exactly_the_five_lateral_columns_flip(self):
+        """`y`, `yaw`, `yaw_rate`, `v_y`, `a_y`. The longitudinal four do not move."""
+        message = ros_schema.predicted_trajectory_message(self._frame())
+        assert message["position_x"] == [1.0]
+        assert message["position_y"] == [-2.0]
+        assert message["orientation_z"] == [-3.0]
+        assert message["orientation_rate_z"] == [-4.0]
+        assert message["velocity_x"] == [5.0]
+        assert message["velocity_y"] == [-6.0]
+        assert message["acceleration_x"] == [7.0]
+        assert message["acceleration_y"] == [-8.0]
+
+    def test_the_mirror_is_one_constant_applied_once(self):
+        """Five sign changes spread across a builder is five places to get one fact wrong."""
+        assert ros_schema.MIRRORED_COLUMNS == (1, 2, 3, 5, 7)
+
+    def test_a_model_turning_left_publishes_a_left_turn(self):
+        """The whole point, stated as a drive rather than as indices. The checkpoint's frame is
+        y-RIGHT, so its *negative* y is a left turn; REP-103's left is positive."""
+        import numpy
+
+        left_in_the_models_frame = numpy.array([[10.0, -3.0, -0.2, 0.0, 8.0, 0.0, 0.0, 0.0]])
+        message = ros_schema.predicted_trajectory_message(self._frame(left_in_the_models_frame))
+        assert message["position_y"][0] > 0, "a left turn must publish a positive y"
+        assert message["orientation_z"][0] > 0, "and a positive yaw"
+
+    def test_the_prediction_is_not_mutated_on_its_way_out(self):
+        """The array belongs to the model and is read again next decision; mirroring it in place
+        would flip it once per topic and leave the second reader with the first one's answer."""
+        import numpy
+
+        rows = numpy.array([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]])
+        frame = self._frame(rows)
+        ros_schema.predicted_trajectory_message(frame)
+        ros_schema.inference_control_message(frame)
+        assert rows[0][1] == 2.0, "the caller's array was mirrored in place"
+
+    def test_both_model_topics_describe_one_trajectory_in_one_frame(self):
+        """`InferenceControlMsg` carries the same rows flattened. Two topics disagreeing about
+        handedness is worse than either being wrong alone."""
+        frame = self._frame()
+        trajectory = ros_schema.predicted_trajectory_message(frame)
+        flat = ros_schema.inference_control_message(frame)["waypoints"]["data"]
+        assert flat[1] == trajectory["position_y"][0]
+        assert flat[2] == trajectory["orientation_z"][0]
+
+    def test_the_multiarray_declares_its_own_shape(self):
+        """A consumer reshaping by a guessed width transposes the trajectory the first time the
+        waypoint count changes, and the layout field exists to stop that."""
+        layout = ros_schema.inference_control_message(self._frame())["waypoints"]["layout"]
+        assert [(d["label"], d["size"]) for d in layout["dim"]] == [("waypoint", 1), ("field", 8)]
+
+    def test_the_times_and_the_waypoints_have_to_be_the_same_length(self):
+        import numpy
+
+        frame = self._frame()
+        broken = replace(
+            frame,
+            prediction=replace(frame.prediction, times_s=(0.1, 0.2)),
+        )
+        with pytest.raises(ValueError, match="waypoint times"):
+            ros_schema.predicted_trajectory_message(broken)
+        with pytest.raises(ValueError, match=r"\(N, 8\)"):
+            ros_schema.predicted_trajectory_message(
+                replace(frame, prediction=replace(frame.prediction,
+                                                  waypoints=numpy.zeros((2, 3)),
+                                                  times_s=(0.1, 0.2)))
+            )
+
+    def test_model_info_carries_the_weights_identity(self):
+        """The type exists because this was previously unrecordable - the model's identity
+        travelled only as a launch parameter and a log line, so a recorded drive could not say
+        which weights produced its trajectories. A drive here had the same gap."""
+        message = ros_schema.model_info_message(self._frame())
+        assert message["model_name"] == "av3"
+        assert message["weight_name"] == "av3/checkpoint.ep"
+
+    def test_no_model_writes_none_of_the_three(self):
+        frame = Frame(index=0, sim_time_s=0.0,
+                      ego=Ego(x=0.0, y=0.0, z=0.0, heading=0.0, velocity_east=0.0,
+                              velocity_north=0.0, speed=0.0))
+        assert ros_schema.predicted_trajectory_message(frame) is None
+        assert ros_schema.inference_control_message(frame) is None
+        assert ros_schema.model_info_message(frame) is None

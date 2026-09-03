@@ -2,10 +2,15 @@
 
 ## Status
 
-**Phases 0 to 4 are built. Phase 5's ingest is built; its fifteen builders are not,
-and cannot be until one `.mcap` off the rig exists on this machine.** Stage 10 produces a bag that real ROS 2 reads
-and rviz2 renders; this stage is about how much of the vehicle rig's bag it actually covers,
-which was **8 of 45** when this was written and is **30 of 45** now that phase 4 has landed.
+**All six phases are built. The ledger is 36 of 36.** Stage 10 produces a bag that real
+ROS 2 reads and rviz2 renders; this stage is about how much of the vehicle's own bag it covers,
+which was **8 of 45** when this was written and is **36 of 36** now.
+
+**The target changed on 2026-09-03, and that is a finding rather than a moved goalpost.** The 45
+came from `bag_audit.html`, an audit of an older recording. Keith then supplied the vehicle's own
+bag - `bags/074143`, 14.7 GB, 6.27 M messages, 63 minutes - and it has **50 topics, not 55**, with
+five of the old names retired or renamed. The ledger is now derived from that recording
+(`tools/reference_bag.json`), and 50 less the 14 a simulator cannot honestly produce is 36.
 
 Written 2026-09-02, after the question *"so it should generate all 45 topics already?"* could not
 be answered by any command in the repo. Every count below was derived by script against
@@ -25,10 +30,13 @@ Stage 10: the drive written out as a ROS 2 bag  (8 of the rig's 45 topics)  <- w
        phase 2  the SBG GNSS family                         23 / 45   done
        phase 3  /sensing/lidar/points                       24 / 45   done
        phase 4  image_raw/ffmpeg - the encoder              30 / 45   done
-       phase 5  the fifteen rig-typed topics                45 / 45   ingest built;
-                                                                     the builders
-                                                                     need one .mcap
+       phase 5  the vehicle, control and model topics       36 / 36   done
+                  re-based on the vehicle's own recording, 50 topics
 ```
+
+The last row changes denominator because the reference did. Against the **new** ledger the
+ladder reads 29 -> 32 -> 33 -> 36: phase 5 landed in four slices, and the first of them was
+re-basing the ledger itself.
 
 Phases 1-4 are independent of one another and of phase 5. **Only phase 0 must come first**,
 because its coverage count is how every later phase is judged done.
@@ -521,84 +529,109 @@ exists to have avoided.
   `refuse_if_unsupported` checks `av.codecs_available` by name, because a PyAV built against a
   distro ffmpeg without `--enable-libx264` imports perfectly and has no encoder.
 
-- [~] **Phase 5 - the fifteen rig-typed topics.** `+15`. **Half built. The other half is one
-  file away, and the file is not in this repo.**
+- [x] **Phase 5 - the vehicle, control and model topics.** `29 -> 36 of 36`. Done 2026-09-03.
 
-  Isolated deliberately, so nothing above waits on it. The whole input is one `.mcap` from
-  `ros2_mig_phase_5_p1` - not the rig running, not the wingfin source package, and not
-  `bag_audit.html`, which carries rates and no types.
+  It was planned as *"fifteen topics blocked on one `.mcap`"*. Keith supplied the file and it
+  turned out to be a different, larger job than that, because **the vehicle had moved on from the
+  audit the plan was written against**.
 
-  **What is built (2026-09-03): the ingest, end to end, and it is a command.**
+  ### What the recording said
+
+  `bags/074143/drive_20260826-074143_0.mcap` - 14.7 GB, 6,267,599 messages, 3783.56 s, 50 topics.
+
+  | finding | consequence |
+  |---|---|
+  | Every one of its 30 message definitions is in the file | Nothing had to be guessed. They sit in the first 28 MB. |
+  | The file is **truncated** - no end magic | `rosbags`' `Reader` returns *nothing*, so the tool had to learn to read forwards from the header. This is the normal case for a bag pulled off a vehicle. |
+  | The package is **`wing_msgs`** | Not `wingfin_msgs`, which is ours. No shared namespace, so the collision the vendoring guard was built for does not arise here - the guard stays. |
+  | The camera `meta` type is **`flir_camera_msgs/ImageMetaData`** | Six of the "fifteen" were never the vehicle's own type. |
+  | Our `FFMPEGPacket` matches the vehicle **field for field** | Phase 4's wire format, confirmed against the car rather than against a git tag. |
+  | All seven SBG types match **field for field** | `SBG_DRIVER_VERSION = 3.4.0` is the release the vehicle runs. |
+  | **`/sensing/gnss/pose` was wrong** | We published `geometry_msgs/PoseStamped`; the vehicle publishes `sensor_msgs/NavSatFix`. Shipping since stage 10. |
+  | 50 topics, and five names retired or moved | `/control/actuators` -> `/control/openpilot/actuators`; `/vehicle/actuators_output` gone; `/sensing/lidar/points` -> `/sensing/lidar/points/soa_zstd`; both CAN topics no longer recorded. |
+  | **The car never moves** - `v_ego` max 0.00 m/s over all 63 minutes | A stationary bench capture. It settles types, rates and encodings; it cannot settle a single motion-dependent convention. |
+
+  ### Slice 0 - the ledger, re-based, and one real bug
+
+  `tools/ros_defs.py` grew a front-scan fallback: walk top-level MCAP records from the header,
+  skipping chunk payloads by length, decompressing only until every channel has been seen. Thirty
+  schemas out of a 14.7 GB file that the library refuses to open at all. `zstandard`'s
+  `decompress()` is not enough on its own - rosbag2 writes some chunks with no content size in the
+  frame header and it raises partway through a scan; a `stream_reader` has no such requirement.
+
+  `RIG_TOPICS` is now **derived** from `tools/reference_bag.json`, extracted from the recording,
+  rather than typed out of an audit. Only the judgements stay in code - what is not producible and
+  why, what is truth rather than measurement. `TestTheProductionBag` re-derives the whole table
+  from the bag whenever it is on disk.
+
+  **The six camera `meta` topics were reclassified as not producible** (Keith's call).
+  `ImageMetaData` is exposure, gain and brightness: facts of a physical image sensor, which a
+  rendered frame does not have. Same reasoning that already excludes `/sensing/gnss/imu/temp`.
+
+  **`/sensing/gnss/pose` was fixed.** It is the fault this module's own opening paragraph warns
+  about - same topic name, different contents, and CDR carries no field names so nothing raises.
+  It survived three stages because no check had the vehicle's answer to compare against. There is
+  now a type-equality test against `reference_bag.json` and a probe check that the pose and the
+  fix are one position to 0 m. The seven bags recorded before it are **reported as stale rather
+  than crashed on**: `ros_probe.stale_types` names the topic and skips the checks that read it.
+
+  ### Slice 2 - `/vehicle/state`, `/vehicle/engagement`, `/control/openpilot/actuators` `+3`
+
+  `wing_msgs/VehicleState`'s own comments are the specification, and three of them are traps:
+
+  * **`steering_angle_deg` is degrees**, alone among the package's angles. Converted once.
+  * **`wheel_speed_*` is m/s and all four carry the ego speed** - the definition says exactly that
+    about the CARLA bridge, so it is a stated convention rather than our approximation.
+  * **`cruise_standstill` must be produced `false`, never copied from `standstill`.** The comment
+    records what the substitution cost three consumers: 5,066 cycles of an engaged, unfaulted
+    stack braking forever with a healthy plan asking to accelerate.
+
+  **Seven fields are left with a zero stamp** - the type's own in-band "never filled" - rather
+  than given a plausible `false`. Measured on a real message from the vehicle: it leaves five of
+  those seven unfilled too, so this follows the recording rather than inventing a convention.
+
+  **The command is read off the agent, not off `action`.** Under `--agent-policy idm` the policy
+  lives inside the environment and the caller's action array stays `[0, 0]` for the whole drive -
+  measured: the first bag written from it carried `steer 0.0000` on every frame of a drive whose
+  own measured curvature reached 0.086 1/m.
+
+  ### Slice 3 - `/sensing/lidar/points/soa_zstd` `+1`
+
+  `format` is the literal string `soa+zstd` and nothing documents it, so one real message was
+  decoded. **It is a per-field byte-plane transpose, then one zstd frame** - for a `w`-byte field,
+  `w` planes of `n` bytes, plane `k` holding byte `k` of every value. Not plain
+  structure-of-arrays, and the sizes cannot tell you: both arrangements are the same length. What
+  gives it away is that reading a real payload either way produces garbage floats while the
+  one-byte fields come out clean, which is exactly what a byte-plane shuffle does.
+
+  Confirmed by de-shuffling: `x` 0-184.9 m, `intensity` exactly 0-255, `line` 0-5 for a six-line
+  Livox, per-point timestamps spanning exactly 100 ms - one sweep at 10 Hz.
+
+  `intensity` is **NaN** (a rendered depth buffer has no return strength; zero would read as a
+  black surface everywhere), `tag` is 0 (Livox's own "nothing to report"), and every point carries
+  the frame's stamp because ours is one rendered buffer rather than a sweep. The uncompressed
+  `/sensing/lidar/points` is kept beside it as a simulator extra, because rviz2 opens it without a
+  decompressor node.
+
+  ### Slice 4 - the three model topics `+3`
+
+  `PredictedTrajectory` is **REP-103, y LEFT** - its own comment says so, and says it was wrong
+  the other way until 2026-08-03. Our checkpoint emits the opposite handedness, so the mirror runs
+  backwards on exactly five columns, applied once through `MIRRORED_COLUMNS`. Half a flip
+  publishes a plausible drive down a plausible road on the wrong side of it.
+
+  **Not verified by a model drive.** There is no `torch` and no checkpoint on this machine, so the
+  three are pinned by unit tests on the arithmetic and by the coverage ledger, not by a recording.
+  A drive with `--agent-policy remote` is what turns `36 declared / 33 on the wire` into 36 / 36.
+
+  *Verify:*
 
   ```bash
-  uv run python tools/ros_defs.py /path/to/ros2_mig_phase_5_p1 \
-      --write tools/wingfin_msgs --package wingfin_msgs
+  uv run python tools/ros_defs.py bags/074143          # 61 definitions off a truncated bag
+  uv run python tools/ros_probe.py bags/phase5 --workspace workspaces/junction-1   # 44 checks
+  uv run python tools/ros_probe.py bags/phase5 --coverage                          # 33 / 36
+  uv run pytest && uv run ruff check .                 # 991 passed, 2 skipped
   ```
-
-  `ros_defs.py --write` vendors each recovered definition to `tools/wingfin_msgs/<Type>.msg`,
-  and `ros_schema._wingfin_definitions` loads that directory at import - so **the fifteen types
-  register with no edit to any source file.** `--package` keeps one directory to one package,
-  the way `tools/sbg_msgs/` holds `sbg_driver` and nothing else.
-
-  Files rather than a paste into `EXTRA_DEFINITIONS`, for `tools/sbg_msgs/README.md`'s reason:
-  *verbatim has to be checkable*. A `.msg` file can be diffed against the bag it came out of in
-  one command; the same text rewrapped to fit a 100-column source line cannot, and rewrapping is
-  exactly where a field changes order.
-
-  **The path is not scaffolding waiting for its first real use.** `wingfin_msgs/TrafficLight` and
-  `TrafficLightArray` - ours, invented for a topic the rig does not have - were moved out of the
-  string literal and into that directory *by running the command above against `bags/j1-lights`*.
-  They came back byte for byte identical to the literals they replaced, and every bag test in the
-  suite now carries the loader. The day the rig's file arrives, nothing about the mechanism is
-  being tried for the first time.
-
-  Two things the ingest reports that a definition count does not:
-
-  - **Which of the fifteen a given bag actually carries**, named one by one. "Is this file
-    enough?" is the real question and the lookup has to run *topic-first*, because **the type
-    names are themselves unknown** - that is the whole blockage. A bag carrying fourteen of the
-    fifteen is worth having and is not the end of the job, and only a per-topic list says which
-    one is short.
-  - **A collision, as a failure rather than an overwrite.** `wingfin_msgs` is the *vehicle's*
-    package and two of its types are ours. A rig bag carrying its own `TrafficLightArray` would
-    land on top of ours, and CDR carries no field names - so every bag written afterwards would
-    serialise our traffic lights against a field list nothing here agreed to, with nothing
-    downstream raising. `vendor` reports `CONFLICT`, skips the file and fails the run. `--force`
-    is for after a person has decided, not instead of one.
-
-  **What is not built, and cannot honestly be: the fifteen builders.** They need field names and
-  field *order*, and both live only in that `.mcap`. Writing them against a plausible field list
-  would produce a bag that opens, plays, and is wrong - `ros_schema.py`'s own opening argument:
-  a subscriber deserialising `wingfin_msgs/VehicleState` off a `geometry_msgs/TwistStamped`
-  wearing its topic name fails, and a topic that is present and invented cannot be tested for,
-  where an absent one can. So coverage stays **30 / 45**, and nothing above was allowed to
-  declare a topic it cannot fill.
-
-  The values are already in scope at the one call site (`drive.py:2478`) and are not the
-  blockage: `action` is the commanded `[steering, throttle_brake]` behind `/control/actuators`
-  and `/vehicle/actuators_output`, the ego's speed and heading are `/vehicle/state`, and
-  `prediction` is the five model topics on an `--agent-policy remote` drive. They stay unplumbed
-  until there is a builder to consume them, rather than shipping as fields nothing reads.
-
-  *Verify, today:*
-
-  ```bash
-  uv run python tools/ros_defs.py bags/j1-lights --write tools/wingfin_msgs \
-      --package wingfin_msgs          # idempotent: "unchanged", twice
-  uv run python tools/ros_probe.py bags/phase4-full --coverage    # 30 / 45, naming the command
-  uv run pytest tests/unit/test_ros_schema.py -q                  # 151, was 137
-  uv run pytest && uv run ruff check .                            # 961 passed, 2 skipped
-  ```
-
-  `TestARigBagArriving` writes a stand-in - a bag holding `/vehicle/state` under a type nothing
-  in this repo defines - and runs the whole path on it: recovered, vendored, registered, and the
-  per-topic list turning `0 carried` into `1 carried`. **Its field list is not a guess at the
-  rig's** and nothing treats it as one; it exists to be recovered, not believed. Without it the
-  interesting half of the ingest would sit untested until the day it mattered.
-
-  *Verify, the day the file lands:* the same `--write`, then the per-topic list comes back
-  `15 carried by this bag`, `MISSING_DEFINITIONS` empties as each builder is written, and
-  `--coverage` reaches `45 / 45`.
 
 ## Testing one phase at a time
 

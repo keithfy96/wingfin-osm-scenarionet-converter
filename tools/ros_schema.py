@@ -40,6 +40,7 @@ Two conventions are load-bearing and both were read out of the source rather tha
 
 from __future__ import annotations
 
+import json
 import math
 import time
 from dataclasses import dataclass, field
@@ -119,63 +120,75 @@ EXTRA_DEFINITIONS: dict[str, str] = {
 SBG_DRIVER_VERSION = "3.4.0"
 SBG_DRIVER_COMMIT = "3efaf2982a3eacbbdcf6ff7ef40116a36fb3b2cc"
 
-#: Where those twelve `.msg` files live, beside this module.
-SBG_MSG_DIR = Path(__file__).resolve().parent / "sbg_msgs"
+#: Where the vendored `.msg` files live, beside this module.
+MSG_ROOT = Path(__file__).resolve().parent
+
+#: **One directory per package**, as `directory -> package name`. The two differ only for SBG,
+#: whose package is `sbg_driver` and whose messages are conventionally called `sbg_msgs`; the
+#: rest are named after the package so a reader can go from a type in a bag to the file that
+#: defines it without a lookup.
+#:
+#: Adding a package is adding a directory. `tools/ros_defs.py <bag> --write tools/<dir>
+#: --package <name>` writes one, and this loader registers whatever it finds with no edit here -
+#: which is the whole mechanism stage 11 phase 5 rests on.
+VENDORED_PACKAGES: dict[str, str] = {
+    # Public, copied from the upstream driver. See `SBG_DRIVER_VERSION` above.
+    "sbg_msgs": "sbg_driver",
+    # Ours. Two types invented for `/perception/traffic_lights`, a topic the vehicle's bag does
+    # not have. Safe to have invented in a way one of the vehicle's own topics would not be,
+    # because rosbag2 writes the definition into the bag itself - a reader decodes them without
+    # our package. Note this is `wingfin_msgs`, **ours**, and is not the vehicle's `wing_msgs`.
+    "wingfin_msgs": "wingfin_msgs",
+    # The vehicle's own package, recovered verbatim from `bags/074143`. See its README.
+    "wing_msgs": "wing_msgs",
+    # Public: the FLIR camera driver's per-frame metadata, and the compressed-cloud type the
+    # vehicle's lidar publishes. Both recovered from the same bag rather than fetched, because
+    # the bag is what the vehicle actually serialised against.
+    "flir_camera_msgs": "flir_camera_msgs",
+    "point_cloud_interfaces": "point_cloud_interfaces",
+}
+
+#: Where SBG's twelve live. Kept as a name because `tools/sbg_msgs/README.md` cites it.
+SBG_MSG_DIR = MSG_ROOT / "sbg_msgs"
+
+#: Where ours live. Kept as a name for the same reason.
+WINGFIN_MSG_DIR = MSG_ROOT / "wingfin_msgs"
 
 
-def _sbg_definitions() -> dict[str, str]:
-    """The `sbg_driver` types, read off disk rather than retyped into a string literal here.
+def _vendored_definitions() -> dict[str, str]:
+    """Every vendored package's types, read off disk rather than retyped into a literal here.
 
-    Nine of the rig's topics are SBG types and `Stores.ROS2_HUMBLE` has never heard of the
-    package, so they need the same treatment `vision_msgs` got - except that these are long, and
-    "copied verbatim" is a claim somebody has to be able to check. A file that is byte-identical
-    to `msg/SbgEkfNav.msg` at a named commit can be diffed against upstream in one command; the
-    same text rewrapped into a Python string cannot, and rewrapping is exactly where a field
-    changes order. So they stay files, comments and all - the comments being the only record of
-    what each field means, which this module has to decide for every one of them. They do not
-    reach the bag: `rosbags` regenerates the definition from its parsed typestore, so a written
-    bag carries the field list alone. That is what a decoder needs, and it round-trips exactly.
+    `Stores.ROS2_HUMBLE` has never heard of any of these packages, and without a definition a
+    topic carrying one of their types cannot be written at all - the rule at the top of this
+    file: no definition, no topic, because a topic serialised against a guessed field list is
+    worse than an absent one.
 
-    Seven message types plus the five nested status submessages they name. The nested names are
-    unqualified upstream (`SbgEkfStatus status`, not `sbg_driver/SbgEkfStatus`); `rosbags`
-    resolves those against the message's own package, which is why the loop can pass each file
-    on its own without concatenating dependencies.
+    **Files rather than string literals, because "copied verbatim" is a claim somebody has to be
+    able to check.** A file that is byte-identical to what a bag carried can be diffed against it
+    in one command; the same text rewrapped to fit a source line cannot, and rewrapping is
+    exactly where a field changes order.
+
+    The comments are kept and they are worth keeping: `wing_msgs/VehicleState`'s are the only
+    statement anywhere that its steering is in **degrees** while every other angle in the package
+    is SI, that its wheel speeds are m/s and not the DBC's km/h, and that a producer without an
+    ACC must publish `cruise_standstill` false rather than copy `standstill` - a substitution
+    whose measured cost was 5,066 cycles of an engaged stack braking forever. **They do not reach
+    the bag**: `rosbags` regenerates the definition from its parsed typestore, so a written bag
+    carries the field list alone. That is what a decoder needs and it round-trips exactly; a
+    consumer wanting the prose comes back here.
+
+    Nested names are unqualified in a `.msg` (`SbgEkfStatus status`, `Float64Stamped v_ego`);
+    `rosbags` resolves those against the message's own package, which is why each file can be
+    passed on its own without concatenating its dependencies.
     """
-    return {
-        f"sbg_driver/msg/{path.stem}": path.read_text(encoding="utf-8")
-        for path in sorted(SBG_MSG_DIR.glob("*.msg"))
-    }
+    out: dict[str, str] = {}
+    for directory, package in VENDORED_PACKAGES.items():
+        for path in sorted((MSG_ROOT / directory).glob("*.msg")):
+            out[f"{package}/msg/{path.stem}"] = path.read_text(encoding="utf-8")
+    return out
 
 
-EXTRA_DEFINITIONS.update(_sbg_definitions())
-
-#: Where the `wingfin_msgs` package's `.msg` files live, beside this module.
-WINGFIN_MSG_DIR = Path(__file__).resolve().parent / "wingfin_msgs"
-
-
-def _wingfin_definitions() -> dict[str, str]:
-    """The `wingfin_msgs` types, read off disk for the same reason the SBG ones are.
-
-    **This directory is how phase 5 lands.** Fifteen of the rig's topics carry types only the
-    rig's own package defines, and the whole plan for them is to recover the `.msg` text out of a
-    bag the rig recorded rather than guess at it - `tools/ros_defs.py --write tools/wingfin_msgs
-    --package wingfin_msgs` does exactly that, and this loader registers whatever it finds with
-    no edit to this file. What is here today is the two types *we* invented for
-    `/perception/traffic_lights`, a topic the rig does not have; they were themselves round-
-    tripped out of `bags/j1-lights` by that command, so the path is carried by every test in the
-    suite rather than waiting on the one file to be exercised for the first time.
-
-    The two are safe to have invented in a way one of the rig's own topics would not be, because
-    rosbag2 writes the definition text into the bag itself: a reader decodes them without our
-    package. A *collision* is the thing to watch for - see `ros_defs.vendor`, which refuses one.
-    """
-    return {
-        f"wingfin_msgs/msg/{path.stem}": path.read_text(encoding="utf-8")
-        for path in sorted(WINGFIN_MSG_DIR.glob("*.msg"))
-    }
-
-
-EXTRA_DEFINITIONS.update(_wingfin_definitions())
+EXTRA_DEFINITIONS.update(_vendored_definitions())
 
 # --- the rig's own bag, as data ------------------------------------------------------------
 #
@@ -230,18 +243,97 @@ class RigTopic:
 
     @property
     def produced(self) -> bool:
-        return self.verdict != IMPOSSIBLE and self.phase is None
+        """Producible **and** written. See `declared` for why this asks `TOPICS`."""
+        return self.producible and self.declared
 
     @property
     def producible(self) -> bool:
         return self.verdict != IMPOSSIBLE
 
+    @property
+    def declared(self) -> bool:
+        """Whether this module writes it, asked of `TOPICS` at call time rather than recorded.
 
-_WINGFIN = (
-    "a wingfin_msgs type; recover it with "
-    "tools/ros_defs.py <rig bag> --write tools/wingfin_msgs --package wingfin_msgs"
-)
+        `phase` says which phase *owns* a topic and stays true after that phase lands - it is the
+        plan's record, not a status. Asking `TOPICS` is what makes "absent" mean absent: a row
+        could otherwise claim to be waiting on a phase that had already written it, and the
+        coverage total and the per-phase breakdown would disagree by exactly that many.
+        """
+        return self.topic in TOPICS
 
+
+#: The vehicle's own recording, as a table. Regenerate with:
+#:
+#:     uv run python tools/ros_defs.py <a bag off the vehicle> --reference tools/reference_bag.json
+#:
+#: **Why a vendored file and not the bag.** The bag is 14.7 GB and `bags/` is not tracked, so
+#: nothing here can read it at import - but a ledger typed in by hand is a ledger that drifts,
+#: and this one had: the 55 rows it carried until 2026-09-03 came from `bag_audit.html`, an audit
+#: of an *older* recording, and by the time anyone checked, `/control/actuators` had become
+#: `/control/openpilot/actuators`, `/vehicle/actuators_output` was gone, `/sensing/lidar/points`
+#: had become `/sensing/lidar/points/soa_zstd`, and the CAN topics had gone altogether. Five
+#: rows describing a vehicle that had moved on. So the rates and types below are the vehicle's
+#: own, and `TestTheReferenceBag` re-derives them from the recording whenever it is on disk.
+REFERENCE_BAG = MSG_ROOT / "reference_bag.json"
+
+
+def _reference() -> dict:
+    """The vendored table: `{topic: {type, count, hz}}` plus the recording's duration."""
+    return json.loads(REFERENCE_BAG.read_text(encoding="utf-8"))
+
+
+#: Why each excluded topic is excluded, and the whole basis of the target. **A simulator that
+#: emitted any of these would be making the bag say something untrue about the vehicle**, which
+#: is worse than a missing topic: a consumer can test for a topic that is not there and cannot
+#: test for one that is there and invented.
+_NOT_PRODUCIBLE: dict[str, str] = {
+    "/sensing/cabin/image_raw/ffmpeg": "no cabin, no driver",
+    "/sensing/cabin/camera_info_latched": "no cabin camera to describe",
+    "/sensing/cabin/audio_stamped": "no audio",
+    "/sensing/cabin/audio_info": "no audio",
+    "/sensing/gnss/imu/temp": "a physical sensor temperature; nothing in a simulator produces it",
+    "/sensing/gnss/status": "the receiver's own health; nothing in a simulator produces it",
+    "/diagnostics": "would be the simulator's logs, not the vehicle's",
+    "/rosout": "would be the simulator's logs, not the vehicle's",
+}
+
+#: The six camera `meta` channels, excluded 2026-09-03. `flir_camera_msgs/ImageMetaData` is
+#: `camera_time`, `brightness`, `exposure_time`, `max_exposure_time` and `gain` - **facts of a
+#: physical image sensor**, and a rendered frame has none of them. Publishing a plausible
+#: exposure would say the simulated rig has an aperture and a shutter, on the same reasoning that
+#: already excludes `/sensing/gnss/imu/temp`. The rendered-camera limits are stated in
+#: `camera_info`'s empty `distortion_model` instead, where a consumer already looks for them.
+_META_REASON = "exposure, gain and brightness are facts of an image sensor; a render has none"
+
+#: What the seven still-absent topics are blocked on. Phase 5 of stage 11.
+_TODO = "phase 5: a builder. The type is vendored; the values come from the drive."
+
+#: Verdicts for every producible topic. `DIRECT` where MetaDrive holds the quantity outright -
+#: the pixels, the pose, the commanded controls - and `APPROXIMATE` where we can produce it only
+#: as truth rather than measurement: no noise, no lag, no dropouts.
+_APPROXIMATE: frozenset[str] = frozenset({
+    "/sensing/gnss/pose",
+    "/sensing/gnss/imu/data",
+    "/sensing/gnss/imu/velocity",
+    "/sensing/gnss/imu/nav_sat_fix",
+    "/sensing/gnss/imu/pos_ecef",
+    "/sensing/gnss/imu/utc_ref",
+    "/sensing/gnss/ekf_nav",
+    "/sensing/gnss/ekf_quat",
+    "/sensing/gnss/ekf_euler",
+    "/sensing/gnss/imu_data",
+    "/sensing/gnss/gps_pos",
+    "/sensing/gnss/gps_vel",
+    "/sensing/gnss/utc_time",
+    "/sensing/lidar/imu",
+    "/sensing/lidar/points/soa_zstd",
+    "/vehicle/engagement",
+    "/control/predicted_trajectory",
+    "/perception/inference_control",
+    "/perception/model_info",
+})
+
+#: The rig's six cameras, under the names its own bag gives them. Every camera topic is
 #: The rig's six cameras, under the names its own bag gives them. Every camera topic is
 #: `/sensing/camera/cam_sync_rig/<one of these>/<channel>`.
 _CAMERAS = ("front_left", "front_middle", "front_right", "rear_left", "rear_middle", "rear_right")
@@ -286,95 +378,72 @@ def rig_camera_name(spec_name: str) -> str | None:
     return RIG_CAMERA_NAMES.get(spec_name)
 
 
-def _camera_rows() -> tuple[RigTopic, ...]:
-    """The eighteen camera rows, which are three topics per camera and differ only by phase."""
+#: The seven topics phase 5 still has to build, and the order the plan works them in.
+_PHASE_5: frozenset[str] = frozenset({
+    "/vehicle/state",
+    "/vehicle/engagement",
+    "/control/openpilot/actuators",
+    "/sensing/lidar/points/soa_zstd",
+    "/control/predicted_trajectory",
+    "/perception/inference_control",
+    "/perception/model_info",
+})
+
+
+def _rig_topics() -> tuple[RigTopic, ...]:
+    """Every row, built from the vehicle's recording rather than kept by hand.
+
+    The rate is the recording's own - its message count over its duration - so a row cannot
+    describe a topic the vehicle stopped publishing, and a topic the vehicle added cannot be
+    missing from the table. That was the failure this replaces: the previous rows were typed out
+    of an audit of an older bag and five of them had gone stale without a single check noticing,
+    because nothing cross-referenced the two.
+
+    Only the *judgements* are kept in code - what is not producible and why, what is truth rather
+    than measurement, and what is still to build - because those are decisions and not
+    measurements. Everything measurable comes off the file.
+    """
     rows = []
-    for name in _CAMERAS:
-        # Written, as of phase 4, on a drive that mounted a rig **and** asked for
-        # `--ros-camera`: an H.264 encode is the one thing in this bag that costs real time per
-        # frame, so unlike the intrinsics beside it, it is opt-in rather than automatic.
-        rows.append(RigTopic(_CAM.format(name, "image_raw/ffmpeg"), 20.0, DIRECT))
-        rows.append(
-            RigTopic(
-                _CAM.format(name, "meta"),
-                20.0,
-                DIRECT,
-                needs="a .msg for the rig's own type",
-                phase=5,
-                definition=_WINGFIN,
+    for topic, facts in _reference()["topics"].items():
+        hertz = facts["hz"]
+        if topic.endswith("/meta"):
+            rows.append(RigTopic(topic, hertz, IMPOSSIBLE, needs=_META_REASON))
+        elif topic in _NOT_PRODUCIBLE:
+            rows.append(RigTopic(topic, hertz, IMPOSSIBLE, needs=_NOT_PRODUCIBLE[topic]))
+        else:
+            verdict = APPROXIMATE if topic in _APPROXIMATE else DIRECT
+            todo = topic in _PHASE_5
+            rows.append(
+                RigTopic(
+                    topic,
+                    hertz,
+                    verdict,
+                    needs=_TODO if todo else None,
+                    phase=5 if todo else None,
+                )
             )
-        )
-        # Written, as of phase 1 - but only on a drive that mounted a rig, exactly like
-        # `/tf_static`. `rig_coverage` reports "declared" and "on the wire" as two numbers for
-        # that reason; 14 declared and 8 written is a correct pair and not a discrepancy.
-        rows.append(RigTopic(_CAM.format(name, "camera_info_latched"), None, DIRECT))
     return tuple(rows)
 
 
-#: All 55, in the order `docs/rosbag.md` argues them. **24 direct, 21 approximate, 10 not
-#: producible**, and 55 - 10 = 45 is the target the phases are counted against.
-RIG_TOPICS: tuple[RigTopic, ...] = _camera_rows() + (
-    # --- the three we already write outright ---
-    RigTopic("/tf", 86.6, DIRECT),
-    RigTopic("/tf_static", None, DIRECT),
-    RigTopic("/localization/odometry", 43.9, DIRECT),
-    # --- the car's own state and controls: `drive.py:2478` holds all of it already ---
-    RigTopic("/vehicle/state", 100.0, DIRECT, needs="a .msg", phase=5, definition=_WINGFIN),
-    RigTopic(
-        "/vehicle/actuators_output", 100.0, DIRECT, needs="a .msg", phase=5, definition=_WINGFIN
-    ),
-    RigTopic("/control/actuators", 100.0, DIRECT, needs="a .msg", phase=5, definition=_WINGFIN),
-    # --- GNSS/INS: eleven channels, one true pose. Every one of them noiseless ---
-    RigTopic("/sensing/gnss/pose", 50.0, APPROXIMATE),
-    RigTopic("/sensing/gnss/imu/data", 50.0, APPROXIMATE),
-    RigTopic("/sensing/gnss/imu/velocity", 200.0, APPROXIMATE),
-    RigTopic("/sensing/gnss/imu/nav_sat_fix", 5.0, APPROXIMATE),
-    RigTopic("/sensing/gnss/ekf_nav", 50.0, APPROXIMATE),
-    RigTopic("/sensing/gnss/ekf_quat", 50.0, APPROXIMATE),
-    RigTopic("/sensing/gnss/ekf_euler", 50.0, APPROXIMATE),
-    # Not `/sensing/gnss/imu/data`, which we publish as `sensor_msgs/Imu`. Two topics one
-    # character apart, one covered and one forgotten - which is exactly how it went missing.
-    RigTopic("/sensing/gnss/imu_data", 50.0, APPROXIMATE),
-    RigTopic("/sensing/gnss/gps_pos", 5.0, APPROXIMATE),
-    RigTopic("/sensing/gnss/gps_vel", 5.0, APPROXIMATE),
-    RigTopic("/sensing/gnss/imu/pos_ecef", 50.0, APPROXIMATE),
-    # --- the Livox IMU, and the cloud that was dropped ---
-    RigTopic("/sensing/lidar/imu", 202.9, APPROXIMATE),
-    RigTopic("/sensing/lidar/points", 10.0, APPROXIMATE),
-    # --- the three that are trivial to emit, once their type is known ---
-    RigTopic("/sensing/gnss/utc_time", 1.0, APPROXIMATE),
-    RigTopic("/sensing/gnss/imu/utc_ref", 1.0, APPROXIMATE),
-    RigTopic("/vehicle/engagement", 100.0, APPROXIMATE, needs="a .msg", phase=5,
-             definition=_WINGFIN),
-    # --- the five that only exist when a model is driving: `--agent-policy remote` ---
-    RigTopic("/control/predicted_trajectory", 10.0, APPROXIMATE, needs="a .msg and a model",
-             phase=5, definition=_WINGFIN),
-    RigTopic("/control/lateral_plan", 10.0, APPROXIMATE, needs="a .msg and a model", phase=5,
-             definition=_WINGFIN),
-    RigTopic("/control/longitudinal_plan", 10.0, APPROXIMATE, needs="a .msg and a model",
-             phase=5, definition=_WINGFIN),
-    RigTopic("/perception/inference_control", 10.0, APPROXIMATE, needs="a .msg and a model",
-             phase=5, definition=_WINGFIN),
-    RigTopic("/perception/model_info", None, APPROXIMATE, needs="a .msg and a model", phase=5,
-             definition=_WINGFIN),
-    # --- the ten that stay absent on purpose. 45 of 45 is not parity, and must not claim to be
-    RigTopic("/vehicle/can_rx", 100.0, IMPOSSIBLE,
-             needs="no CAN bus; synthesised DBC frames would be fabrication"),
-    RigTopic("/vehicle/can_tx", None, IMPOSSIBLE,
-             needs="no CAN bus, and empty in the rig's own bag anyway"),
-    RigTopic("/sensing/cabin/image_raw/ffmpeg", 30.0, IMPOSSIBLE, needs="no cabin, no driver"),
-    RigTopic("/sensing/cabin/camera_info_latched", None, IMPOSSIBLE,
-             needs="no cabin, no driver"),
-    RigTopic("/sensing/cabin/audio_stamped", 100.0, IMPOSSIBLE, needs="no audio"),
-    RigTopic("/sensing/cabin/audio_info", 0.2, IMPOSSIBLE, needs="no audio"),
-    RigTopic("/sensing/gnss/imu/temp", 50.0, IMPOSSIBLE,
-             needs="a physical sensor temperature; nothing in a simulator produces it"),
-    RigTopic("/sensing/gnss/status", 1.0, IMPOSSIBLE,
-             needs="the receiver's own health; nothing in a simulator produces it"),
-    RigTopic("/diagnostics", 5.7, IMPOSSIBLE,
-             needs="would be the simulator's logs, not the vehicle's"),
-    RigTopic("/rosout", 4.0, IMPOSSIBLE, needs="would be the simulator's logs, not the vehicle's"),
-)
+#: All fifty rows of the vehicle's recording. **Fourteen are not producible**, and 50 - 14 = 36
+#: is the target the phases are counted against. `docs/rosbag.md` argues each row.
+RIG_TOPICS: tuple[RigTopic, ...] = _rig_topics()
+
+
+#: What the vehicle calls a topic this repo still writes under an older name, or does not write
+#: at all. **Recorded rather than silently reconciled**: the transform in `/tf` carries the
+#: geometry either way, but a consumer matching on a topic name gets nothing, and a reader who
+#: finds our name in the docs and not in the vehicle's bag deserves to be told which moved.
+NAME_DRIFT: dict[str, str] = {
+    "/control/actuators": "/control/openpilot/actuators",
+    "/vehicle/actuators_output": "/control/openpilot/actuators - merged into it",
+    "/sensing/lidar/points": "/sensing/lidar/points/soa_zstd - and compressed",
+    "/vehicle/can_rx": "not recorded at all any more",
+    "/vehicle/can_tx": "not recorded at all any more",
+}
+
+#: Frame the vehicle's lidar publishes in. Ours is `LIDAR_FRAME`, and they differ.
+RIG_LIDAR_FRAME = "livox_link"
 
 #: Topics of ours that the rig's bag does not have, and **which must never be counted against
 #: the 45**. The rig recorded no ground truth - nothing in its 55 is a labelled object, and
@@ -386,6 +455,13 @@ SIMULATOR_EXTRAS: tuple[str, ...] = (
     "/perception/objects",
     "/perception/traffic_lights",
     "/planning/route",
+    # Ours as of 2026-09-03, and it was not always: the vehicle used to publish a plain
+    # `sensor_msgs/PointCloud2` here and now publishes `CompressedPointCloud2` on
+    # `/sensing/lidar/points/soa_zstd` instead. Both are kept. The compressed one is what the
+    # vehicle's consumers expect; this one is what rviz2 and every stock ROS tool can open
+    # without a decompressor node in front of it, which is worth a topic on a bag whose whole
+    # purpose is being read by things that were not written for it.
+    "/sensing/lidar/points",
 )
 
 #: Topics in `bag_audit.html` this module cannot write for want of a `.msg`, and what each needs.
@@ -400,6 +476,13 @@ SIMULATOR_EXTRAS: tuple[str, ...] = (
 MISSING_DEFINITIONS: dict[str, str] = {
     row.topic: row.definition for row in RIG_TOPICS if row.definition
 }
+
+#: **Empty since 2026-09-03**, and that is the news rather than an oversight. Every type the
+#: vehicle publishes is now vendored under `VENDORED_PACKAGES`, recovered verbatim from its own
+#: recording by `tools/ros_defs.py`. Kept as a name because it is the thing that has to stay
+#: empty: a row acquiring a `definition` again means a topic was found that nothing can
+#: serialise, and `--coverage` says so.
+
 
 # --- topic table -------------------------------------------------------------------------
 #
@@ -442,6 +525,24 @@ GNSS_UTC_REF = "/sensing/gnss/imu/utc_ref"
 #: of thing seen through a much narrower window - see `LidarCloud` for what the difference is.
 LIDAR_POINTS = "/sensing/lidar/points"
 
+#: The vehicle's own lidar topic, and it is not the one above: it publishes a **compressed**
+#: cloud under a longer name. Both are written - see `SIMULATOR_EXTRAS` for why the plain one is
+#: kept beside it.
+LIDAR_POINTS_COMPRESSED = "/sensing/lidar/points/soa_zstd"
+
+#: Phase 5. The three the vehicle publishes about *itself* rather than about the world, and the
+#: only ones in this bag built from what the drive commanded rather than from what it observed.
+#:
+#: **`/control/openpilot/actuators`, not `/control/actuators`.** The older audit had the latter
+#: alongside a `/vehicle/actuators_output`; the vehicle's own recording has neither, and one
+#: topic where there were two. See `NAME_DRIFT`.
+PREDICTED_TRAJECTORY = "/control/predicted_trajectory"
+INFERENCE_CONTROL = "/perception/inference_control"
+MODEL_INFO = "/perception/model_info"
+VEHICLE_STATE = "/vehicle/state"
+VEHICLE_ENGAGEMENT = "/vehicle/engagement"
+CONTROL_ACTUATORS = "/control/openpilot/actuators"
+
 #: The sensor's own frame, and the first in this bag that is neither the world nor the car.
 #: The points are published in it rather than in `map` because that is what a lidar topic
 #: means to whatever reads it - and because a cloud written in `map` is *trivially* right: it
@@ -454,7 +555,15 @@ LIDAR_FRAME = "lidar"
 #: The four that need a real position, and so are dropped whole on a dataset with no projection
 #: - exactly as `GNSS_FIX` already was. A bag holding `ekf_nav` on a dataset that cannot say
 #: where it is would be holding a latitude of zero, off the coast of Ghana.
-GEODETIC_TOPICS: tuple[str, ...] = (GNSS_FIX, SBG_EKF_NAV, SBG_GPS_POS, GNSS_POS_ECEF)
+GEODETIC_TOPICS: tuple[str, ...] = (
+    GNSS_FIX,
+    # Joined them 2026-09-03: it became a `NavSatFix` when the vehicle's own recording
+    # showed that is what it carries, and a fix needs a projection where a pose did not.
+    GNSS_POSE,
+    SBG_EKF_NAV,
+    SBG_GPS_POS,
+    GNSS_POS_ECEF,
+)
 
 #: The six `camera_info_latched` topics, in the rig's own order. Declared always and written only
 #: on a `--camera-rig` drive, because a camera that is not mounted has no intrinsics to state.
@@ -480,10 +589,24 @@ TOPICS: dict[str, tuple[str, str]] = {
     TRAFFIC_LIGHTS: ("wingfin_msgs/msg/TrafficLightArray", "state"),
     ROUTE: ("nav_msgs/msg/Path", "latched"),
     GNSS_FIX: ("sensor_msgs/msg/NavSatFix", "state"),
-    GNSS_POSE: ("geometry_msgs/msg/PoseStamped", "state"),
+    GNSS_POSE: ("sensor_msgs/msg/NavSatFix", "state"),
     GNSS_IMU: ("sensor_msgs/msg/Imu", "state"),
     GNSS_VELOCITY: ("geometry_msgs/msg/TwistStamped", "state"),
     LIDAR_IMU: ("sensor_msgs/msg/Imu", "state"),
+    # Phase 5. Written only on a drive where something is actually driving - see
+    # `vehicle_state_message`, and `EngagementStatus`'s own note that absence is a state.
+    LIDAR_POINTS_COMPRESSED: (
+        "point_cloud_interfaces/msg/CompressedPointCloud2",
+        "sensor",
+    ),
+    # Written only on a drive with a model at the wheel. `model_info` is latched, which is
+    # what its own comment asks for, so a late joiner can always recover the weights' identity.
+    PREDICTED_TRAJECTORY: ("wing_msgs/msg/PredictedTrajectory", "sensor"),
+    INFERENCE_CONTROL: ("wing_msgs/msg/InferenceControlMsg", "sensor"),
+    MODEL_INFO: ("wing_msgs/msg/ModelInfo", "latched"),
+    VEHICLE_STATE: ("wing_msgs/msg/VehicleState", "state"),
+    VEHICLE_ENGAGEMENT: ("wing_msgs/msg/EngagementStatus", "state"),
+    CONTROL_ACTUATORS: ("wing_msgs/msg/ActuatorsOutput", "state"),
     # One per camera, latched: intrinsics do not change during an episode. `sensor_msgs/CameraInfo`
     # is core, so unlike every other topic still absent these needed no definition - only a rig.
     **{topic: ("sensor_msgs/msg/CameraInfo", "latched") for topic in CAMERA_INFO_TOPICS},
@@ -522,7 +645,7 @@ PHASE_TITLES: dict[int, str] = {
     2: "the SBG GNSS family",
     3: "/sensing/lidar/points",
     4: "image_raw/ffmpeg - the encoder",
-    5: "the fifteen rig-typed topics",
+    5: "the vehicle, control and model topics",
 }
 
 
@@ -550,7 +673,7 @@ def rig_coverage(written: set[str] | None = None) -> dict:
         produced = [row for row in declared if row.topic in written]
     absent: dict[int, list[RigTopic]] = {}
     for row in producible:
-        if row.phase is not None:
+        if row.phase is not None and not row.declared:
             absent.setdefault(row.phase, []).append(row)
     extras = [topic for topic in SIMULATOR_EXTRAS if topic in TOPICS]
     return {
@@ -566,6 +689,16 @@ def rig_coverage(written: set[str] | None = None) -> dict:
             for verdict in (DIRECT, APPROXIMATE, IMPOSSIBLE)
         },
     }
+
+
+#: Topics whose type is in hand and whose **builder** is not - the whole of what phase 5 has
+#: left. A different problem from a missing definition and worth a different name: nothing here
+#: is blocked on anyone, only on the values being put on the wire.
+AWAITING_BUILDER: dict[str, str] = {
+    row.topic: row.needs or ""
+    for row in RIG_TOPICS
+    if row.phase is not None and row.topic not in TOPICS
+}
 
 
 #: REP-105: `map` is the world, `base_link` is the car. Cameras hang off `base_link` in
@@ -645,6 +778,86 @@ class Ego:
     yaw_rate: float = 0.0
     roll: float = 0.0
     pitch: float = 0.0
+
+
+@dataclass(frozen=True)
+class Controls:
+    """What the drive commanded this step, and who commanded it.
+
+    Everything else in a `Frame` is *observed* - where the car ended up. This is the one thing
+    that is **commanded**, and the vehicle publishes both: `/vehicle/state` is what the car did
+    and `/control/openpilot/actuators` is what it was told to do. A bag with only the first can
+    show a model what happened and not what anyone asked for.
+
+    `steering` and `throttle_brake` are MetaDrive's own normalised action, straight off the
+    `env.step` that produced this frame. **`steering` is left-positive**, matching `Ego.heading`
+    and REP-103 and against CARLA's convention - see `docs/reference/openpilot-and-the-model.md`
+    for the drive where getting that backwards put the car smoothly into oncoming traffic.
+
+    `accel` and `steering_rate_deg_s` are differences across the last step and are computed by
+    the caller, which is the only place that has the previous frame. `VehicleState.a_ego`'s own
+    comment says the vehicle does exactly this - differenced by the publisher, not read off a
+    CAN signal, because the DBC declares no longitudinal accelerometer.
+    """
+
+    steering: float
+    """Normalised [-1, 1], **left-positive**."""
+    throttle_brake: float
+    """Normalised [-1, 1]: positive is throttle, negative is brake."""
+    max_steering_deg: float
+    """The vehicle's own `max_steering`, so a road-wheel angle is derivable from `steering`."""
+    policy: str
+    """What is driving - `idm`, `remote`, `replay`. Reported, never interpreted."""
+    engaged: bool
+    """Whether something is actually commanding the car this step."""
+    accel: float = 0.0
+    """m/s^2, differenced from the previous frame's speed."""
+    steering_rate_deg_s: float = 0.0
+    """deg/s, differenced from the previous frame's road-wheel angle."""
+
+    @property
+    def steering_angle_deg(self) -> float:
+        """The road-wheel angle, in **degrees** - which is what `wing_msgs` wants.
+
+        Every other angle in that package is SI and this one is not, deliberately: its own
+        comment records that the degree convention runs unbroken from the DBC through
+        `ControlCommand`, `ActuatorsOutput` and openpilot's `steeringAngleDeg`, and that
+        converting one link of the chain in isolation puts a factor of 57.3 somewhere no reader
+        would look for it. So the conversion happens here and nowhere else.
+        """
+        return self.steering * self.max_steering_deg
+
+    @property
+    def gas(self) -> float:
+        return max(0.0, self.throttle_brake)
+
+    @property
+    def brake(self) -> float:
+        return max(0.0, -self.throttle_brake)
+
+
+@dataclass(frozen=True)
+class ModelPrediction:
+    """One decision's output from the driving model, plus what identifies the model.
+
+    `waypoints` is the checkpoint's own `(N, 8)` array - `[x, y, yaw, yaw_rate, v_x, v_y, a_x,
+    a_y]`, `av3_model.MODELV2_OUTPUT_WIDTH` - and it is **in the model's frame**, which is
+    CARLA's: x forward, **y RIGHT**, yaw CW-positive. It is carried unconverted on purpose, so
+    that the one place a mirror happens is the builder, where it can be read.
+    """
+
+    waypoints: object
+    """`(N, 8)` float, in the **model's** frame. Mirrored on the way onto the wire."""
+    times_s: tuple[float, ...]
+    """`N` seconds from the image the prediction was made on. `av3_model.waypoint_times`."""
+    frame_counter: int
+    """`modelV2.frameId` - what correlates a trajectory with the camera frame it came from."""
+    model_name: str = ""
+    weight_name: str = ""
+    ego_x: float = 0.0
+    ego_y: float = 0.0
+    ego_heading: float = 0.0
+    """The pose the prediction was made from, which `InferenceControlMsg` carries beside it."""
 
 
 @dataclass(frozen=True)
@@ -803,6 +1016,12 @@ class Frame:
     lights: tuple[Light, ...] = ()
     route: tuple[tuple[float, float], ...] = ()
     projection: Projection | None = None
+    prediction: ModelPrediction | None = None
+    """`None` on every drive without a model at the wheel, which is most of them."""
+    controls: Controls | None = None
+    """`None` on a drive with nothing driving - a replay of a recorded tape, say. The three
+    phase-5 topics are then absent rather than zero-filled, which is what `EngagementStatus`'s
+    own comment asks for: *absence of this message is a state*."""
     extra: dict = field(default_factory=dict)
 
 
@@ -1116,11 +1335,213 @@ def gnss_fix_message(frame: Frame) -> dict | None:
     }
 
 
-def gnss_pose_message(frame: Frame) -> dict:
-    ego = frame.ego
+def gnss_pose_message(frame: Frame) -> dict | None:
+    """The receiver's fix, as a **`sensor_msgs/NavSatFix`** - which is what the vehicle publishes.
+
+    **This was `geometry_msgs/PoseStamped` from stage 10 until 2026-09-03, and it was wrong.**
+    Same topic name, different contents: a subscriber built against the vehicle would decode our
+    x/y/z/quaternion as a latitude, a longitude and an altitude and carry on, because CDR
+    carries no field names and there is nothing in the wire format to disagree with. It is
+    precisely the fault this module's opening paragraph warns about, and it survived three
+    stages because no check had the vehicle's own answer to compare against. The type table is
+    now derived from `tools/reference_bag.json`, so the comparison happens on every run.
+
+    Two GNSS topics now carry the same fix - this one and `GNSS_FIX` - which is not duplication
+    but what the vehicle does: `/sensing/gnss/pose` is the driver's own republication and
+    `/sensing/gnss/imu/nav_sat_fix` the IMU-framed one. They are built from one position, so
+    `ros_probe.py` requires them to agree to 0 m; two topics derived from one truth that
+    disagreed would mean one of the builders had drifted.
+
+    Returns `None` without a projection, exactly as `gnss_fix_message` does - a pose is not a
+    substitute for a fix and inventing lat/lon of 0/0 would put the car off West Africa.
+    """
+    found = _latlon(frame)
+    if found is None:
+        return None
+    latitude, longitude = found
     return {
-        "header": header(frame.sim_time_s, MAP_FRAME),
-        "pose": _pose(ego.x, ego.y, ego.z, ego.heading),
+        "header": header(frame.sim_time_s, BASE_FRAME),
+        "status": {"status": 0, "service": 1},
+        "latitude": latitude,
+        "longitude": longitude,
+        "altitude": frame.ego.z,
+        "position_covariance": [0.0] * 9,
+        "position_covariance_type": 0,
+    }
+
+
+#: A `{stamp, value}` pair whose stamp says the field has **never been filled**.
+#:
+#: `wing_msgs`' own convention, and the reason `VehicleState` wraps every field: *"a field whose
+#: stamp is zero has NEVER been filled - which finally makes the all-defaults hazard below
+#: diagnosable on the wire."* It is the same argument as NaN-rather-than-zero in the SBG family,
+#: except that here the message provides the mechanism instead of leaving it to a sentinel.
+#:
+#: **The vehicle uses it too**, which was measured rather than assumed: on a real message from
+#: `bags/074143`, `door_open`, `seatbelt_unlatched`, `blindspot_left`, `blindspot_right` and
+#: `cruise_speed` all carry a zero stamp. So a consumer already has to handle it.
+NEVER_FILLED: dict = {"sec": 0, "nanosec": 0}
+
+
+def _stamped(seconds: float, value) -> dict:
+    """One `Float64Stamped` / `BoolStamped` / `UInt8Stamped`, filled at this frame's time."""
+    return {"stamp": stamp(seconds), "value": value}
+
+
+def _unfilled(value) -> dict:
+    """The same, saying **no data**. The value is a type-correct placeholder, not a claim.
+
+    CDR has no null and the field has to serialise as *something*; the zero stamp beside it is
+    what says the something means nothing. A consumer reading the value without the stamp gets
+    the all-defaults hazard the type was designed to make diagnosable, which is why every
+    unfilled field here is one call rather than a literal at the call site.
+    """
+    return {"stamp": dict(NEVER_FILLED), "value": value}
+
+
+def vehicle_state_message(frame: Frame) -> dict | None:
+    """Everything the stack knows about the car, as `wing_msgs/VehicleState`.
+
+    Three of its own comments are the specification here, and each is silent when got wrong:
+
+    * **`steering_angle_deg` is degrees**, alone among the package's angles. Converted once, in
+      `Controls.steering_angle_deg`.
+    * **`wheel_speed_*` is m/s and all four carry the ego speed.** Not an approximation we chose:
+      the definition says exactly this about the CARLA bridge, because a simulator models no
+      per-wheel dynamics and the spread is therefore zero by construction rather than because the
+      car is going straight.
+    * **`cruise_standstill` is `False`, always.** The definition is explicit that a producer with
+      no ACC must publish false rather than copy `standstill` beside it, and records what the
+      substitution cost when three consumers made it: an engaged, unfaulted stack braking forever
+      with a healthy plan asking to accelerate, 5,066 cycles of it. We have no ACC loop to read
+      back, so the answer is false and it is a fact rather than a default.
+
+    **Seven fields are left unfilled**, with the zero stamp that says so. `steering_torque` and
+    `steering_pressed` are an EPS this car does not have; `door_open`, `seatbelt_unlatched` and
+    the two `blindspot_*` are body sensors it does not have either - and the vehicle itself
+    leaves five of those unfilled, so this is following the recording rather than inventing a
+    convention. `cruise_speed` likewise. A plausible `false` in any of them is a claim; a zero
+    stamp is the truth.
+
+    Returns `None` when nothing is driving. See `Frame.controls`.
+
+    **One collision worth knowing about**: this drive's clock starts at zero, so on frame 0 a
+    *filled* field carries the same stamp as an unfilled one. It is one frame of a recording and
+    it is stated rather than papered over - shifting the whole bag's clock to avoid it would
+    change every topic's stamps to fix a single frame.
+    """
+    controls = frame.controls
+    if controls is None:
+        return None
+    now, ego = frame.sim_time_s, frame.ego
+    wheel = _stamped(now, ego.speed)
+    return {
+        "header": header(now, BASE_FRAME),
+        "v_ego": _stamped(now, ego.speed),
+        "a_ego": _stamped(now, controls.accel),
+        # openpilot's own threshold, and the definition's: below this the car is not moving.
+        "standstill": _stamped(now, ego.speed < 0.01),
+        "cruise_standstill": _stamped(now, False),
+        "wheel_speed_front_left": dict(wheel),
+        "wheel_speed_front_right": dict(wheel),
+        "wheel_speed_rear_left": dict(wheel),
+        "wheel_speed_rear_right": dict(wheel),
+        "steering_angle_deg": _stamped(now, controls.steering_angle_deg),
+        "steering_rate_deg_s": _stamped(now, controls.steering_rate_deg_s),
+        "steering_torque": _unfilled(0.0),
+        "steering_pressed": _unfilled(False),
+        "gas": _stamped(now, controls.gas),
+        "brake": _stamped(now, controls.brake),
+        # No indicator model, and no turn is signalled. False is what the car does.
+        "left_blinker": _stamped(now, False),
+        "right_blinker": _stamped(now, False),
+        # There is no adaptive cruise here at all, so neither is a default: both are facts.
+        "cruise_enabled": _stamped(now, False),
+        "cruise_available": _stamped(now, False),
+        "cruise_speed": _unfilled(0.0),
+        # The simulated car is in drive whenever it is in a scenario; it has no reverse and
+        # never parks. `GEAR_DRIVE` is 2.
+        "gear": _stamped(now, 2),
+        "door_open": _unfilled(False),
+        "seatbelt_unlatched": _unfilled(False),
+        "blindspot_left": _unfilled(False),
+        "blindspot_right": _unfilled(False),
+    }
+
+
+def engagement_message(frame: Frame) -> dict | None:
+    """Whether something is driving, as `wing_msgs/EngagementStatus`.
+
+    On the vehicle this is a **read-out of openpilot's own state machine**, republished by the
+    cereal bridge - openpilot owns the panda enable line, so the ROS graph gets told rather than
+    asked. Here there is no such state machine, so the honest mapping is the narrow one: enabled
+    and active when a policy is commanding the car, `STATE_DISABLED` when one is not.
+
+    `engageable` is openpilot's own precondition check and we have no preconditions to check, so
+    it tracks `enabled`. The two alert strings carry the policy's name rather than an alert,
+    because a consumer looking at a bag deserves to know what drove it and there is no other
+    field that says.
+
+    Returns `None` when nothing is driving, which the definition asks for outright: *absence of
+    this message IS a state*, and a consumer is told to render "no data" as disengaged rather
+    than hold the last value.
+    """
+    controls = frame.controls
+    if controls is None:
+        return None
+    return {
+        "header": header(frame.sim_time_s, BASE_FRAME),
+        "state": 2 if controls.engaged else 0,  # STATE_ENABLED / STATE_DISABLED
+        "enabled": controls.engaged,
+        "active": controls.engaged,
+        "engageable": controls.engaged,
+        "alert_status": 0,  # ALERT_NORMAL
+        "alert_text1": f"simulated drive, policy {controls.policy}",
+        "alert_text2": "",
+    }
+
+
+def actuators_output_message(frame: Frame) -> dict | None:
+    """What the car was told to do, as `wing_msgs/ActuatorsOutput`.
+
+    The commanded half of the pair whose observed half is `vehicle_state_message`, and built
+    from the same `action` that `env.step` was given - so `steering_angle_deg` here and there
+    are one number reached by one path, which is what `ros_probe.py` requires of them.
+
+    `curvature` is the one field that is *not* a restatement of the command: it is
+    `yaw_rate / speed`, measured, and so it is a second opinion on the steering. A commanded
+    left turn and a measured right curvature cannot both be right, which makes the sign
+    checkable on our own bags rather than only against a vehicle.
+
+    `steer_output_can` is **NaN**: it is what the EPS reported back over CAN, there is no CAN
+    bus, and a zero there would say the steering column was commanded and did nothing.
+    """
+    controls = frame.controls
+    if controls is None:
+        return None
+    speed = frame.ego.speed
+    return {
+        "header": header(frame.sim_time_s, BASE_FRAME),
+        "log_mono_time": int(round(frame.sim_time_s * 1e9)),
+        "enabled": controls.engaged,
+        "lat_active": controls.engaged,
+        "long_active": controls.engaged,
+        "gas": controls.gas,
+        "brake": controls.brake,
+        "steer": controls.steering,
+        "steer_output_can": math.nan,
+        "steering_angle_deg": controls.steering_angle_deg,
+        # Commanded directly, with no lag between asking and getting, so desired and actual are
+        # one number. On the vehicle they differ by the EPS's response.
+        "steering_angle_desired_deg": controls.steering_angle_deg,
+        "steer_desired": controls.steering,
+        "curvature": (frame.ego.yaw_rate / speed) if speed > 0.1 else 0.0,
+        "speed": speed,
+        "accel": controls.accel,
+        # LONG_CONTROL_STATE_PID while something is driving, OFF when nothing is. The stopping
+        # and starting states belong to a longitudinal controller this drive does not run, and
+        # reporting one would describe a state machine that is not there.
+        "long_control_state": 1 if controls.engaged else 0,
     }
 
 
@@ -1568,6 +1989,239 @@ def lidar_points_message(frame: Frame) -> dict | None:
     }
 
 
+#: `sensor_msgs/PointField`'s UINT8 and FLOAT64, beside the FLOAT32 above. Needed because the
+#: vehicle's cloud carries three widths where ours carries one.
+POINTFIELD_UINT8 = 2
+POINTFIELD_FLOAT64 = 8
+
+#: The vehicle's own layout, read off a real message in `bags/074143` rather than chosen:
+#: four float32, two uint8, one float64, in this order, at this stride.
+COMPRESSED_FIELDS: tuple[tuple[str, int, int], ...] = (
+    ("x", POINTFIELD_FLOAT32, 4),
+    ("y", POINTFIELD_FLOAT32, 4),
+    ("z", POINTFIELD_FLOAT32, 4),
+    ("intensity", POINTFIELD_FLOAT32, 4),
+    ("tag", POINTFIELD_UINT8, 1),
+    ("line", POINTFIELD_UINT8, 1),
+    ("timestamp", POINTFIELD_FLOAT64, 8),
+)
+COMPRESSED_POINT_STEP = sum(width for _, _, width in COMPRESSED_FIELDS)
+
+#: The literal string the vehicle puts in `CompressedPointCloud2.format`. The field is free text
+#: and this is the only value that has been observed in it.
+COMPRESSED_FORMAT = "soa+zstd"
+
+#: The frame the vehicle's own lidar publishes in. Ours is `LIDAR_FRAME`; see `NAME_DRIFT`.
+#: Used here rather than `LIDAR_FRAME` because this topic *is* the vehicle's, and a consumer
+#: matching on `frame_id` should find what it expects.
+COMPRESSED_LIDAR_FRAME = RIG_LIDAR_FRAME
+
+
+def _byte_planes(values, width: int):
+    """One field's array as `width` byte-planes: plane `k` holds byte `k` of every value.
+
+    **This is what `soa+zstd` means**, decoded from a real message rather than inferred from the
+    name. It is *not* plain structure-of-arrays, and the difference is invisible in the sizes -
+    both arrangements are the same total length. What gives it away is that reading a real
+    payload as either plain SoA or plain AoS produces garbage floats while the one-byte fields
+    come out clean, which is exactly what a byte-plane shuffle does: a one-byte field has a
+    single plane and is unaffected by it.
+
+    The point of the shuffle is that a float32's four bytes compress terribly interleaved and
+    well separated - consecutive points share exponents and high mantissa bytes. Measured on the
+    vehicle: 2.7x, against a payload that is already the same bytes.
+    """
+    import numpy
+
+    raw = numpy.ascontiguousarray(values).view(numpy.uint8).reshape(-1, width)
+    return raw.T.reshape(-1)
+
+
+def compressed_lidar_message(frame: Frame) -> dict | None:
+    """The sweep as `point_cloud_interfaces/CompressedPointCloud2` - what the vehicle publishes.
+
+    The same rotated points `lidar_points_message` produces, in the vehicle's own layout and
+    under its own topic name. Both are written: this one is what the vehicle's consumers expect,
+    and the uncompressed one is what rviz2 and every stock ROS tool can open without a
+    decompressor node in front of it.
+
+    **Three of the seven fields are not ours to fill honestly**, and each is handled differently
+    rather than uniformly:
+
+    * `intensity` is a **return strength**, and a rendered depth buffer has none. NaN, the same
+      answer `sensor_msgs/Imu`'s linear acceleration gets: "this publisher does not produce this
+      quantity". Zero would read as a black surface at every point in the scene.
+    * `tag` is Livox's own return-quality bit-field - confidence in the point, whether it is
+      likely rain or dust. There is no analogue at all, and its "nothing to report" value is 0,
+      so 0 is both honest and in-band.
+    * `timestamp` is per point and real: a Livox sweeps, so each return has its own instant. Ours
+      is a single rendered buffer, so **every point carries the frame's own stamp** - which is
+      true, and is visibly different from a real sweep, whose 45,216 points span 100 ms.
+
+    `line`, the scan-line index, is the one of the three that maps: our cloud is organised as
+    `height` beams of `width` rays, so a point's row *is* its line.
+    """
+    cloud = frame.extra.get("lidar")
+    if cloud is None:
+        return None
+    import numpy
+    import zstandard
+
+    plain = lidar_points_message(frame)
+    xyz = numpy.asarray(plain["data"]).view("<f4").reshape(-1, 3)
+    count = xyz.shape[0]
+    height, width = plain["height"], plain["width"]
+
+    planes = [
+        _byte_planes(numpy.ascontiguousarray(xyz[:, 0]), 4),
+        _byte_planes(numpy.ascontiguousarray(xyz[:, 1]), 4),
+        _byte_planes(numpy.ascontiguousarray(xyz[:, 2]), 4),
+        _byte_planes(numpy.full(count, numpy.nan, dtype="<f4"), 4),
+        numpy.zeros(count, dtype=numpy.uint8),
+        numpy.repeat(numpy.arange(height, dtype=numpy.uint8), width),
+        _byte_planes(numpy.full(count, float(frame.sim_time_s), dtype="<f8"), 8),
+    ]
+    payload = numpy.concatenate(planes).tobytes()
+
+    offset, fields = 0, []
+    for name, datatype, field_width in COMPRESSED_FIELDS:
+        fields.append({"name": name, "offset": offset, "datatype": datatype, "count": 1})
+        offset += field_width
+    return {
+        "header": header(frame.sim_time_s, COMPRESSED_LIDAR_FRAME),
+        "height": height,
+        "width": width,
+        "fields": fields,
+        "is_bigendian": False,
+        "point_step": COMPRESSED_POINT_STEP,
+        "row_step": COMPRESSED_POINT_STEP * width,
+        "compressed_data": numpy.frombuffer(
+            zstandard.ZstdCompressor().compress(payload), dtype=numpy.uint8
+        ),
+        "is_dense": plain["is_dense"],
+        "format": COMPRESSED_FORMAT,
+    }
+
+
+#: Which columns of the model's `(N, 8)` output are **lateral** and therefore flip when the
+#: prediction crosses from the model's frame into REP-103.
+#:
+#: `[x, y, yaw, yaw_rate, v_x, v_y, a_x, a_y]`, so: `y`, `yaw`, `yaw_rate`, `v_y`, `a_y`. The
+#: longitudinal four do not move. `av3_model.py`'s docstring states the same mirror in the other
+#: direction and warns what half of it costs: *"getting half of it right steers smoothly into
+#: the oncoming carriageway with nothing raising"*.
+MIRRORED_COLUMNS: tuple[int, ...] = (1, 2, 3, 5, 7)
+
+
+def predicted_trajectory_message(frame: Frame) -> dict | None:
+    """Where the model wants the car to be, as `wing_msgs/PredictedTrajectory`.
+
+    **The frame is the whole of this function and the only thing in it that can be wrong.**
+
+    The type's own comment is unusually explicit, because it was wrong for months and says so:
+    *"⚠️ NOT openpilot's frame, which this comment claimed until 2026-08-03."* What it carries is
+    REP-103 - x forward, **y LEFT**, `orientation_z` CCW-positive - and it is the consumer
+    writing into cereal that owes the flip into openpilot's device frame, not us.
+
+    Our checkpoint emits the opposite handedness: `av3_model` feeds it a route mirrored out of
+    MetaDrive's frame and gets back `(N, 8)` in the model's own, y-RIGHT and yaw CW-positive. So
+    the mirror runs **backwards here**, on exactly the five columns in `MIRRORED_COLUMNS`.
+
+    Getting it wrong produces a trajectory that is a plausible drive down a plausible road, on
+    the wrong side of it, with nothing raising anything - which is the failure `av3_model`'s
+    docstring and `openpilot-and-the-model.md` both record, and the reason the flip is one
+    named constant applied once rather than five sign changes spread across a builder.
+
+    Returns `None` on every drive without a model.
+    """
+    prediction = frame.prediction
+    if prediction is None:
+        return None
+    import numpy
+
+    rows = numpy.array(prediction.waypoints, dtype=numpy.float64, copy=True)
+    if rows.ndim != 2 or rows.shape[1] < 8:
+        raise ValueError(f"a model prediction is (N, 8); got {rows.shape}")
+    rows[:, MIRRORED_COLUMNS] *= -1.0
+    times = list(prediction.times_s)
+    if len(times) != rows.shape[0]:
+        raise ValueError(f"{len(times)} waypoint times for {rows.shape[0]} waypoints")
+    return {
+        "header": header(frame.sim_time_s, BASE_FRAME),
+        "frame_counter": int(prediction.frame_counter),
+        # The camera frame's own instant. This drive's clock is the bag's, so it is the frame
+        # time in nanoseconds rather than a separate camera clock - there is only one.
+        "img_tstamp": int(round(frame.sim_time_s * 1e9)),
+        "position_t": times,
+        "position_x": rows[:, 0].tolist(),
+        "position_y": rows[:, 1].tolist(),
+        "velocity_x": rows[:, 4].tolist(),
+        "velocity_y": rows[:, 5].tolist(),
+        "acceleration_x": rows[:, 6].tolist(),
+        "acceleration_y": rows[:, 7].tolist(),
+        "orientation_z": rows[:, 2].tolist(),
+        "orientation_rate_z": rows[:, 3].tolist(),
+    }
+
+
+def inference_control_message(frame: Frame) -> dict | None:
+    """The same trajectory flattened, beside the pose it was predicted from.
+
+    `wing_msgs/InferenceControlMsg`, and its own comment says what it is: *"the predicted
+    trajectory plus the pose it was predicted from"* - an output, not the model's input, despite
+    the name. The layout is carried field-for-field from a ROS 1 package and must not be
+    reordered, so the `Float64MultiArray` is given an explicit two-dimensional layout rather
+    than a bare flat list: a consumer reshaping by a guessed width is a consumer that transposes
+    the trajectory the first time the waypoint count changes.
+
+    The rows are the **mirrored** ones, so this and `predicted_trajectory_message` describe one
+    trajectory in one frame rather than two in two.
+    """
+    prediction = frame.prediction
+    if prediction is None:
+        return None
+    import numpy
+
+    rows = numpy.array(prediction.waypoints, dtype=numpy.float64, copy=True)
+    rows[:, MIRRORED_COLUMNS] *= -1.0
+    count, width = rows.shape
+    return {
+        "waypoints": {
+            "layout": {
+                "dim": [
+                    {"label": "waypoint", "size": int(count), "stride": int(count * width)},
+                    {"label": "field", "size": int(width), "stride": int(width)},
+                ],
+                "data_offset": 0,
+            },
+            "data": rows.reshape(-1).tolist(),
+        },
+        "x": float(prediction.ego_x),
+        "y": float(prediction.ego_y),
+        "theta": float(prediction.ego_heading),
+        "frame_counter": int(prediction.frame_counter),
+        "img_tstamp": int(round(frame.sim_time_s * 1e9)),
+    }
+
+
+def model_info_message(frame: Frame) -> dict | None:
+    """Which model produced the trajectories, as `wing_msgs/ModelInfo`. Latched, written once.
+
+    The type exists because this was previously unrecordable: *"the model identity travelled
+    only as launch parameters into wing_ui and an RCLCPP_INFO line - neither lands in a bag
+    reliably, so a recorded drive could not say which weights produced its trajectories."* The
+    same is true of a drive here, so the same answer applies.
+    """
+    prediction = frame.prediction
+    if prediction is None:
+        return None
+    return {
+        "header": header(frame.sim_time_s, BASE_FRAME),
+        "model_name": prediction.model_name,
+        "weight_name": prediction.weight_name,
+    }
+
+
 #: `AV_PKT_FLAG_KEY`, libav's own value, which is what `ffmpeg_image_transport` copies into
 #: `FFMPEGPacket.flags`. A decoder that joins mid-stream looks for this and nothing else.
 PACKET_FLAG_KEY = 1
@@ -1644,6 +2298,14 @@ BUILDERS = {
     GNSS_POS_ECEF: pos_ecef_message,
     GNSS_UTC_REF: utc_ref_message,
     LIDAR_POINTS: lidar_points_message,
+    LIDAR_POINTS_COMPRESSED: compressed_lidar_message,
+    PREDICTED_TRAJECTORY: predicted_trajectory_message,
+    INFERENCE_CONTROL: inference_control_message,
+    MODEL_INFO: model_info_message,
+    # Phase 5. All three return None when nothing is driving, so a replay writes none of them.
+    VEHICLE_STATE: vehicle_state_message,
+    VEHICLE_ENGAGEMENT: engagement_message,
+    CONTROL_ACTUATORS: actuators_output_message,
     **{
         camera_topic(name, "image_raw/ffmpeg"): _camera_packet_builder(name)
         for name in _CAMERAS

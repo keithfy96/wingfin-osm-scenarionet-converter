@@ -454,9 +454,10 @@ These describe *what runs*, and are deliberately distinct from `docs/implementat
   stamp and header still correct. A 7-camera rig plus `--ros-lidar` is 8; `drive.py` refuses it.
 - **A `.msg` in `EXTRA_DEFINITIONS` no topic writes is unchecked** — `FFMPEGPacket` sat there
   wrong in four ways until phase 4 wrote it. Copy upstream verbatim, pin it in a test.
-- **The rig's message types come out of any bag it recorded, never out of `bag_audit.html`** —
-  `tools/ros_defs.py <bag> --write tools/wingfin_msgs --package wingfin_msgs`. Ours share that
-  namespace, so a differing definition is refused, not overwritten.
+- **`bags/074143` is the vehicle's own bag and the ledger is derived from it** — its types, not
+  `bag_audit.html`'s. It is truncated (the library refuses it; `scan_mcap` reads forwards) and
+  **stationary**, so it settles types and encodings but never a sign. Package: `wing_msgs`;
+  `wingfin_msgs` is ours.
 - **`CameraRig.read()` is BGR**, whatever `get_rgb_array_cpu` is called; and two decoded H.264
   frames are never bit-identical even from one identical source, so a held-frame check written
   with `==` passes on a bag that is entirely held frames.

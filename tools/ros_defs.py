@@ -52,6 +52,8 @@ is the honest answer, and it is the one thing worth checking first on a bag off 
 from __future__ import annotations
 
 import argparse
+import json
+import struct
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -126,38 +128,186 @@ def split(msgtype: str, text: str) -> dict[str, str]:
     return out
 
 
-def read(path) -> tuple[dict[str, Definition], list[tuple[str, str]]]:
-    """Every definition in a bag, plus `(topic, type)` for connections that recorded none."""
+#: MCAP's file header. A file that does not start with this is not an MCAP at all.
+MCAP_MAGIC = b"\x89MCAP0\r\n"
+
+#: The three record opcodes the front scan cares about. Everything else is skipped by length.
+OP_SCHEMA, OP_CHANNEL, OP_CHUNK = 0x03, 0x04, 0x06
+
+
+def _mcap_string(buf: bytes, offset: int) -> tuple[str, int]:
+    """One MCAP `string`: a uint32 length then that many UTF-8 bytes."""
+    length = struct.unpack_from("<I", buf, offset)[0]
+    text = buf[offset + 4 : offset + 4 + length].decode("utf-8", "replace")
+    return text, offset + 4 + length
+
+
+def _scan_records(buf: bytes, schemas: dict, channels: dict) -> None:
+    """Pull `Schema` and `Channel` records out of one run of MCAP records."""
+    offset = 0
+    while offset + 9 <= len(buf):
+        opcode = buf[offset]
+        length = struct.unpack_from("<Q", buf, offset + 1)[0]
+        body = buf[offset + 9 : offset + 9 + length]
+        if opcode == OP_SCHEMA:
+            identifier = struct.unpack_from("<H", body, 0)[0]
+            name, cursor = _mcap_string(body, 2)
+            encoding, cursor = _mcap_string(body, cursor)
+            size = struct.unpack_from("<I", body, cursor)[0]
+            text = body[cursor + 4 : cursor + 4 + size].decode("utf-8", "replace")
+            schemas[identifier] = (name, encoding, text)
+        elif opcode == OP_CHANNEL:
+            identifier = struct.unpack_from("<H", body, 0)[0]
+            schema_id = struct.unpack_from("<H", body, 2)[0]
+            topic, _ = _mcap_string(body, 4)
+            channels[identifier] = (schema_id, topic)
+        offset += 9 + length
+
+
+def scan_mcap(path: Path, chunk_budget: int = 64) -> list:
+    """Every `(topic, type, definition)` in an MCAP, read **forwards from the header**.
+
+    The fallback for a bag `rosbags` will not open, and the case that matters is not exotic: a
+    recording pulled off a vehicle is **truncated**, because the recorder was killed or the copy
+    was cut short, and rosbag2 writes its summary section at the *end*. `Reader` seeks there
+    first and raises `File end magic is invalid` having read nothing - so the one bag that could
+    unblock this stage was the one bag the tool could not open. Measured on
+    `bags/074143/drive_20260826-074143_0.mcap`: 14.7 GB, no end magic, and all 30 of its schemas
+    sitting intact in the first 28 MB.
+
+    Nothing here inflates a payload it does not have to. Top-level records are walked by length,
+    which is a seek rather than a read, and a `Chunk` is decompressed only until every channel
+    has been seen. `chunk_budget` bounds that: rosbag2 writes its schemas and channels into the
+    first chunks, so the scan stops long before the data does.
+
+    Returns the same shape `Reader.connections` gives us - topic, type, `.msg` text - so `read`
+    can treat the two paths identically rather than growing a second parser downstream.
+    """
+    schemas: dict[int, tuple[str, str, str]] = {}
+    channels: dict[int, tuple[int, str]] = {}
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        if handle.read(len(MCAP_MAGIC)) != MCAP_MAGIC:
+            raise ValueError(f"{path} does not begin with the MCAP header - not an MCAP file")
+        offset, chunks = len(MCAP_MAGIC), 0
+        while offset < size and chunks < chunk_budget:
+            handle.seek(offset)
+            head = handle.read(9)
+            if len(head) < 9:
+                break
+            opcode = head[0]
+            length = struct.unpack_from("<Q", head, 1)[0]
+            if opcode == OP_CHUNK:
+                chunks += 1
+                raw = handle.read(length)
+                # message_start, message_end, uncompressed_size (uint64 x3) then crc (uint32).
+                cursor = 8 + 8 + 8 + 4
+                compression, cursor = _mcap_string(raw, cursor)
+                records_length = struct.unpack_from("<Q", raw, cursor)[0]
+                payload = raw[cursor + 8 : cursor + 8 + records_length]
+                if compression == "zstd":
+                    import zstandard
+
+                    # `decompress()` needs the content size in the frame header and raises
+                    # "error determining content size" on a frame written without one - which
+                    # rosbag2 does for some chunks and not others in one file, so the failure
+                    # appears partway through a scan rather than at the start. A stream reader
+                    # has no such requirement.
+                    payload = zstandard.ZstdDecompressor().stream_reader(payload).read(
+                        MAX_CHUNK_BYTES
+                    )
+                elif compression == "lz4":
+                    import lz4.frame
+
+                    payload = lz4.frame.decompress(payload)
+                elif compression:
+                    raise ValueError(f"{path}: unknown chunk compression {compression!r}")
+                _scan_records(payload, schemas, channels)
+            else:
+                _scan_records(head + handle.read(length), schemas, channels)
+            offset += 9 + length
+
+    out = []
+    for schema_id, topic in channels.values():
+        name, _encoding, text = schemas.get(schema_id, ("", "", ""))
+        out.append((topic, name, text))
+    return out
+
+
+#: Ceiling on one decompressed chunk. rosbag2's are a few MB; this is a guard against a corrupt
+#: length field turning into an allocation, not a tuning knob.
+MAX_CHUNK_BYTES = 1 << 30
+
+
+def _connections(path):
+    """`(topic, msgtype, definition text)` for every connection, whichever reader can get them.
+
+    `Reader` first, because it understands every storage rosbag2 writes and validates as it goes.
+    The front scan is the fallback and only for MCAP, which is the format a truncated file
+    actually arrives in.
+    """
     from rosbags.interfaces import MessageDefinitionFormat
     from rosbags.rosbag2 import Reader
 
+    try:
+        with Reader(path) as reader:
+            out = []
+            for connection in reader.connections:
+                definition = connection.msgdef
+                # `msgdef` is a `MessageDefinition`, not a string, and has `.data` / `.format` -
+                # not `.encoding`. Tolerating a bare string costs one `getattr` and keeps this
+                # working against the older `rosbags` the container may pin.
+                body = getattr(definition, "data", definition) or ""
+                fmt = getattr(definition, "format", MessageDefinitionFormat.MSG)
+                if fmt == MessageDefinitionFormat.NONE:
+                    body = ""
+                out.append((connection.topic, connection.msgtype, body))
+            return out, False
+    except Exception as error:  # noqa: BLE001 - rosbags raises several unrelated types
+        mcaps = sorted(Path(path).glob("*.mcap")) if Path(path).is_dir() else [Path(path)]
+        mcaps = [one for one in mcaps if one.suffix == ".mcap"]
+        if not mcaps:
+            raise
+        out = []
+        for one in mcaps:
+            out.extend(scan_mcap(one))
+        print(
+            f"  ! {type(error).__name__}: {error}\n"
+            "    Read forwards from the header instead - the summary section at the end of the\n"
+            "    file is missing or unreadable, which is what a truncated recording looks like.",
+            file=sys.stderr,
+        )
+        return out, True
+
+
+def read(path) -> tuple[dict[str, Definition], list[tuple[str, str]]]:
+    """Every definition in a bag, plus `(topic, type)` for connections that recorded none."""
     path = ros_audit.refuse_if_missing(path)
 
     found: dict[str, Definition] = {}
     undefined: list[tuple[str, str]] = []
-    with Reader(path) as reader:
-        for connection in reader.connections:
-            definition = connection.msgdef
-            # `msgdef` is a `MessageDefinition`, not a string, and has `.data` / `.format` - not
-            # `.encoding`. Tolerating a bare string here costs one `getattr` and keeps this
-            # working against the older `rosbags` the container may pin.
-            body = getattr(definition, "data", definition) or ""
-            fmt = getattr(definition, "format", MessageDefinitionFormat.MSG)
-            if not body or fmt == MessageDefinitionFormat.NONE:
-                undefined.append((connection.topic, connection.msgtype))
-                continue
-            if fmt == MessageDefinitionFormat.IDL:
-                # Kept whole. IDL does not split on `MSG:` and does not paste into
-                # `EXTRA_DEFINITIONS`, which is `.msg` text; saying so beats emitting something
-                # that looks pasteable and is not.
-                pieces = {normalise(connection.msgtype): body}
-            else:
-                pieces = split(connection.msgtype, body)
-            for name, text in pieces.items():
-                entry = found.setdefault(name, Definition(name=name, text=text))
-                if entry.text != text and text not in entry.conflicts:
-                    entry.conflicts.append(text)
-                entry.topics.append(connection.topic)
+    for topic, msgtype, body in _connections(path)[0]:
+        if not body:
+            undefined.append((topic, msgtype))
+            continue
+        if body.lstrip().startswith("module "):
+            # IDL, kept whole. It does not split on `MSG:` and does not paste into
+            # `EXTRA_DEFINITIONS`, which is `.msg` text; saying so beats emitting something that
+            # looks pasteable and is not.
+            pieces = {normalise(msgtype): body}
+        else:
+            pieces = split(msgtype, body)
+        for name, text in pieces.items():
+            entry = found.setdefault(name, Definition(name=name, text=text))
+            if entry.text != text and text not in entry.conflicts:
+                entry.conflicts.append(text)
+            # **Only the connection's own type gets the topic.** A concatenated definition also
+            # carries every type it depends on, and crediting those with the topic makes
+            # `std_msgs/Header` look like the type of all fifty channels - which is exactly what
+            # it did, reporting `/vehicle/state  std_msgs/msg/Header` from the first `setdefault`
+            # that happened to win. A dependency-only type having no topics is the true answer.
+            if name == normalise(msgtype):
+                entry.topics.append(topic)
     return found, undefined
 
 
@@ -252,8 +402,17 @@ def blocked_report(found: dict[str, Definition], out) -> None:
     recorder filed it under. A bag that carries fourteen of the fifteen is a bag worth having and
     is not the end of the job, and only a per-topic list says which one is short.
     """
-    waiting = sorted(ros_schema.MISSING_DEFINITIONS)
+    waiting = sorted(ros_schema.MISSING_DEFINITIONS or ros_schema.AWAITING_BUILDER)
     if not waiting:
+        # **The end state**, and worth printing rather than falling silent: a reader pointing
+        # this at a bag is asking what is still missing, and "nothing" is an answer where an
+        # empty section is a broken tool.
+        print(
+            "\n  every topic the vehicle publishes and a simulator can honestly produce is "
+            "written.\n  What is left out is left out on purpose - "
+            "tools/ros_probe.py --coverage says which, and why.",
+            file=out,
+        )
         return
     by_topic: dict[str, str] = {}
     for entry in found.values():
@@ -261,15 +420,14 @@ def blocked_report(found: dict[str, Definition], out) -> None:
             by_topic.setdefault(topic, entry.name)
 
     covered = [topic for topic in waiting if topic in by_topic]
-    print(f"\n  the {len(waiting)} topics phase 5 waits on: {len(covered)} carried by this bag",
-          file=out)
+    label = "waiting on a .msg" if ros_schema.MISSING_DEFINITIONS else "phase 5 still has to build"
+    print(f"\n  the {len(waiting)} topics {label}: {len(covered)} carried by this bag", file=out)
     for topic in waiting:
         name = by_topic.get(topic)
         print(f"    {'+' if name else '-'} {topic}  {name or 'not in this bag'}", file=out)
     if not covered:
         print(
-            "  None of them. This is a bag of ours, not one off the rig - the definitions the\n"
-            "  fifteen need live in the rig's own ros2_mig_phase_5_p1 bag and nowhere else.",
+            "  None of them - this is a bag of ours, not one off the vehicle.",
             file=out,
         )
 
@@ -284,6 +442,42 @@ def render(entry: Definition) -> str:
         return single
     joined = "\n".join(body)
     return f'    "{entry.name}": (\n{joined}\n    ),'
+
+
+def reference_table(path) -> dict:
+    """The bag's own topic table - name, type, message count - plus its duration.
+
+    Read out of `metadata.yaml` rather than the MCAP, because a **truncated** recording has no
+    summary section and therefore no statistics record: the counts survive only in the sidecar
+    rosbag2 writes as it goes. `bags/074143` is exactly that case.
+
+    This is what `ros_schema.RIG_TOPICS` is built from. The bag itself is 14.7 GB and `bags/` is
+    not tracked, so the ledger cannot read it at import; vendoring this table as JSON keeps the
+    coverage figure **derived from the vehicle's own recording** while staying diffable, present
+    in every checkout, and re-derivable in one command.
+    """
+    import yaml
+
+    path = ros_audit.refuse_if_missing(path)
+    meta = Path(path) / "metadata.yaml" if Path(path).is_dir() else Path(path)
+    loaded = yaml.safe_load(meta.read_text(encoding="utf-8"))["rosbag2_bagfile_information"]
+    duration = loaded["duration"]["nanoseconds"] / 1e9
+    topics = {}
+    for row in loaded["topics_with_message_count"]:
+        data = row["topic_metadata"]
+        topics[data["name"]] = {
+            "type": data["type"],
+            "count": row["message_count"],
+            # Two decimals: the point of a rate here is "which family does this belong to", and
+            # more digits invite a reader to treat a recording's jitter as a specification.
+            "hz": round(row["message_count"] / duration, 2) if duration else None,
+        }
+    return {
+        "bag": Path(path).name,
+        "duration_s": round(duration, 2),
+        "message_count": loaded["message_count"],
+        "topics": dict(sorted(topics.items())),
+    }
 
 
 def report(path, show_all=False, out=None, write=None, force=False, package=None) -> bool:
@@ -374,6 +568,12 @@ def main(argv=None):
         "holds one package, the way tools/sbg_msgs/ holds sbg_driver",
     )
     parser.add_argument(
+        "--reference",
+        metavar="JSON",
+        help="write the bag's topic/type/rate table to JSON instead of reading definitions; "
+        "this is what tools/reference_bag.json is regenerated with",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="with --write, overwrite a file that holds a different definition of the same type",
@@ -381,6 +581,16 @@ def main(argv=None):
     arguments = parser.parse_args(argv)
     # A refusal, not a traceback -- see the same guard in `ros_audit.main` and `ros_probe.main`.
     try:
+        if arguments.reference:
+            table = reference_table(arguments.bag)
+            Path(arguments.reference).write_text(
+                json.dumps(table, indent=2) + "\n", encoding="utf-8"
+            )
+            print(
+                f"{arguments.reference}: {len(table['topics'])} topics, "
+                f"{table['message_count']} messages over {table['duration_s']} s"
+            )
+            return 0
         return (
             0
             if report(

@@ -1,0 +1,257 @@
+{
+  "bag": "074143",
+  "duration_s": 3783.56,
+  "message_count": 6267599,
+  "topics": {
+    "/control/openpilot/actuators": {
+      "type": "wing_msgs/msg/ActuatorsOutput",
+      "count": 361800,
+      "hz": 95.62
+    },
+    "/control/predicted_trajectory": {
+      "type": "wing_msgs/msg/PredictedTrajectory",
+      "count": 37279,
+      "hz": 9.85
+    },
+    "/diagnostics": {
+      "type": "diagnostic_msgs/msg/DiagnosticArray",
+      "count": 18991,
+      "hz": 5.02
+    },
+    "/localization/odometry": {
+      "type": "nav_msgs/msg/Odometry",
+      "count": 192040,
+      "hz": 50.76
+    },
+    "/perception/inference_control": {
+      "type": "wing_msgs/msg/InferenceControlMsg",
+      "count": 37838,
+      "hz": 10.0
+    },
+    "/perception/model_info": {
+      "type": "wing_msgs/msg/ModelInfo",
+      "count": 2,
+      "hz": 0.0
+    },
+    "/rosout": {
+      "type": "rcl_interfaces/msg/Log",
+      "count": 6679,
+      "hz": 1.77
+    },
+    "/sensing/cabin/audio_info": {
+      "type": "audio_common_msgs/msg/AudioInfo",
+      "count": 758,
+      "hz": 0.2
+    },
+    "/sensing/cabin/audio_stamped": {
+      "type": "audio_common_msgs/msg/AudioDataStamped",
+      "count": 378333,
+      "hz": 99.99
+    },
+    "/sensing/cabin/camera_info_latched": {
+      "type": "sensor_msgs/msg/CameraInfo",
+      "count": 1,
+      "hz": 0.0
+    },
+    "/sensing/cabin/image_raw/ffmpeg": {
+      "type": "ffmpeg_image_transport_msgs/msg/FFMPEGPacket",
+      "count": 56758,
+      "hz": 15.0
+    },
+    "/sensing/camera/cam_sync_rig/front_left/camera_info_latched": {
+      "type": "sensor_msgs/msg/CameraInfo",
+      "count": 1,
+      "hz": 0.0
+    },
+    "/sensing/camera/cam_sync_rig/front_left/image_raw/ffmpeg": {
+      "type": "ffmpeg_image_transport_msgs/msg/FFMPEGPacket",
+      "count": 75669,
+      "hz": 20.0
+    },
+    "/sensing/camera/cam_sync_rig/front_left/meta": {
+      "type": "flir_camera_msgs/msg/ImageMetaData",
+      "count": 75660,
+      "hz": 20.0
+    },
+    "/sensing/camera/cam_sync_rig/front_middle/camera_info_latched": {
+      "type": "sensor_msgs/msg/CameraInfo",
+      "count": 1,
+      "hz": 0.0
+    },
+    "/sensing/camera/cam_sync_rig/front_middle/image_raw/ffmpeg": {
+      "type": "ffmpeg_image_transport_msgs/msg/FFMPEGPacket",
+      "count": 75674,
+      "hz": 20.0
+    },
+    "/sensing/camera/cam_sync_rig/front_middle/meta": {
+      "type": "flir_camera_msgs/msg/ImageMetaData",
+      "count": 75660,
+      "hz": 20.0
+    },
+    "/sensing/camera/cam_sync_rig/front_right/camera_info_latched": {
+      "type": "sensor_msgs/msg/CameraInfo",
+      "count": 1,
+      "hz": 0.0
+    },
+    "/sensing/camera/cam_sync_rig/front_right/image_raw/ffmpeg": {
+      "type": "ffmpeg_image_transport_msgs/msg/FFMPEGPacket",
+      "count": 75668,
+      "hz": 20.0
+    },
+    "/sensing/camera/cam_sync_rig/front_right/meta": {
+      "type": "flir_camera_msgs/msg/ImageMetaData",
+      "count": 75659,
+      "hz": 20.0
+    },
+    "/sensing/camera/cam_sync_rig/rear_left/camera_info_latched": {
+      "type": "sensor_msgs/msg/CameraInfo",
+      "count": 1,
+      "hz": 0.0
+    },
+    "/sensing/camera/cam_sync_rig/rear_left/image_raw/ffmpeg": {
+      "type": "ffmpeg_image_transport_msgs/msg/FFMPEGPacket",
+      "count": 75668,
+      "hz": 20.0
+    },
+    "/sensing/camera/cam_sync_rig/rear_left/meta": {
+      "type": "flir_camera_msgs/msg/ImageMetaData",
+      "count": 75659,
+      "hz": 20.0
+    },
+    "/sensing/camera/cam_sync_rig/rear_middle/camera_info_latched": {
+      "type": "sensor_msgs/msg/CameraInfo",
+      "count": 1,
+      "hz": 0.0
+    },
+    "/sensing/camera/cam_sync_rig/rear_middle/image_raw/ffmpeg": {
+      "type": "ffmpeg_image_transport_msgs/msg/FFMPEGPacket",
+      "count": 75668,
+      "hz": 20.0
+    },
+    "/sensing/camera/cam_sync_rig/rear_middle/meta": {
+      "type": "flir_camera_msgs/msg/ImageMetaData",
+      "count": 75659,
+      "hz": 20.0
+    },
+    "/sensing/camera/cam_sync_rig/rear_right/camera_info_latched": {
+      "type": "sensor_msgs/msg/CameraInfo",
+      "count": 1,
+      "hz": 0.0
+    },
+    "/sensing/camera/cam_sync_rig/rear_right/image_raw/ffmpeg": {
+      "type": "ffmpeg_image_transport_msgs/msg/FFMPEGPacket",
+      "count": 75671,
+      "hz": 20.0
+    },
+    "/sensing/camera/cam_sync_rig/rear_right/meta": {
+      "type": "flir_camera_msgs/msg/ImageMetaData",
+      "count": 75660,
+      "hz": 20.0
+    },
+    "/sensing/gnss/ekf_euler": {
+      "type": "sbg_driver/msg/SbgEkfEuler",
+      "count": 189279,
+      "hz": 50.03
+    },
+    "/sensing/gnss/ekf_nav": {
+      "type": "sbg_driver/msg/SbgEkfNav",
+      "count": 189277,
+      "hz": 50.03
+    },
+    "/sensing/gnss/ekf_quat": {
+      "type": "sbg_driver/msg/SbgEkfQuat",
+      "count": 189280,
+      "hz": 50.03
+    },
+    "/sensing/gnss/gps_pos": {
+      "type": "sbg_driver/msg/SbgGpsPos",
+      "count": 18928,
+      "hz": 5.0
+    },
+    "/sensing/gnss/gps_vel": {
+      "type": "sbg_driver/msg/SbgGpsVel",
+      "count": 18928,
+      "hz": 5.0
+    },
+    "/sensing/gnss/imu/data": {
+      "type": "sensor_msgs/msg/Imu",
+      "count": 189169,
+      "hz": 50.0
+    },
+    "/sensing/gnss/imu/nav_sat_fix": {
+      "type": "sensor_msgs/msg/NavSatFix",
+      "count": 18917,
+      "hz": 5.0
+    },
+    "/sensing/gnss/imu/pos_ecef": {
+      "type": "geometry_msgs/msg/PointStamped",
+      "count": 189169,
+      "hz": 50.0
+    },
+    "/sensing/gnss/imu/temp": {
+      "type": "sensor_msgs/msg/Temperature",
+      "count": 189169,
+      "hz": 50.0
+    },
+    "/sensing/gnss/imu/utc_ref": {
+      "type": "sensor_msgs/msg/TimeReference",
+      "count": 3783,
+      "hz": 1.0
+    },
+    "/sensing/gnss/imu/velocity": {
+      "type": "geometry_msgs/msg/TwistStamped",
+      "count": 756678,
+      "hz": 199.99
+    },
+    "/sensing/gnss/imu_data": {
+      "type": "sbg_driver/msg/SbgImuData",
+      "count": 189281,
+      "hz": 50.03
+    },
+    "/sensing/gnss/pose": {
+      "type": "sensor_msgs/msg/NavSatFix",
+      "count": 191047,
+      "hz": 50.49
+    },
+    "/sensing/gnss/status": {
+      "type": "sbg_driver/msg/SbgStatus",
+      "count": 3783,
+      "hz": 1.0
+    },
+    "/sensing/gnss/utc_time": {
+      "type": "sbg_driver/msg/SbgUtcTime",
+      "count": 3783,
+      "hz": 1.0
+    },
+    "/sensing/lidar/imu": {
+      "type": "sensor_msgs/msg/Imu",
+      "count": 768243,
+      "hz": 203.05
+    },
+    "/sensing/lidar/points/soa_zstd": {
+      "type": "point_cloud_interfaces/msg/CompressedPointCloud2",
+      "count": 37836,
+      "hz": 10.0
+    },
+    "/tf": {
+      "type": "tf2_msgs/msg/TFMessage",
+      "count": 381732,
+      "hz": 100.89
+    },
+    "/tf_static": {
+      "type": "tf2_msgs/msg/TFMessage",
+      "count": 2,
+      "hz": 0.0
+    },
+    "/vehicle/engagement": {
+      "type": "wing_msgs/msg/EngagementStatus",
+      "count": 364473,
+      "hz": 96.33
+    },
+    "/vehicle/state": {
+      "type": "wing_msgs/msg/VehicleState",
+      "count": 376382,
+      "hz": 99.48
+    }
+  }
+}
