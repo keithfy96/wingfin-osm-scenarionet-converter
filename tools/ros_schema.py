@@ -9,15 +9,15 @@ into CDR; `drive.py` fills the `Frame` from the env. Neither of those two files 
 about content, and that split is the point: a sign error is silent (see `heading` below), so the
 part that can be got wrong has to be the part that is cheapest to test.
 
-Topic names, message types and rates follow `bag_audit.html` - the audit of the real vehicle's
-`ros2_mig_phase_5_p1` bag - so a simulated bag and a recorded one are interchangeable to
-whatever reads them. Where that bag carries a message type we do not have a definition for
-(`/vehicle/state`, `/vehicle/engagement`, `/control/actuators`, the six `.../meta` channels and
-the `sbg_driver` GNSS family), the topic is **left out rather than published with a
-different type under the same name**: a subscriber that deserialises `wingfin_msgs/VehicleState`
+Topic names, message types and rates follow `tools/reference_bag.json` - derived from the
+vehicle's own recording, `bags/074143` - so a simulated bag and a recorded one are
+interchangeable to whatever reads them. Every definition that bag carries is vendored
+(`tools/wing_msgs/` and friends), so `MISSING_DEFINITIONS` is empty; the standing rule remains
+that a topic whose type we lacked would be **left out rather than published with a different
+type under the same name**, because a subscriber that deserialises `wing_msgs/VehicleState`
 would fail on a `geometry_msgs/TwistStamped` wearing its topic name, which is worse than an
-absent topic. `MISSING_DEFINITIONS` lists them; add the `.msg` text to `EXTRA_DEFINITIONS` and
-they light up.
+absent topic. That is exactly how `/sensing/gnss/pose` shipped wrong for a stage - same name,
+different contents - and why `ros_probe.py` now checks it against the fix beside it.
 
 Two conventions are load-bearing and both were read out of the source rather than assumed:
 
@@ -192,7 +192,7 @@ EXTRA_DEFINITIONS.update(_vendored_definitions())
 
 # --- the rig's own bag, as data ------------------------------------------------------------
 #
-# `bag_audit.html`'s 55 topics, one row each, moved here out of `docs/rosbag.md` so that the
+# The production bag's 50 topics, one row each, moved here out of `docs/rosbag.md` so that the
 # coverage figure is **derived rather than maintained**. A prose ledger and a code table drift
 # apart silently, and they had: `/sensing/gnss/imu_data` was producible and missing from
 # `MISSING_DEFINITIONS` entirely, while `/sensing/gnss/imu/temp` and `/sensing/gnss/status` sat
@@ -203,7 +203,7 @@ EXTRA_DEFINITIONS.update(_vendored_definitions())
 # So `MISSING_DEFINITIONS` below is now **computed from these rows**, and the same rows answer
 # "how many of the rig's topics do we write". `tools/ros_probe.py --coverage` prints it.
 
-#: The three verdicts, and the whole basis of the 45. `docs/rosbag.md` argues each one.
+#: The three verdicts, and the whole basis of the 36. `docs/rosbag.md` argues each one.
 DIRECT = "direct"
 """MetaDrive holds the quantity outright: the pixels, the pose, the commanded controls."""
 
@@ -225,7 +225,7 @@ class RigTopic:
 
     topic: str
     hz: float | None
-    """The rate the rig's own bag ran it at, measured in `bag_audit.html`. None is latched.
+    """The rate the rig's own bag ran it at, from `tools/reference_bag.json`. None is latched.
 
     Not a rate we necessarily reach: `env.step` **is** the world tick, so every rate here is a
     decimation of `--step-hz`, and `/sensing/gnss/imu/velocity` at 200 Hz and
@@ -446,7 +446,7 @@ NAME_DRIFT: dict[str, str] = {
 RIG_LIDAR_FRAME = "livox_link"
 
 #: Topics of ours that the rig's bag does not have, and **which must never be counted against
-#: the 45**. The rig recorded no ground truth - nothing in its 55 is a labelled object, and
+#: the 36**. The rig recorded no ground truth - nothing in its 50 is a labelled object, and
 #: `/perception/inference_control` is the model's own configuration rather than an answer. These
 #: four are the entire point of building a bag out of a simulator, and a coverage report that
 #: took credit for them would be flattering itself.
@@ -464,7 +464,8 @@ SIMULATOR_EXTRAS: tuple[str, ...] = (
     "/sensing/lidar/points",
 )
 
-#: Topics in `bag_audit.html` this module cannot write for want of a `.msg`, and what each needs.
+#: Topics in the reference bag this module cannot write for want of a `.msg` - empty since the
+#: vehicle's own recording supplied every definition (2026-09-03), kept because it is the gate.
 #: **Derived from `RIG_TOPICS`** rather than kept by hand - see the note above that block for the
 #: two defects that cost.
 #:
@@ -658,7 +659,7 @@ def rig_coverage(written: set[str] | None = None) -> dict:
     (`ros_bag.py:251`), so "8 declared, 7 on the wire" is a correct pair of numbers and not a
     discrepancy.
 
-    **`SIMULATOR_EXTRAS` are counted separately and never against the 45.** They are ground
+    **`SIMULATOR_EXTRAS` are counted separately and never against the 36.** They are ground
     truth the rig's own bag does not contain, so crediting them would be marking our own paper.
 
     The `absent` breakdown is keyed by the phase that lands each topic, because that is the
@@ -1729,7 +1730,7 @@ def sbg_imu_message(frame: Frame) -> dict:
       velocity across a frame would put simulation noise into a field a real IMU measures, and
       zeros would claim a car in free fall, with no gravity vector a real FLU accelerometer
       always reads.
-    * `temp` - a physical sensor temperature. `/sensing/gnss/imu/temp` is excluded from the 45
+    * `temp` - a physical sensor temperature. `/sensing/gnss/imu/temp` is excluded from the 36
       for this exact reason; a number here would contradict that in the same bag.
     * `delta_vel` / `delta_angle` - sculling and coning, the strapdown integrator's own
       intermediates. There is no strapdown integrator.

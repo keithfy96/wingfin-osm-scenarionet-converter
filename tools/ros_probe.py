@@ -1267,7 +1267,7 @@ def main(argv=None):
     parser.add_argument(
         "--coverage",
         action="store_true",
-        help="how many of the reference vehicle's 45 producible topics are written, and which "
+        help="how many of the reference vehicle's 36 producible topics are written, and which "
         "stage-11 phase lands each of the rest. Runs with or without a bag; with one it counts "
         "what actually reached the wire rather than what the code declares.",
     )

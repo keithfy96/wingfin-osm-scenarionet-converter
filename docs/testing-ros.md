@@ -11,9 +11,10 @@ published in the world frame is exactly correct while the car drives east. A GNS
 skipped MetaDrive's re-centring shift is 93.8 m along a road that really exists. That is why
 this ladder exists and why the cheap tiers are worth running before the expensive ones.
 
-**This ladder checks that the bag is right, not that it is complete.** It writes 11 topics, of
-which 8 are the rig's — against 45 the rig's bag has and a simulator could honestly produce. The
-gap and the plan for closing it are
+**This ladder checks that the bag is right, not that it is complete.** Completeness is
+`--coverage`'s question: 36 of the reference bag's 50 topics are producible and all 36 are
+built (stage 11, finished 2026-09-03), but any one drive writes only what its flags ask for —
+a plain drive 11 topics, the full configuration 38. The history of closing that gap is
 `docs/implementation-plan/stage-11-a-complete-ros-bag.md`.
 
 Background and measurements: `docs/implementation-plan/stage-10-ros-bags-out-of-a-drive.md`

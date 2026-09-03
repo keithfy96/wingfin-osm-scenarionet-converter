@@ -505,7 +505,7 @@ def cameras_from_rig(rig):
     A camera the vehicle has no counterpart for is **left out rather than given an invented
     topic** - `rigs/cams.txt`'s `cam_front_wide` is the only one in the repo, a spare buffer with
     no channel on the rig. It is still mounted, still rendered and still in `/tf_static`, where it
-    is honestly a seventh camera; what it is not is one of `bag_audit.html`'s six, and adding a
+    is honestly a seventh camera; what it is not is one of the reference bag's six, and adding a
     seventh `cam_sync_rig` channel would put a topic in our bag that the rig's cannot have.
 
     `frame_id` stays the spec's own name so that it matches `mounts_from_rig` exactly - the two

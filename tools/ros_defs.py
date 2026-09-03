@@ -396,10 +396,10 @@ def blocked_report(found: dict[str, Definition], out) -> None:
     """What this bag does for the topics phase 5 is waiting on, named one by one.
 
     The question anyone pointing this tool at a rig bag is actually asking is *"is this file
-    enough?"*, and the count of definitions above does not answer it. **We do not know the type
-    names of the fifteen** - that is the whole blockage, since `bag_audit.html` records rates and
-    not types - so the lookup has to run the other way round, from the topic to whatever type the
-    recorder filed it under. A bag that carries fourteen of the fifteen is a bag worth having and
+    enough?"*, and the count of definitions above does not answer it. When phase 5 was blocked,
+    the type names of the missing fifteen were unknown - `bag_audit.html` records rates and not
+    types - so the lookup has to run the other way round, from the topic to whatever type the
+    recorder filed it under. A bag that carries fourteen of fifteen is a bag worth having and
     is not the end of the job, and only a per-topic list says which one is short.
     """
     waiting = sorted(ros_schema.MISSING_DEFINITIONS or ros_schema.AWAITING_BUILDER)
