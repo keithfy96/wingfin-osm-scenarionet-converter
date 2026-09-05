@@ -84,7 +84,8 @@ points at `/work/src`. Only a dependency change needs `docker compose build`.
 
 **But a pull can be a dependency change, and nothing tells you.** If `git pull` touched
 `pyproject.toml`, `uv.lock` or `docker/Dockerfile`, the image is now behind the code and
-**compose will not notice**: `docker compose run` reuses whatever holds the `wingfin-sim` tag and
+**compose will not notice**: `docker compose run` reuses whatever holds the
+`metadrive-wingfin-sim` tag and
 never builds. Neither will a rebuild you ran *before* the pull — it rebuilds the old recipe out of
 BuildKit's cache in seconds and looks exactly like a successful build.
 
@@ -204,7 +205,7 @@ or carry the built image, which needs no network on the far end:
 
 ```bash
 # on this machine, pushing to the rig over ssh
-docker save wingfin-sim | gzip | ssh <rig> 'gunzip | docker load'
+docker save metadrive-wingfin-sim | gzip | ssh <rig> 'gunzip | docker load'
 ```
 
 **A rig needs four things, and two of them come from neither the image nor `git`:**
@@ -232,7 +233,7 @@ cd scripts
 
 ```bash
 cd scripts && ./bridge.sh save /tmp/bridge-image.tar.gz   # or the one-pipe form:
-docker save wing-sim-openpilot:prod | gzip | ssh <rig> 'gunzip | docker load'
+docker save metadrive-wingfin-openpilot:prod | gzip | ssh <rig> 'gunzip | docker load'
 ```
 
 5.5 GB over the wire against a clone that already carries the 309 MB — so build unless the rig

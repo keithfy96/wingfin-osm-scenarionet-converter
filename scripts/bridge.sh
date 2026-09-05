@@ -14,8 +14,8 @@
 # Read from .env, all optional:
 #   BRIDGE_PORT   the TCP port the bridge listens on; 5558 when unset, which is what
 #                 examples/openpilot_server.py assumes on both sides
-#   BRIDGE_IMAGE  the image tag; wing-sim-openpilot:prod when unset
-#   BRIDGE_NAME   the container name; openpilot-bridge when unset
+#   BRIDGE_IMAGE  the image tag; metadrive-wingfin-openpilot:prod when unset
+#   BRIDGE_NAME   the container name; metadrive-wingfin-openpilot-bridge when unset
 #
 # `build` needs nothing but this repo. The openpilot fork is vendored at
 # docker/openpilot/deps/openpilot -- 309 MB of tracked files -- so a fresh clone can build the
@@ -33,8 +33,8 @@
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
 BRIDGE_PORT="${BRIDGE_PORT:-5558}"
-BRIDGE_IMAGE="${BRIDGE_IMAGE:-wing-sim-openpilot:prod}"
-BRIDGE_NAME="${BRIDGE_NAME:-openpilot-bridge}"
+BRIDGE_IMAGE="${BRIDGE_IMAGE:-metadrive-wingfin-openpilot:prod}"
+BRIDGE_NAME="${BRIDGE_NAME:-metadrive-wingfin-openpilot-bridge}"
 CONTEXT="$REPO_ROOT/docker/openpilot"
 
 usage() { sed -n '2,30p' "$SELF" | sed 's/^#\s\?//'; }

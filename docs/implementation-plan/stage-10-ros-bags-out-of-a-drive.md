@@ -159,7 +159,7 @@ enough to look right in a report, wrong enough to miss a filter.
   connected**; the visual check it exists for **has not been made by anyone**. See
   `docs/fixes/2026-09-01-20:19:21-phase-b-was-marked-done-on-log-silence.md`.
   Built as a **separate** image (`docker/ros-viewer/`, `scripts/ros-view.sh`) rather than ROS
-  inside `wingfin-sim`: a bag is a file, and looking at one needs ROS and a display, not
+  inside `metadrive-wingfin-sim`: a bag is a file, and looking at one needs ROS and a display, not
   MetaDrive and 13.3 GB of CUDA. The independent `ros2 bag info` came free from a stock
   `ros:jazzy-ros-base` and **is** done.
   *Two corrections to the original scoping, both measured:* it must be **jazzy, not humble** -

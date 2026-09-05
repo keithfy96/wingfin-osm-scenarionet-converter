@@ -58,7 +58,7 @@ if [[ -f /.dockerenv ]]; then
 
     FAILED=()
 
-    step "2/4  gpu"
+    step "2/5  gpu"
     RENDERER="$(python - <<'PY' 2>/dev/null
 from panda3d.core import loadPrcFileData
 loadPrcFileData("", "window-type offscreen")
@@ -86,7 +86,7 @@ PY
     fi
 
     if [[ ${#FAILED[@]} -eq 0 ]]; then
-        step "3/4  tests"
+        step "3/5  tests"
         # One test fails on the real map and has nothing to do with the container: three of 396
         # swept routes turn more than the 30 deg/step gate allows, on two 2 m clamped lanes. It is
         # an open map-geometry issue (CLAUDE.md, "`ego_route` still turns over the gate"). Left in
@@ -99,15 +99,56 @@ PY
     fi
 
     if [[ ${#FAILED[@]} -eq 0 ]]; then
-        step "4/4  sweep"
+        step "4/5  sweep"
         # shellcheck disable=SC2086
         scripts/step-timing.sh ${WORKSPACE_ARG:+"$WORKSPACE_ARG"} \
             ${PASSTHROUGH[0]+-- "${PASSTHROUGH[@]}"} || FAILED+=("sweep")
     fi
 
+    if [[ ${#FAILED[@]} -eq 0 ]]; then
+        step "5/5  ros"
+        # Stage 11's whole path -- record a bag, read it back two independent ways -- because
+        # until this existed the one command the docs point a new rig at could not say whether
+        # ROS worked there. Tier 5 of docs/testing-ros.md is the same three lines; this is the
+        # copy that runs without anyone having to know to run it.
+        #
+        # **`MODEL_CHECKPOINT=` is not optional.** This script enters through `docker compose
+        # run` rather than `sim.sh`, so compose has already pointed MODEL_CHECKPOINT at the
+        # mounted /models, drive.py takes that as its default for --model-checkpoint, and a
+        # checkpoint implies --agent-policy remote -- so a replay drive refuses with "needs
+        # --agent-policy remote, not replay" before it ever opens a bag. `sim.sh --no-model` is
+        # the same clearing, spelt for the other entry point.
+        #
+        # The bag name carries the pid so this can never collide with, or delete, a bag someone
+        # meant to keep -- and it is removed at the end because a check that leaves 700 KB
+        # behind on every run is a check that fills a rig's disk.
+        ROS_BAG="bags/check-ros-$$"
+
+        # The workspace the probe cross-checks the bag against. `ros-bag.sh` resolves this
+        # itself out of .env through _common.sh; this script does not source .env, so it is
+        # read here too rather than guessed. Left empty, the probe still runs -- it simply
+        # checks fewer relationships, which is worth saying rather than refusing over.
+        ROS_WS="${WORKSPACE_ARG:-}"
+        if [[ -z "$ROS_WS" && -f .env ]]; then
+            ROS_WS="$(sed -n 's/^WORKSPACE=//p' .env | tail -1)"
+        fi
+        if [[ -n "$ROS_WS" && "$ROS_WS" != */* ]]; then ROS_WS="workspaces/$ROS_WS"; fi
+
+        if MODEL_CHECKPOINT= scripts/ros-bag.sh ${WORKSPACE_ARG:+"$WORKSPACE_ARG"} \
+                -- --out "$ROS_BAG" \
+            && MODEL_CHECKPOINT= scripts/ros-bag.sh --audit "$ROS_BAG" \
+            && uv run python tools/ros_probe.py "$ROS_BAG" \
+                ${ROS_WS:+--workspace "$ROS_WS"}; then
+            note "recorded, audited and probed $ROS_BAG"
+        else
+            FAILED+=("ros")
+        fi
+        rm -rf "$ROS_BAG"
+    fi
+
     step "result"
     if [[ ${#FAILED[@]} -eq 0 ]]; then
-        note "gpu, tests and sweep all passed."
+        note "gpu, tests, sweep and ros all passed."
         note "renderer  $RENDERER"
         exit 0
     fi
@@ -131,7 +172,7 @@ DOCKER_GID="$(id -g)"
 export DOCKER_UID DOCKER_GID
 export STEP_TIMING_LABEL="${STEP_TIMING_LABEL:-$(hostname)}"
 
-step "1/4  build"
+step "1/5  build"
 docker compose build || die "the image did not build."
 
 exec docker compose run --rm sim scripts/container-check.sh "$@"

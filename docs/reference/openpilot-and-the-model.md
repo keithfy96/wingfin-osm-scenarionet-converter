@@ -103,12 +103,12 @@ what the measurements were made with:
 
 ```bash
 cd scripts && ./bridge.sh build && ./bridge.sh start    # what the two lines below now are
-# docker build -t wing-sim-openpilot:prod -f docker/openpilot/Dockerfile docker/openpilot
-# docker run -d --name openpilot-bridge --network host \
+# docker build -t metadrive-wingfin-openpilot:prod -f docker/openpilot/Dockerfile docker/openpilot
+# docker run -d --name metadrive-wingfin-openpilot-bridge --network host \
 #   -e SIMULATION=1 -e NOBOARD=1 -e SKIP_FW_QUERY=1 -e "FINGERPRINT=TESLA MODEL 3" \
 #   -e OPENPILOT_TRAJECTORY_TYPE=0 -e BRIDGE_PORT=5558 \
 #   -e PYTHONPATH=/opt/bridge:/opt/openpilot:/opt/project/common \
-#   -w /opt/project wing-sim-openpilot:prod python3 -m zapeta.server
+#   -w /opt/project metadrive-wingfin-openpilot:prod python3 -m zapeta.server
 uv run python examples/openpilot_server.py --backend bridge --longitudinal accel --port 8642
 # then, from inside scripts/
 ./drive.sh junction-1 -- --agent-policy remote --policy-url http://127.0.0.1:8642 \

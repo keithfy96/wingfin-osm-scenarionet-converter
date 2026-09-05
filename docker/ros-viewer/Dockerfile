@@ -1,8 +1,9 @@
-# rviz2 for a bag this repo wrote. **A separate image from `wingfin-sim`, deliberately.**
+# rviz2 for a bag this repo wrote. **A separate image from `metadrive-wingfin-sim`, deliberately.**
 #
 # A bag is a file. Looking at one needs ROS and a display and nothing else -- no MetaDrive, no
 # CUDA, no torch, no 13.3 GB of them. The Stage 10 plan originally scoped this as
-# `ros-humble-ros-base` *inside* wingfin-sim; that would put a GUI stack behind every sweep and
+# `ros-humble-ros-base` *inside* metadrive-wingfin-sim; that would put a GUI stack behind every
+# sweep and
 # rebuild the simulator image whenever the viewer changed. This follows what already worked for
 # `docs/testing-ros.md` tier 4 instead, where a stock `ros:jazzy-ros-base` read our bag with
 # nothing of ours installed.

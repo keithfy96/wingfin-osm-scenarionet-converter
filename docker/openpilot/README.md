@@ -14,7 +14,7 @@ has no 3.8 wheel. So there are two, and `network_mode: host` is what lets them f
 ```bash
 cd scripts
 ./bridge.sh build       # budget half an hour the first time
-./bridge.sh start       # runs it as `openpilot-bridge` on port 5558
+./bridge.sh start       # runs it as `metadrive-wingfin-openpilot-bridge` on port 5558
 ./bridge.sh status      # is it up?
 ```
 

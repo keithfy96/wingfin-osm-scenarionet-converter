@@ -89,14 +89,35 @@ def _latched_qos():
     )
 
 
-#: What `bag_audit.html` measured, so a reader of our bag can compare like for like without
-#: going back to the page. Not used in any calculation - it is provenance for a person.
-REFERENCE_BAG = {
-    "name": "ros2_mig_phase_5_p1",
-    "bytes_per_camera_frame": 7159,
-    "writer_latency_p99_ms": 2.24,
-    "topics": 55,
-}
+def reference_bag() -> dict:
+    """What a reader of our bag can compare it against. Provenance for a person, and used in
+    no calculation - but it ships **inside the data**, in every bag's own `custom_data`.
+
+    **`name` and `topics` are derived, and that is the whole point.** They were literals until
+    2026-09-04 and both had gone stale: they still named `ros2_mig_phase_5_p1` with 55 topics,
+    which is `bag_audit.html`'s audit of an *older* recording, long after the reference had
+    become `bags/074143` with 50. The sweep that retired the 45/55 claims from comments and
+    `--help` text missed this copy precisely because it is not prose - so it kept stamping a
+    superseded reference into every bag written since. `tools/reference_bag.json` is tracked,
+    is what `ros_schema` already reads, and `TestTheReferenceBag` re-derives it from the
+    vehicle's own recording whenever that 14.7 GB bag is on disk. One definition, everything
+    derived - the same rule `tools/ros_msgs_package.py` states in its docstring.
+
+    A function and not a module constant, so that a missing `reference_bag.json` is a refusal
+    when a bag is written rather than an ImportError three imports away from anything that
+    mentions it. `ros_schema` reads the file lazily for the same reason.
+
+    The other two stay literals because the JSON does not carry them - they are a size and a
+    latency rather than anything about the recording's topics - and they are labelled as
+    `bag_audit.html`'s rather than silently attributed to 074143.
+    """
+    reference = ros_schema._reference()
+    return {
+        "name": reference["bag"],
+        "bytes_per_camera_frame": 7159,  # bag_audit.html
+        "writer_latency_p99_ms": 2.24,  # bag_audit.html
+        "topics": len(reference["topics"]),
+    }
 
 
 class BagError(RuntimeError):
@@ -311,7 +332,7 @@ class BagWriter:
             "sbg_driver_version": ros_schema.SBG_DRIVER_VERSION,
             "frames": self.frames,
             "messages_per_topic": dict(sorted(self.counts.items())),
-            "reference_bag": REFERENCE_BAG,
+            "reference_bag": reference_bag(),
             **self.notes,
         }
 

@@ -67,7 +67,8 @@ export DOCKER_UID DOCKER_GID
 
 # Does the image on this machine carry what docker/Dockerfile says it should?
 #
-# Nothing else asks. `docker compose run` reuses whatever holds the `wingfin-sim` tag and never
+# Nothing else asks. `docker compose run` reuses whatever holds the `metadrive-wingfin-sim` tag
+# and never
 # rebuilds; a `docker compose build` run before the `git pull` that changed the Dockerfile rebuilds
 # the OLD recipe out of BuildKit's cache in seconds. Both look exactly like success, and the first
 # thing that notices is a refusal four minutes into a terrain build -- which is how a rig lost a
@@ -96,8 +97,9 @@ check_image_groups() {
     # The uv sync line only -- awk drops comment lines, which now discuss --group themselves.
     want=$(awk '/^[^#]*uv sync/' docker/Dockerfile | grep -o -- '--group [a-z]*' | awk '{print $2}')
     [[ -n "$want" ]] || return 0
-    [[ -n "$(docker image inspect wingfin-sim --format '{{.Id}}' 2>/dev/null)" ]] || return 0
-    have=$(docker image inspect wingfin-sim \
+    [[ -n "$(docker image inspect metadrive-wingfin-sim \
+        --format '{{.Id}}' 2>/dev/null)" ]] || return 0
+    have=$(docker image inspect metadrive-wingfin-sim \
         --format '{{index .Config.Labels "wingfin.groups"}}' 2>/dev/null)
     # Unlabelled: an image from before the label existed. Nothing can be said about it from here,
     # so nothing is said. See the header.
@@ -109,11 +111,54 @@ check_image_groups() {
     done
     [[ ${#missing[@]} -gt 0 ]] || return 0
 
-    note "the wingfin-sim image is missing the ${missing[*]} dependency $(
+    note "the metadrive-wingfin-sim image is missing the ${missing[*]} dependency $(
         [[ ${#missing[@]} -eq 1 ]] && echo group || echo groups). Rebuild it:"
     note "  docker compose build"
     note "until then anything needing those packages refuses -- they are not in the image."
 }
 check_image_groups
+
+# Was the image built before the last change to the lock it was built from?
+#
+# **This is the half `check_image_groups` above cannot see, and it is not hypothetical.** That
+# check compares group *names*, so it is blind to a package ADDED to a group that already
+# existed -- and on 2026-09-04 `av` reached the `ros` group against an image that carried `ros`
+# and not `av`. The label matched, the check said nothing, and the first thing that noticed was
+# `--ros-camera needs \`av\`` four minutes into a terrain build, after the rig had loaded, the
+# model had resolved and the policy had connected. Its own comment predicted exactly this.
+#
+# Commit dates and not mtimes: a fresh `git clone` stamps every file with the checkout time, so
+# an mtime comparison on a rig says "the lock is newer than the image" about a lock nobody
+# touched. `%cI` is stable across clones. An uncommitted lock is caught separately, because a
+# lock edited and not yet committed is the same staleness with no commit date to read.
+#
+# A note and never a die, for `check_image_groups`' reason: a --no-model drive or a sweep runs
+# perfectly well on an image that predates a dependency it does not use, and a check that fires
+# on a working image teaches people to ignore it.
+check_image_lock() {
+    local built lock_changed built_s lock_s
+    built=$(docker image inspect metadrive-wingfin-sim \
+        --format '{{.Created}}' 2>/dev/null) || return 0
+    [[ -n "$built" ]] || return 0
+
+    if [[ -n "$(git status --porcelain uv.lock 2>/dev/null)" ]]; then
+        note "uv.lock has uncommitted changes; the metadrive-wingfin-sim image cannot have them."
+        note "  docker compose build"
+        return 0
+    fi
+
+    lock_changed=$(git log -1 --format=%cI -- uv.lock 2>/dev/null) || return 0
+    [[ -n "$lock_changed" ]] || return 0
+
+    built_s=$(date -d "$built" +%s 2>/dev/null) || return 0
+    lock_s=$(date -d "$lock_changed" +%s 2>/dev/null) || return 0
+    [[ "$built_s" -lt "$lock_s" ]] || return 0
+
+    note "the metadrive-wingfin-sim image was built $(date -d "$built" '+%Y-%m-%d %H:%M'), before"
+    note "uv.lock last changed $(date -d "$lock_changed" '+%Y-%m-%d %H:%M'). A package added to a"
+    note "group the image already has is invisible to the group check above. Rebuild:"
+    note "  docker compose build"
+}
+check_image_lock
 
 exec docker compose run --rm ${RUN_FLAGS[@]+"${RUN_FLAGS[@]}"} sim "$@"

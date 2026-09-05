@@ -29,6 +29,19 @@ from itertools import groupby
 from pathlib import Path
 
 import geodesy
+
+# Module scope, not inside `probe()`. It used to be imported twice, under `if clouds:` and under
+# `if streams:`, and read a third time by the steering-sign check further down -- which is in the
+# same function, so on a bag with neither a point cloud nor camera packets the name was never
+# bound and that check died with `UnboundLocalError: local variable 'numpy' referenced before
+# assignment`. It took this long to surface because the check needs a bag that is **self-driven**
+# (a replay bag writes no vehicle state, so it never runs) and has **no lidar and no cameras** --
+# which is the plainest useful bag there is, and the one a rig would record first.
+#
+# Nothing was being deferred in any case: numpy is a base dependency in pyproject, not an optional
+# group, unlike `rosbags` -- whose absence `ros_frame.refuse_if_unsupported` turns into a sentence
+# and which is why the lazy-import habit exists in these files at all.
+import numpy
 import ros_audit
 import ros_schema
 
@@ -629,8 +642,6 @@ def probe(path, workspace=None, out=sys.stdout):
     # --- 10. the point cloud: the one payload here that is a shape rather than a number ----
     clouds = [m for _, m in by_topic.get(ros_schema.LIDAR_POINTS, [])]
     if clouds:
-        import numpy
-
         stated = ros_audit.notes(path).get("lidar") or {}
         half_fov = math.radians(float(stated.get("fov_deg", 65.0))) / 2.0
         max_range = float(stated.get("max_range_m", 200.0))
@@ -890,8 +901,6 @@ def probe(path, workspace=None, out=sys.stdout):
         if by_topic.get(topic)
     }
     if streams:
-        import numpy
-
         stated = ros_audit.notes(path).get("cameras") or {}
         first = next(iter(streams.values()))
         print(

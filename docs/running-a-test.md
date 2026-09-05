@@ -535,8 +535,27 @@ the repo here by `git clone` and it cannot happen.
 - **The drive** renders six cameras, asks the model for twenty waypoints, sends them, applies the
   pedals — once every 0.05 s.
 
-**All three are containers, and `network_mode: host` is why they still find each other on
-`127.0.0.1`.** Nothing here runs on the host, and nothing needs installing there — not even `uv`.
+**Three processes, but only TWO images**, and `network_mode: host` is why they still find each
+other on `127.0.0.1`. The translator is not a third image: it is this repo's own code on this
+repo's own interpreter, and the second `./sim.sh` below starts it in a second container off the
+*same* `metadrive-wingfin-sim` image. So `docker ps` shows three containers built from two
+images:
+
+```
+  metadrive-wingfin-sim              the drive — and the translator beside it
+  metadrive-wingfin-openpilot:prod   openpilot itself
+```
+
+`compose.yaml` defines exactly one service and `docker/openpilot/README.md` opens by calling
+itself *"the second of the two containers"*; that is the architecture, and the three above are
+this recipe. Start the translator *inside* the drive container and it is literally two. Nothing
+here runs on the host, and nothing needs installing there — not even `uv`.
+
+**A ROS bag, if you are recording one, comes out of the drive.** `--ros-bag` is a `drive.py` flag
+and `ros_bag.BagWriter` runs in that process, so the bag needs the first image alone — the
+controller has no ROS in it and never sees one. `--backend stub` puts a real socket speaking the
+real protocol in front of the translator with no fork behind it, which records the same topics
+without the bridge image being built at all. `docs/testing-ros.md` has the commands.
 
 ### The commands
 

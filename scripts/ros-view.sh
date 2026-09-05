@@ -24,7 +24,8 @@
 # frame, and whether the route runs where the car actually went. All three are consistent with
 # every relationship ros_probe.py checks and would still be visibly wrong.
 #
-# A separate image from wingfin-sim, and the reasoning is in docker/ros-viewer/Dockerfile: a bag
+# A separate image from metadrive-wingfin-sim, and the reasoning is in
+# docker/ros-viewer/Dockerfile: a bag
 # is a file, and looking at one needs ROS and a display, not MetaDrive and 13.3 GB of CUDA.
 #
 # **`--delay` is what makes a single pass work, and it took three tries to find that out.**
@@ -54,7 +55,7 @@ set -euo pipefail
 SELF="${BASH_SOURCE[0]}"
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-IMAGE=wingfin-ros-viewer
+IMAGE=metadrive-wingfin-ros-viewer
 RVIZ_CONFIG=config/rviz/bag.rviz
 
 build_image() {

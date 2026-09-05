@@ -184,7 +184,8 @@ CMD ["bash"]
 # 13 GB venv. Nothing may be added below it.
 # `scripts/sim.sh` compares this against the --group flags above and says so when the running
 # image is missing one, because nothing else does: `docker compose run` reuses whatever holds the
-# `wingfin-sim` tag and never rebuilds, and a `docker compose build` run before the `git pull`
+# `metadrive-wingfin-sim` tag and never rebuilds, and a `docker compose build` run before the
+# `git pull`
 # rebuilds the *old* recipe out of BuildKit's cache in seconds. Both look like success. A rig
 # spent a morning on `--model-checkpoint needs torch` for exactly that reason, against an image
 # built before `--group gpu --group model` was added to the line above.

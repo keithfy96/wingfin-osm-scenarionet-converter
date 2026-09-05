@@ -14,8 +14,9 @@ this ladder exists and why the cheap tiers are worth running before the expensiv
 **This ladder checks that the bag is right, not that it is complete.** Completeness is
 `--coverage`'s question: 36 of the reference bag's 50 topics are producible and all 36 are
 built (stage 11, finished 2026-09-03), but any one drive writes only what its flags ask for —
-a plain drive 11 topics, the full configuration 38. The history of closing that gap is
-`docs/implementation-plan/stage-11-a-complete-ros-bag.md`.
+a plain drive 11 topics, the full configuration 38, and a drive with the model at the wheel
+41 — the three model topics come from the checkpoint and from nothing else. The history of
+closing that gap is `docs/implementation-plan/stage-11-a-complete-ros-bag.md`.
 
 Background and measurements: `docs/implementation-plan/stage-10-ros-bags-out-of-a-drive.md`
 and `docs/reference/ros-bags.md`. What the simulator can and cannot put on the wire at all is
@@ -30,8 +31,9 @@ Run everything from the repo root.
 | **0** | nothing — `uv run` and the existing `.venv` |
 | **1–3** | a converted dataset (the repo has `junction-1`) and a GPU for the offscreen render |
 | **4** | `docker`, and the `ros:jazzy-ros-base` image — 889 MB, and **nothing to build** |
-| **5** | `docker compose build` for `wingfin-sim` — cached except one 39 MB layer |
-| **6** | `wingfin-ros-viewer` (built by the script), an X display, and a few GB of disk |
+| **5** | `docker compose build` for `metadrive-wingfin-sim` — cached, unless `uv.lock` moved |
+| **6** | `metadrive-wingfin-ros-viewer` (built by the script), an X display, and a few GB of disk |
+| **7** | the 1.26 GB AV3 checkpoint, via `MODEL_DIR` in `.env`. No openpilot image |
 
 **The one thing that catches people out is the interpreter.** `scripts/ros-bag.sh` runs
 `drive.py` on `METADRIVE_PYTHON`, which defaults to the MetaDrive checkout's **Python 3.8**,
@@ -347,6 +349,65 @@ pause/resume, **→** step one message, **↑/↓** rate ±10%. For an unattende
 `timeout 60 ./scripts/ros-view.sh bags/j1-lights`.
 
 **Writes** nothing. The bag is mounted read-only.
+
+## 7. The model at the wheel (~15 min, and the only tier that needs the checkpoint)
+
+The three model topics — `/control/predicted_trajectory`, `/perception/inference_control`,
+`/perception/model_info` — are the difference between 38 topics and 41. They come from the
+checkpoint and from nothing else: `ros_schema.predicted_trajectory_message` and its two
+neighbours return `None` when a frame carries no prediction, so on every other tier they are
+absent in silence rather than empty.
+
+**Two containers is the wrong picture of this, and so is three.** The bag is written inside the
+drive, by `ros_bag.BagWriter` in the `drive.py` process, from the `metadrive-wingfin-sim` image.
+The model loads in that same process (`drive.py`, `av3_model.AV3Model`). What sits behind
+`--policy-url` is the *controller*, and `--backend stub` is a real socket speaking the real
+protocol with a pure-pursuit law behind it — so this tier needs **no openpilot image at all**.
+
+```bash
+# terminal 1 — the adaptor. Same image, no bridge behind it.
+./scripts/sim.sh python3 examples/openpilot_server.py --backend stub --port 8643
+
+# terminal 2 — note the absence of --no-model; that is the whole point of this tier
+./scripts/sim.sh ./scripts/ros-bag.sh junction-1 -- --out bags/model-stub \
+    --agent-policy remote --policy-url http://127.0.0.1:8643 \
+    --sensors imu,route --step-hz 100 --decision-hz 20 --ros-camera --ros-lidar
+
+uv run python tools/ros_probe.py bags/model-stub --coverage      # the number to read: 36 / 36
+```
+
+**`rigs/av3.txt` needs nothing added and is chosen for you.** `--model-checkpoint` implies it,
+and it is already six cameras under the rig's own names, so `ros_schema.RIG_CAMERA_NAMES` passes
+all six through and none is dropped. Six cameras plus the cloud is 7 image buffers, which is
+`camera_rig.MAX_BUFFERS_WITH_POINT_CLOUD` exactly. Its `tick_rate` is 0.05 s, and the loader
+**refuses** any rate but `--decision-hz 20` rather than resampling — which is why this tier is
+the one that is pinned to 100 Hz.
+
+**`--sensors imu,route` is not optional.** The controller wants a path and three ego scalars,
+and the 161-float observation's own navigation block is normalised and clipped at 30 m, which
+cannot be undone.
+
+**Measured 2026-09-04**: 41 topics, 36 / 36 coverage, the model supplying 20 waypoints per
+decision as `modelv2`, and ~226 ms a step of which only ~55 ms is the policy round trip — the
+rest is the forward pass, about a second, amortised over the five physics steps under each
+decision. Budget a quarter of an hour and do not read the pace as a fault; `env.step` is the
+tick.
+
+**What this tier cannot settle, and what it must not be used to settle.** The stub is a test
+harness, not a driver: its lookahead is sized for its 10 m/s target, and `junction-1`'s route
+*starts* at 13 km/h, so it oversteers immediately and leaves the corridor within four seconds
+(10.04 m against a 10 m `--max-lateral-dist`). That is long enough to prove all 41 topics and
+far too short for `every light changes colour at least once` — the signal plan is a 60 s cycle
+and the first change lands at frame 2699. **Isolate the two**: an `--agent-policy idm` drive on
+the same dataset runs the whole 3782 frames and passes all 26 checks, so a light check failing
+here is the stub's driving and not the bag's contents. For a model drive that holds the route,
+build the bridge (`scripts/bridge.sh build`, ~30 min) and use `--backend bridge`.
+
+**A drive statistic can never settle a sign.** Run `scripts/av3-probe.sh junction-1 --
+--step-hz 100 --decision-hz 20` first: six conversions stand between the model and the car and
+not one of them raises when it is wrong.
+
+---
 
 ## Where the outputs are
 

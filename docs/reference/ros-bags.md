@@ -252,7 +252,8 @@ Two things the run turned up that reading could not:
 
 ## The container, measured 2026-09-01
 
-`wingfin-sim` synced `sim gpu model` and **not `ros`** from the day it was built, so `rosbags`
+`metadrive-wingfin-sim` synced `sim gpu model` and **not `ros`** from the day it was built, so
+`rosbags`
 was absent and every bag the container was pointed at was refused - while `ros-bag.sh`'s header,
 the interpreter trap below and `refuse_if_unsupported`'s own message all named the container as
 the way out of the host's 3.8. Right about the interpreter, wrong about the library.
@@ -275,8 +276,10 @@ and nothing here claims it is; what matters is that every count, rate and check 
 
 ## Looking at one, and the two faults that found, 2026-09-01
 
-`./scripts/ros-view.sh bags/<name>` — rviz2 in `wingfin-ros-viewer`, a **separate** image from
-`wingfin-sim` (a bag is a file; looking at one needs ROS and a display, not 13.3 GB of CUDA).
+`./scripts/ros-view.sh bags/<name>` — rviz2 in `metadrive-wingfin-ros-viewer`, a **separate**
+image from
+`metadrive-wingfin-sim` (a bag is a file; looking at one needs ROS and a display, not 13.3 GB of
+CUDA).
 It plays the bag on a loop under `use_sim_time`, with displays for the car, the route, the TF
 tree and the object boxes.
 
@@ -968,6 +971,120 @@ There is no `torch` and no checkpoint on this machine, so the three are pinned b
 the arithmetic and by the ledger, **not by a recording**. An IDM drive reads `36 declared, 33 on
 the wire`, and `--agent-policy remote` is what closes it.
 
+## The model at the wheel, measured 2026-09-04 (the first model bag)
+
+The first drive that ever put `/control/predicted_trajectory`, `/perception/inference_control`
+and `/perception/model_info` on a wire. They had been built and unit-tested since phase 5 and
+never recorded: `ros_schema.predicted_trajectory_message` and its two neighbours return `None`
+when a frame carries no prediction, so without a checkpoint they are absent rather than empty
+and nothing says so.
+
+### What ran
+
+```bash
+./scripts/sim.sh python3 examples/openpilot_server.py --backend stub --port 8643
+./scripts/sim.sh ./scripts/ros-bag.sh junction-1 -- --out bags/model-stub \
+    --agent-policy remote --policy-url http://127.0.0.1:8643 \
+    --sensors imu,route --step-hz 100 --decision-hz 20 --ros-camera --ros-lidar
+```
+
+| | |
+|---|---|
+| topics | **41** — the full configuration's 38, plus the three model topics |
+| coverage | **36 / 36**, "nothing is absent - every producible topic has a builder" |
+| model topics present | 3 of 3 in this bag; **0 of 3** in an `--agent-policy idm` bag of the same dataset |
+| waypoints | 20 per decision, sent as `modelv2` |
+| step cost | ~226 ms, of which ~55 ms is the policy round trip |
+| camera packets | 6 × libx264 crf 23, 5731–6235 bytes a frame, ~100× an uncompressed `sensor_msgs/Image` |
+| image buffers | 7 — six 512×384 cameras plus the cloud, `MAX_BUFFERS_WITH_POINT_CLOUD` exactly |
+
+**No openpilot image was built.** `--backend stub` is a real socket speaking the real protocol,
+and the model runs in the *drive* process, not behind the socket — so the controller behind
+`--policy-url` has no bearing on whether the three topics are written. This is the cheapest
+possible proof of them and it needs one image.
+
+**`rigs/av3.txt` is implied by `--model-checkpoint` and needs nothing added.** Its six cameras
+already carry the rig's own names, so `RIG_CAMERA_NAMES` maps all six and drops none; its
+`tick_rate` of 0.05 s makes `--decision-hz 20` the only rate the loader will accept.
+
+### The stub cannot hold the route, and that is not a bag fault
+
+The drive left the corridor after 384 frames — 3.84 s, 10.04 m against a 10 m
+`--max-lateral-dist`. The cause is in the drive's own first line: **the ego starts at 13 km/h**,
+and the stub is a fixed-lookahead pure-pursuit sized for its 10 m/s target, so it oversteers at
+walking pace. Against the *older* route, which started at 50 km/h, the same stub held on for
+1868 frames.
+
+That is ample to prove 41 topics and nowhere near enough for `every light changes colour at
+least once`: the signal plan is a 60 s cycle and the first change lands at frame **2699**.
+
+**Isolate the two before reading anything into it.** An `--agent-policy idm` drive on the same
+dataset, no model and no cameras, ran the whole **3782 frames** and passed **all 26 checks**,
+with all 8 lights cycling `GREEN×2699 → YELLOW×300 → RED×783` and 150 objects labelled. The bag
+machinery is right; the stub's driving is what is short. For a model drive that holds the route,
+build the bridge and use `--backend bridge`.
+
+### The 100 Hz dataset was twelve days stale, and nothing said so
+
+The sharpest finding of the day, and it had been sitting in a tracked workspace.
+
+| | last changed |
+|---|---|
+| `workspaces/junction-1/scenarionet-100hz/` | **2026-08-21** |
+| `workspaces/junction-1/routes/routes.json` | 2026-08-31 |
+| `workspaces/junction-1/scenarionet-10hz/` | 2026-09-02 |
+
+`scenarionet-100hz` predated the current `routes.json`, the actors and the signals. Its scenario
+was still named `…-test` while the 10 Hz set had been rebuilt as `…-route-1`; it held
+`VEHICLE=1` and **0 lights** where the 10 Hz set held 101 pedestrians, 25 cyclists, 24 barriers
+and 8 lights.
+
+**This is not a corner case, because the model path is forced to 100 Hz.** `av3.txt` declares
+`tick_rate 0.05`, so a model drive can only be `--decision-hz 20`, so it can only replay the
+100 Hz dataset. Anyone driving the model was therefore driving an *older route* than anyone
+driving at 10 Hz, with nothing anywhere comparing them — **a workspace holds one dataset per
+rate and nothing checks that the two describe the same route.**
+
+Fixed by re-converting, which is convert-time and so does **not** move `generation_fingerprint`
+(verified: the key is absent from the manifest diff, and the Stage 3 review still applies):
+
+```bash
+uv run osm-scenario convert -w workspaces/junction-1 --config config/default.yaml \
+  --routes  workspaces/junction-1/routes/routes.json \
+  --signals workspaces/junction-1/signals/signals.json \
+  --actors  workspaces/junction-1/actors/actors.json \
+  --step-hz 100
+```
+
+**One side effect worth knowing.** `source/manifest.json` records only the *last* convert, so
+its `stage_6` block now describes the 100 Hz dataset where it used to describe the 10 Hz one.
+The 10 Hz dataset files themselves are untouched. Whichever rate is converted last is the one
+the manifest names.
+
+### Two defects this drive found in the tooling
+
+**`--ros-camera` needs `av`, and the image did not carry it.** `av` entered the `ros` dependency
+group in commit `5754c6f`; the image had been built on 2026-09-01 and carried the `ros` *label*
+without the new package. `sim.sh:check_image_groups` compares group *names* and so is blind to a
+package added to a group that already exists — which its own comment predicted ("what this does
+NOT catch: a version bump inside a group whose name did not change"). The refusal came four
+minutes into a run, after the rig had loaded, the model had resolved and the policy had
+connected. `sim.sh` now also runs `check_image_lock`, comparing the image's build time against
+the **commit date** of `uv.lock` — commit dates and not mtimes, because a fresh `git clone`
+stamps every file with the checkout time and an mtime comparison would fire on every rig.
+
+**`ros_probe.py` crashed on the plainest useful bag.** `numpy` was imported inside `probe()`
+under `if clouds:` and again under `if streams:`, and read a third time by the steering-sign
+check in the same function — so a bag with neither a point cloud nor camera packets reached that
+check with the name unbound and died with `UnboundLocalError: local variable 'numpy' referenced
+before assignment`. It survived this long because the crash also needs the bag to be
+*self-driven*: a replay bag writes no vehicle state, so `turning` is empty and the branch never
+runs, and `bags/j1-lights` passed all 13 of its checks either way. It took an `--agent-policy
+idm` drive recorded without `--ros-camera` or `--ros-lidar` — the first thing a rig would record
+— to reach it. `numpy` is a base dependency in `pyproject`, never an optional group, so the lazy
+imports were deferring nothing; it is now bound at module scope and pinned by a test.
+
+
 ## Traps
 - **A `sbg_driver` message is version-dependent and CDR will not tell you.** `SbgEkfStatus` went
   from 16 fields to 23 between 3.1.0 and 3.4.0, two of them removed - a mismatched subscriber
@@ -1083,3 +1200,17 @@ the wire`, and `--agent-policy remote` is what closes it.
   was still running two and a half minutes later. It is not needed either; uv writes 644/755
   under the build's umask. The *first* sync layer keeps its chmod, for `/opt/python`, whose
   managed CPython arrives mode 700.
+
+- **A workspace holds one dataset per rate and nothing checks the two describe the same route.**
+  `scenarionet-100hz` sat twelve days behind `scenarionet-10hz` - an older `routes.json`, no
+  actors, no lights, its scenario still named `-test` against the other's `-route-1`. The model
+  path is *forced* to 100 Hz by `av3.txt`'s `tick_rate`, so a model drive silently replayed the
+  stale one. Re-convert both after any change to routes, signals or actors.
+- **The image can carry a dependency group's name without its contents.** `sim.sh`'s group check
+  compares names, so a package *added* to an existing group is invisible to it - which is how
+  `av` reached the `ros` group against an image that had `ros` and refused four minutes into a
+  run. `check_image_lock` now compares the image's build time to `uv.lock`'s **commit** date.
+- **A light check failing on a model bag is almost certainly the stub's driving.** The stub's
+  pure-pursuit oversteers at the 13 km/h this route starts at and leaves the corridor in under
+  four seconds; the first light change is at frame 2699. Reproduce with `--agent-policy idm`
+  before doubting the bag - that runs the full 3782 frames and passes all 26 checks.

@@ -8,12 +8,18 @@
 # And the AV3 model, which lives in the same container -- set MODEL_DIR in .env first:
 #
 #   docker compose run --rm sim scripts/av3-probe.sh junction-1 -- --step-hz 100 --decision-hz 20
+# The compose project name, which prefixes every container this file starts. Without it compose
+# takes the name from the directory -- `wingfin-osm-scenarionet-converter` -- and `docker ps`
+# then shows a name that is one letter from a colleague's `wing-sim` project. Everything this
+# repo builds or runs is `metadrive-wingfin-*` on purpose.
+name: metadrive-wingfin
+
 services:
   sim:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    image: wingfin-sim
+    image: metadrive-wingfin-sim
     gpus: all
     working_dir: /work
 

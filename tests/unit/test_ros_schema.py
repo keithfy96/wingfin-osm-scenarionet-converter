@@ -614,6 +614,34 @@ class TestTheRigCoverageLedger:
         with pytest.raises(SystemExit):
             ros_probe.main([])
 
+    def test_the_probe_binds_numpy_at_module_scope(self):
+        """`probe()` reads `numpy` in three places and used to *import* it in only two of them,
+        both behind a condition: `if clouds:` and `if streams:`. The third reader is the
+        steering-sign check, in the same function, so a bag with neither a point cloud nor
+        camera packets reached it with the name unbound and the whole probe died with
+        `UnboundLocalError: local variable 'numpy' referenced before assignment`.
+
+        **That is the plainest useful bag there is.** It hid for so long because the crash also
+        needs the bag to be self-driven: a replay bag writes no vehicle state, so `turning` is
+        empty, the branch never runs, and `bags/j1-lights` passed all 13 of its checks either
+        way. It took an `--agent-policy idm` drive recorded without `--ros-camera` or
+        `--ros-lidar` - which is what a rig records first - to reach it.
+
+        Asserting the module attribute rather than re-running `probe()`, because reproducing it
+        properly needs a written bag and this pins the one thing that was wrong.
+        """
+        import ros_probe
+
+        assert hasattr(ros_probe, "numpy"), (
+            "numpy must be bound at module scope - a conditional import inside probe() is what "
+            "made the steering-sign check crash on a bag with no lidar and no cameras"
+        )
+        source = (REPO / "tools" / "ros_probe.py").read_text(encoding="utf-8")
+        assert "        import numpy" not in source, (
+            "an indented `import numpy` is back inside a function; every reader of the name in "
+            "probe() must be able to rely on the module-scope binding"
+        )
+
 
 class TestTheCameraMountConversion:
     """`ros_frame.mounts_from_rig` - two frames that differ in every axis, silently.

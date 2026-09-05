@@ -465,14 +465,14 @@
         "size_bytes": 142943
       },
       "dataset_mapping": {
-        "path": "scenarionet-10hz/dataset_mapping.pkl",
+        "path": "scenarionet-100hz/dataset_mapping.pkl",
         "sha256": "d23851109cdd35720f3bb16d71508540762cdf0dc50e9c49ad2296eaa80abe86",
         "size_bytes": 79
       },
       "dataset_summary": {
-        "path": "scenarionet-10hz/dataset_summary.pkl",
-        "sha256": "34544af94a2b77cb82e6ff7e28c44648fb18b30d2dd3cd6a6cc26e1767853ad9",
-        "size_bytes": 7296
+        "path": "scenarionet-100hz/dataset_summary.pkl",
+        "sha256": "84c0ec6381e2644d7cb4bb9d95e22f329a8d2b8cba983bc3dc0c9654fb2580b8",
+        "size_bytes": 37929
       },
       "reachability_html": {
         "path": "inspection/stage-6-reachability.html",
@@ -485,9 +485,9 @@
         "size_bytes": 193192
       },
       "scenario:junction-1-57dcd345d17e5a86-route-1": {
-        "path": "scenarionet-10hz/sd_osm-scenario_v1_junction-1-57dcd345d17e5a86-route-1.pkl",
-        "sha256": "ecfa70477bc09428873c34cc0aff115c8c1af648492c6610411317b374b9987b",
-        "size_bytes": 5710759
+        "path": "scenarionet-100hz/sd_osm-scenario_v1_junction-1-57dcd345d17e5a86-route-1.pkl",
+        "sha256": "c88cbc8ca3f6286655df5fb4125ecb9cbc4df25dbac2ef2e8a0de8a224970129",
+        "size_bytes": 49931162
       },
       "signal_builder_html": {
         "path": "inspection/stage-6-signal-builder.html",
@@ -509,9 +509,9 @@
       "signals": 1,
       "stop_lines": 0
     },
-    "dataset_dir": "scenarionet-10hz",
+    "dataset_dir": "scenarionet-100hz",
     "map_features": 974,
-    "report": "reports/scenario-conversion-10hz.json",
+    "report": "reports/scenario-conversion-100hz.json",
     "routes": [
       {
         "distance_m": 395.11,
@@ -677,14 +677,14 @@
       "note": "OSM records only that a signal exists; it carries no cycle, split or offset. Every number here was chosen in the Stage 6 signal builder, not surveyed.",
       "signals_version": 1,
       "source": "synthesised",
-      "time_step_s": 0.1
+      "time_step_s": 0.01
     },
     "source_lane_model": {
       "path": "lane-model/reviewed.json",
       "sha256": "fc205bca2305a0cc3cb68e7a7ee83b5c8d8a200622d6a1749dde0b258cab65fb"
     },
     "status": "converted",
-    "step_hz": 10.0
+    "step_hz": 100.0
   },
   "tool_versions": {
     "converter": "0.1.0",
